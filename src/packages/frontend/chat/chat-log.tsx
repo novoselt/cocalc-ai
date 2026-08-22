@@ -18,6 +18,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from "react";
 import { Button } from "antd";
 import { VirtuosoHandle } from "react-virtuoso";
@@ -186,19 +187,6 @@ type SteerCollections = {
   byAssistantMessageId: Map<string, AttachedSteerMessage[]>;
   representedMessageIds: Set<string>;
 };
-
-function steerRenderKey({
-  attachedByParentMessageId,
-  byAssistantMessageId,
-}: SteerCollections): string {
-  const serialize = (
-    entries: Map<string, AttachedSteerMessage[]>,
-  ): [string, AttachedSteerMessage[]][] => [...entries.entries()];
-  return JSON.stringify([
-    serialize(attachedByParentMessageId),
-    serialize(byAssistantMessageId),
-  ]);
-}
 
 function collectSteers({
   messages,
@@ -437,10 +425,6 @@ export function ChatLog({
     () => collectSteers({ messages, visibleKeys, acpState }),
     [messages, visibleKeys, acpState],
   );
-  const guidanceRenderKey = useMemo(
-    () => steerRenderKey(steerCollections),
-    [steerCollections],
-  );
   const anyOverlayOpen = useAnyChatOverlayOpen();
   const activeTopTab = useTypedRedux("page", "active_top_tab");
   const activeProjectTab = useTypedRedux({ project_id }, "active_project_tab");
@@ -636,7 +620,6 @@ export function ChatLog({
             steerCollections.attachedByParentMessageId,
           activitySteersByAssistantMessageId:
             steerCollections.byAssistantMessageId,
-          guidanceRenderKey,
           searchQuery,
           searchJumpDate,
           searchJumpToken,
@@ -785,7 +768,6 @@ export function MessageList({
   acpState,
   attachedSteersByParentMessageId,
   activitySteersByAssistantMessageId,
-  guidanceRenderKey = "",
   searchQuery,
   searchJumpDate,
   searchJumpToken,
@@ -826,7 +808,6 @@ export function MessageList({
   acpState?;
   attachedSteersByParentMessageId?: Map<string, AttachedSteerMessage[]>;
   activitySteersByAssistantMessageId?: Map<string, AttachedSteerMessage[]>;
-  guidanceRenderKey?: string;
   searchQuery?: string;
   searchJumpDate?: string;
   searchJumpToken?: number;
@@ -870,14 +851,6 @@ export function MessageList({
   const blockScrollInput = anyOverlayOpen === true;
   const showNewestMessagesButton =
     sortedDates.length > 0 && (!atBottom || manualScroll);
-  const virtuosoData = useMemo(
-    () =>
-      Array.from(
-        { length: sortedDates.length + 1 },
-        (_, index) => `${sortedDates[index] ?? "end"}:${guidanceRenderKey}`,
-      ),
-    [guidanceRenderKey, sortedDates],
-  );
   const canNotifyForRunningTurn =
     selectedThread != null && onNotifyOnTurnFinishChange != null;
   const [
@@ -1423,14 +1396,12 @@ export function MessageList({
   // react-virtuoso republishes changed function props synchronously from a
   // layout effect. Chat messages can rerender several times per second while
   // streaming, so keep the functions stable and forward them to current state
-  // through this ref instead of restarting Virtuoso's measurement graph. The
-  // item renderer is invalidated narrowly when inline guidance changes below.
+  // through this ref instead of restarting Virtuoso's measurement graph.
   const virtuosoCallbackStateRef = useRef({
     keepBottomAnchoredRef,
     manualScrollRef,
     markManualScrollAway,
     onAtTopStateChange,
-    renderMessage,
     scheduleAnchorCapture,
     setManualScroll,
     sortedDatesLength: sortedDates.length,
@@ -1440,7 +1411,6 @@ export function MessageList({
     manualScrollRef,
     markManualScrollAway,
     onAtTopStateChange,
-    renderMessage,
     scheduleAnchorCapture,
     setManualScroll,
     sortedDatesLength: sortedDates.length,
@@ -1461,19 +1431,26 @@ export function MessageList({
     }
     return height;
   }, []);
+  type ChatVirtualRow = {
+    key: string;
+    render: () => ReactNode;
+  };
+  // Virtuoso memoizes mounted items. Put the current renderer in row data so
+  // message-cache and ACP-state updates invalidate those items directly instead
+  // of depending on when Virtuoso republishes a callback or reads a mutable ref.
+  const virtuosoData: ChatVirtualRow[] = Array.from(
+    { length: sortedDates.length + 1 },
+    (_, index) => ({
+      key: sortedDates[index] ?? "end",
+      render:
+        index === sortedDates.length
+          ? () => <div style={{ height: "25px" }} />
+          : () => renderMessage(index),
+    }),
+  );
   const renderVirtuosoItem = useCallback(
-    (index: number) => {
-      // Guidance is rendered inside an existing assistant row, so its state can
-      // change without changing Virtuoso's item count or row data.
-      void guidanceRenderKey;
-      const { renderMessage, sortedDatesLength } =
-        virtuosoCallbackStateRef.current;
-      if (sortedDatesLength === index) {
-        return <div style={{ height: "25px" }} />;
-      }
-      return renderMessage(index);
-    },
-    [guidanceRenderKey],
+    (_index: number, row: ChatVirtualRow) => row.render(),
+    [],
   );
   const handleVirtuosoRangeChanged = useCallback(
     ({ endIndex }: { endIndex: number }) => {
