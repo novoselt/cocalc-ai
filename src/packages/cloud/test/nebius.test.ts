@@ -7,7 +7,6 @@ import {
   DiskSpec_DiskType,
   InstanceRecoveryPolicy,
   PreemptibleSpec_PreemptionPolicy,
-  ReservationPolicy_Policy,
 } from "@nebius/js-sdk/api/nebius/compute/v1/index";
 import {
   ResourceAdviceStatus_Availability_AvailabilityLevel,
@@ -240,14 +239,9 @@ describe("NebiusProvider", () => {
     expect(createArgs.spec.preemptible.onPreemption).toBe(
       PreemptibleSpec_PreemptionPolicy.STOP,
     );
-    expect(createArgs.spec.preemptible.priority).toBe(0);
+    expect(createArgs.spec.preemptible.priority).toBe(3);
     expect(createArgs.spec.recoveryPolicy).toBe(InstanceRecoveryPolicy.FAIL);
-    expect(createArgs.spec.reservationPolicy).toEqual(
-      expect.objectContaining({
-        policy: ReservationPolicy_Policy.FORBID,
-        reservationIds: [],
-      }),
-    );
+    expect(createArgs.spec.reservationPolicy).toBeUndefined();
     expect(createArgs.spec.networkInterfaces[0].publicIpAddress.static).toBe(
       false,
     );

@@ -28,8 +28,6 @@ import {
   PreemptibleSpec,
   PreemptibleSpec_PreemptionPolicy,
   PublicIPAddress,
-  ReservationPolicy,
-  ReservationPolicy_Policy,
   ResourcesSpec,
   SecurityGroup,
   SourceImageFamily,
@@ -1375,17 +1373,9 @@ export class NebiusProvider implements CloudProvider {
             spec.pricing_model === "spot"
               ? PreemptibleSpec.create({
                   onPreemption: PreemptibleSpec_PreemptionPolicy.STOP,
-                })
-              : undefined,
-          // Preemptible instances cannot consume capacity reservations. Make
-          // that intent explicit instead of relying on the protobuf's AUTO
-          // default, which may attempt a reservation before common-pool
-          // placement.
-          reservationPolicy:
-            spec.pricing_model === "spot"
-              ? ReservationPolicy.create({
-                  policy: ReservationPolicy_Policy.FORBID,
-                  reservationIds: [],
+                  // Nebius documents this field as deprecated, but production
+                  // still rapidly preempts requests that serialize priority 0.
+                  priority: 3,
                 })
               : undefined,
           hostname: name,
