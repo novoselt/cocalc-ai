@@ -870,6 +870,14 @@ export function MessageList({
   const blockScrollInput = anyOverlayOpen === true;
   const showNewestMessagesButton =
     sortedDates.length > 0 && (!atBottom || manualScroll);
+  const virtuosoData = useMemo(
+    () =>
+      Array.from(
+        { length: sortedDates.length + 1 },
+        (_, index) => `${sortedDates[index] ?? "end"}:${guidanceRenderKey}`,
+      ),
+    [guidanceRenderKey, sortedDates],
+  );
   const canNotifyForRunningTurn =
     selectedThread != null && onNotifyOnTurnFinishChange != null;
   const [
@@ -1650,6 +1658,7 @@ export function MessageList({
         ref={listVirtuosoRef}
         scrollerRef={handleVirtuosoScrollerRef}
         totalCount={sortedDates.length + 1}
+        data={virtuosoData}
         context={virtuosoCallbackStateRef.current}
         cacheId={cacheId}
         persistState={false}

@@ -273,6 +273,7 @@ describe("ChatLog immediate steer rendering", () => {
       <ChatLog {...props} acpState={new Map() as any} messages={messages} />,
     );
     const beforeGuidance = latestVirtuosoProps.itemContent;
+    const beforeGuidanceData = latestVirtuosoProps.data;
     const itemCount = latestVirtuosoProps.totalCount;
 
     const sendingMessages = new Map(messages);
@@ -296,6 +297,8 @@ describe("ChatLog immediate steer rendering", () => {
     const whileSending = latestVirtuosoProps.itemContent;
 
     expect(latestVirtuosoProps.totalCount).toBe(itemCount);
+    expect(latestVirtuosoProps.data).not.toBe(beforeGuidanceData);
+    expect(latestVirtuosoProps.data[0]).not.toBe(beforeGuidanceData[0]);
     expect(whileSending).not.toBe(beforeGuidance);
     expect(lastRenderedMessageProps("assistant-1")?.activitySteers).toEqual([
       expect.objectContaining({ messageId: "steer-1", state: "sending" }),
