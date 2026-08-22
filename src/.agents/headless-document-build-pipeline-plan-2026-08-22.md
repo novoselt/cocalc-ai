@@ -1,6 +1,7 @@
 # Headless Document Build Pipeline Plan
 
-Status: proposed implementation plan as of 2026-08-22.
+Status: implemented and live-validated on lite1b as of 2026-08-22. The
+repeatable release gate is `cocalc project build-smoke`.
 
 ## Objective
 

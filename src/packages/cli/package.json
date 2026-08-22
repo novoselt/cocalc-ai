@@ -63,6 +63,7 @@
   "author": "SageMath, Inc.",
   "license": "SEE LICENSE.md",
   "dependencies": {
+    "@cocalc/app-document-build": "workspace:*",
     "@cocalc/app-notebook": "workspace:*",
     "@cocalc/app-tasks": "workspace:*",
     "@cocalc/backend": "workspace:*",

@@ -17,6 +17,7 @@ export function sagetexStage(options: {
   resourceKey: string;
   runDirectory?: string;
   hash: string;
+  force: boolean;
   timeoutS: number;
 }): BuildStageSpec {
   const { head } = path_split(options.workingPath);
@@ -33,7 +34,7 @@ export function sagetexStage(options: {
     timeout_s: options.timeoutS,
     required: true,
     job_key: `sagetex:${options.logicalPath}`,
-    aggregate_key: options.hash || undefined,
+    aggregate_key: options.force ? undefined : options.hash || undefined,
   };
 }
 

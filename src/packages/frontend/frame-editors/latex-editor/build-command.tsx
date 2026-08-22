@@ -11,17 +11,17 @@ import { SaveOutlined } from "@ant-design/icons";
 import { Alert, Form, Input, Select, Space } from "antd";
 import { List } from "immutable";
 
+import {
+  buildLatexCommand,
+  LATEX_ENGINES,
+  type LatexEngine,
+} from "@cocalc/app-document-build";
 import { Button } from "@cocalc/frontend/antd-bootstrap";
 import { React } from "@cocalc/frontend/app-framework";
 import { Icon, Loading, Paragraph } from "@cocalc/frontend/components";
 import { split } from "@cocalc/util/misc";
 import { Actions } from "./actions";
 import { BuildControls } from "./output-control-build";
-import {
-  Engine,
-  ENGINES,
-  build_command as latexmk_build_command,
-} from "./latexmk";
 
 // cmd could be undefined -- https://github.com/sagemathinc/cocalc/issues/3290
 function build_command_string(cmd: string | List<string>): string {
@@ -82,8 +82,8 @@ export const BuildCommand: React.FC<Props> = React.memo((props: Props) => {
     set_build_command(build_command_string(build_command_orig));
   }
 
-  function select_engine(engine: Engine): void {
-    const cmd: string[] = latexmk_build_command(
+  function select_engine(engine: LatexEngine): void {
+    const cmd: string[] = buildLatexCommand(
       engine,
       filename,
       knitr,
@@ -97,7 +97,7 @@ export const BuildCommand: React.FC<Props> = React.memo((props: Props) => {
   }
 
   function engineOptions() {
-    return ENGINES.map((engine) => {
+    return LATEX_ENGINES.map((engine) => {
       return {
         key: engine,
         value: engine,
@@ -129,7 +129,7 @@ export const BuildCommand: React.FC<Props> = React.memo((props: Props) => {
   function handle_build_change(): void {
     if (!build_command) {
       // fallback
-      select_engine(ENGINES[0]);
+      select_engine(LATEX_ENGINES[0]);
     } else {
       // NOTE: we no longer allow the command to be arbitrary -- it gets some sanity checks
       // and improvements. This does make certain things that used to be possible now IMPOSSIBLE.

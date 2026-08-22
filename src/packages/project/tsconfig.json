@@ -27,6 +27,7 @@
     "jest.config.js"
   ],
   "references": [
+    { "path": "../apps/document-build" },
     { "path": "../backend" },
     { "path": "../comm" },
     { "path": "../jupyter" },

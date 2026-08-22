@@ -72,6 +72,21 @@ class FakeRuntime implements DocumentBuildRuntime {
 }
 
 describe("LaTeX-family pipelines", () => {
+  it("rejects a stale saved source before starting a stage", async () => {
+    const runtime = new FakeRuntime();
+    runtime.files.set("paper.tex", "new saved content");
+    const result = await runDocumentBuild(
+      { path: "paper.tex", expected_source_hash: 123 },
+      runtime,
+    );
+    expect(runtime.specs).toHaveLength(0);
+    expect(result).toMatchObject({ state: "failed", exit_code: 1 });
+    expect(result.diagnostics[0]).toMatchObject({
+      source: "configuration",
+      message: expect.stringContaining("changed before the build started"),
+    });
+  });
+
   it("runs a plain LaTeX build and emits immutable lifecycle snapshots", async () => {
     const runtime = new FakeRuntime();
     runtime.files.set("paper.tex", "\\documentclass{article}");
@@ -150,7 +165,10 @@ describe("LaTeX-family pipelines", () => {
     });
     runtime.queue("pythontex", { stdout: "PythonTeX complete" });
 
-    const result = await runDocumentBuild({ path: "paper.tex" }, runtime);
+    const result = await runDocumentBuild(
+      { path: "paper.tex", generation: "saved-17", force: true },
+      runtime,
+    );
     expect(runtime.specs.map((spec) => spec.name)).toEqual([
       "latex",
       "latex",
@@ -176,7 +194,27 @@ describe("LaTeX-family pipelines", () => {
         expect.objectContaining({ required: true }),
       ]),
     );
+    expect(
+      runtime.specs
+        .filter(({ name }) => ["latex", "sagetex", "pythontex"].includes(name))
+        .every(({ aggregate_key }) => aggregate_key == null),
+    ).toBe(true);
     expect(result.state).toBe("succeeded");
+  });
+
+  it("does not run later stages after a failed preprocessor", async () => {
+    const runtime = new FakeRuntime();
+    runtime.files.set("paper.tex", "\\documentclass{article}");
+    runtime.queue("latex", { stdout: "sagetex.sty" }, { stdout: "pending" });
+    runtime.queue("sagetex", { exit_code: 2, stderr: "sage failed" });
+
+    const result = await runDocumentBuild({ path: "paper.tex" }, runtime);
+    expect(runtime.specs.map((spec) => spec.name)).toEqual([
+      "latex",
+      "latex",
+      "sagetex",
+    ]);
+    expect(result).toMatchObject({ state: "failed", exit_code: 2 });
   });
 
   it("fails on parsed LaTeX errors even if latexmk exits zero", async () => {
@@ -234,5 +272,21 @@ describe("Markdown pipelines", () => {
         }),
       ]),
     );
+  });
+
+  it("reports saved-source read failures as transport diagnostics", async () => {
+    const runtime = new FakeRuntime();
+    runtime.readText = async () => {
+      throw new Error("source is unavailable");
+    };
+    const result = await runDocumentBuild({ path: "report.Rmd" }, runtime);
+    expect(result).toMatchObject({ state: "failed", exit_code: 1 });
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        source: "transport",
+        level: "error",
+        message: "source is unavailable",
+      }),
+    ]);
   });
 });

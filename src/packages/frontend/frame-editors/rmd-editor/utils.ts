@@ -5,11 +5,8 @@
 
 import { join } from "path";
 import { Set } from "immutable";
-import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { change_filename_extension, path_split } from "@cocalc/util/misc";
 import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
-import type { ExecOutput } from "../generic/client";
-import { buildJobGroup } from "../generic/project-builds";
 
 // something in the rmarkdown source code replaces all spaces by dashes
 // [hsy] I think this is because of calling pandoc.
@@ -48,145 +45,6 @@ export async function checkProducedFiles(codeEditorActions) {
   // console.log("setting derived_file_types to", existing.toJS());
   codeEditorActions.setState({
     derived_file_types: existing as any,
-  });
-}
-
-interface RunJobOpts {
-  aggregate?: string | number | { value: string | number };
-  args?: string[];
-  command: string;
-  env?: { [key: string]: string };
-  jobKey?: string;
-  project_id: string;
-  runDir: string;
-  set_job_info?: (info: ExecuteCodeOutputAsync) => void;
-  timeout?: number;
-  path: string;
-  debug?: string;
-}
-
-export async function runJob(opts: RunJobOpts): Promise<ExecOutput> {
-  const {
-    aggregate,
-    args,
-    command,
-    env,
-    jobKey,
-    project_id,
-    runDir,
-    set_job_info,
-    timeout = 4 * 60,
-    path,
-    debug,
-  } = opts;
-
-  // If no set_job_info callback, use simple exec
-  if (!set_job_info) {
-    const { exec } = await import("../generic/client");
-    return await exec(
-      {
-        timeout,
-        bash: true,
-        command,
-        args,
-        env,
-        project_id,
-        path: runDir,
-        err_on_exit: false,
-        aggregate,
-      },
-      path,
-    );
-  }
-
-  // Use real-time streaming with job info updates
-  const haveArgs = Array.isArray(args);
-
-  const stream = webapp_client.project_client.execStream({
-    aggregate,
-    args,
-    bash: !haveArgs,
-    command,
-    env,
-    err_on_exit: false,
-    job_group: buildJobGroup(path),
-    job_key: jobKey,
-    path: runDir,
-    project_id,
-    timeout,
-    debug,
-  });
-
-  return new Promise((resolve, reject) => {
-    let completed = false;
-    let current_job_info: ExecuteCodeOutputAsync | null = null;
-    let pending_stdout = "";
-    let pending_stderr = "";
-
-    stream.on("job", (job_info: ExecuteCodeOutputAsync) => {
-      current_job_info = {
-        ...job_info,
-        stdout: (job_info.stdout ?? "") + pending_stdout,
-        stderr: (job_info.stderr ?? "") + pending_stderr,
-      };
-      pending_stdout = "";
-      pending_stderr = "";
-      set_job_info(current_job_info);
-    });
-
-    stream.on("stdout", (data: string) => {
-      if (current_job_info) {
-        current_job_info = {
-          ...current_job_info,
-          stdout: (current_job_info.stdout ?? "") + data,
-        };
-        set_job_info(current_job_info);
-      } else {
-        pending_stdout += data;
-      }
-    });
-
-    stream.on("stderr", (data: string) => {
-      if (current_job_info) {
-        current_job_info = {
-          ...current_job_info,
-          stderr: ((current_job_info.stderr ?? "") + data).toString(),
-        };
-        set_job_info(current_job_info);
-      } else {
-        pending_stderr += data;
-      }
-    });
-
-    stream.on("stats", (statEntry: any) => {
-      if (current_job_info) {
-        const stats = current_job_info.stats ?? [];
-        stats.push(statEntry);
-        current_job_info = {
-          ...current_job_info,
-          stats: stats.slice(-100), // Keep last 100 entries
-        };
-        set_job_info(current_job_info);
-      }
-    });
-
-    stream.on("done", (result: ExecOutput) => {
-      completed = true;
-      if (result.type === "async") {
-        set_job_info(result);
-      }
-      resolve(result);
-    });
-
-    stream.on("end", () => {
-      if (!completed) {
-        reject(new Error("Conversion stream ended before completion."));
-      }
-    });
-
-    stream.on("error", (err) => {
-      reject(err);
-    });
   });
 }
 

@@ -26,17 +26,29 @@ import { delay } from "awaiting";
 
 import * as CodeMirror from "codemirror";
 import { fromJS, List, Map as IMap } from "immutable";
-import { debounce, union } from "lodash";
+import { debounce } from "lodash";
 import { normalize as path_normalize } from "path";
 
+import {
+  buildLatexCommand,
+  getLatexEngine,
+  sanitizeLatexCommandArray,
+  sanitizeLatexCommandString,
+  type DocumentBuildSnapshot,
+  type LatexEngine,
+} from "@cocalc/app-document-build";
 import { Store, TypedMap } from "@cocalc/frontend/app-framework";
+import type {
+  DocumentBuildApi,
+  DocumentBuildWatcher,
+} from "@cocalc/frontend/client/document-build-watcher";
+import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
 import {
   TableOfContentsEntry,
   TableOfContentsEntryList,
 } from "@cocalc/frontend/components";
 import { saveToDiskWithFileServerRetry } from "@cocalc/frontend/frame-editors/base-editor/actions-base";
-import type { ExecJobGroupWatcher } from "@cocalc/frontend/client/exec-job-watcher";
 import {
   Actions as BaseActions,
   CodeEditorState,
@@ -44,16 +56,7 @@ import {
 import { print_html } from "@cocalc/frontend/frame-editors/frame-tree/print";
 import { FrameTree } from "@cocalc/frontend/frame-editors/frame-tree/types";
 import { raw_url } from "@cocalc/frontend/frame-editors/frame-tree/util";
-import {
-  cancel_exec_job,
-  project_api,
-  server_time,
-} from "@cocalc/frontend/frame-editors/generic/client";
-import {
-  jobAggregateValue,
-  watchProjectBuilds,
-} from "@cocalc/frontend/frame-editors/generic/project-builds";
-import type { ExecOutput } from "@cocalc/util/db-schema/projects";
+import { project_api } from "@cocalc/frontend/frame-editors/generic/client";
 import {
   change_filename_extension,
   hash_string,
@@ -65,9 +68,7 @@ import {
 } from "@cocalc/util/misc";
 import { normalizeAbsolutePath } from "@cocalc/util/path-model";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
-import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 import * as tree_ops from "../frame-tree/tree-ops";
-import { bibtex } from "./bibtex";
 import type {
   BookmarkMarker,
   ChatMarker,
@@ -86,17 +87,8 @@ import { clean } from "./clean";
 import { KNITR_EXTS } from "./constants";
 import { count_words } from "./count_words";
 import { update_gutters } from "./gutters";
-import { knitr, knitr_errors, patch_synctex } from "./knitr";
-import { IProcessedLatexLog, LatexParser } from "./latex-log-parser";
-import {
-  build_command,
-  Engine,
-  get_engine_from_config,
-  latexmk,
-} from "./latexmk";
+import { IProcessedLatexLog } from "./latex-log-parser";
 import { PDFWatcher } from "./pdf-watcher";
-import { pythontex, pythontex_errors } from "./pythontex";
-import { sagetex, sagetex_errors, sagetex_hash } from "./sagetex";
 import * as synctex from "./synctex";
 import {
   interleaveSubfileTocEntries,
@@ -106,12 +98,15 @@ import {
 import {
   BuildLog,
   BuildLogs,
-  BuildSpecName,
-  IBuildSpecs,
   ScrollIntoViewMap,
   ScrollIntoViewRecord,
 } from "./types";
-import { ensureTargetPathIsCorrect, pdf_path } from "./util";
+import { pdf_path } from "./util";
+import {
+  isDocumentBuildTerminal,
+  snapshotBuildLogs,
+  snapshotParsedLog,
+} from "./document-build";
 
 interface LatexEditorState extends CodeEditorState {
   build_logs: BuildLogs;
@@ -141,21 +136,21 @@ interface LatexEditorState extends CodeEditorState {
 export class Actions extends BaseActions<LatexEditorState> {
   public project_id: string;
   public store: Store<LatexEditorState>;
-  private _last_sagetex_hash: string;
   private _last_syncstring_hash: number | undefined;
+  private persisted_source_check_pending = false;
+  private persisted_source_check_running = false;
   private is_building: boolean = false;
   public word_count: (
     time: number,
     force: boolean,
     skipFramePopup?: boolean,
   ) => Promise<void>;
-  private is_stopping: boolean = false; // if true, do not continue running any compile jobs
   private ext: string = "tex";
   private knitr: boolean = false; // true, if we deal with a knitr file
   private filename_knitr: string; // .rnw or .rtex
   private bad_filename: boolean; // true, if the <filename.tex> can't be processed -- see #3230
   // optional engine configuration string -- https://github.com/sagemathinc/cocalc/issues/2839
-  private engine_config: Engine | null | undefined = undefined;
+  private engine_config: LatexEngine | undefined = undefined;
 
   // The output_directory that will be used if we are building
   // and using an output directory.  NOTE: this is a /tmp
@@ -180,7 +175,20 @@ export class Actions extends BaseActions<LatexEditorState> {
 
   // PDF file watcher - watches directory for PDF file changes
   private pdf_watcher?: PDFWatcher;
-  private build_job_watcher?: ExecJobGroupWatcher;
+  private document_build_watcher?: DocumentBuildWatcher;
+  private active_build_id?: string;
+  private build_snapshot_seq = new Map<string, number>();
+  private refreshed_build_ids = new Set<string>();
+  private terminal_build_snapshots = new Map<string, DocumentBuildSnapshot>();
+  private build_waiters = new Map<
+    string,
+    {
+      resolve: (snapshot: DocumentBuildSnapshot) => void;
+      reject: (error: Error) => void;
+    }
+  >();
+  private build_command_save: Promise<void> = Promise.resolve();
+  private build_command_save_error?: unknown;
 
   // Debounced version - initialized in _init2()
   update_pdf: (time: number, force: boolean) => void;
@@ -242,7 +250,7 @@ export class Actions extends BaseActions<LatexEditorState> {
       );
       return;
     }
-    this.init_latexmk();
+    this.init_build_on_save();
     // This breaks browser spellcheck.
     // this._init_spellcheck();
     this.init_config();
@@ -258,7 +266,7 @@ export class Actions extends BaseActions<LatexEditorState> {
       debounce(this.ensureNonempty.bind(this), 1500),
     );
     this._init_pdf_directory_watcher();
-    this._init_build_job_watcher();
+    this._init_document_build_watcher();
     this.word_count = reuseInFlight(this._word_count.bind(this));
     this.chat.init();
   }
@@ -278,12 +286,26 @@ export class Actions extends BaseActions<LatexEditorState> {
     await this.pdf_watcher.init();
   }
 
-  private _init_build_job_watcher(): void {
-    this.build_job_watcher = watchProjectBuilds({
-      onBuild: (job) => void this.follow_project_build(job),
-      path: this.path,
+  private _init_document_build_watcher(): void {
+    const watcher = webapp_client.project_client.watchDocumentBuild({
+      path: this.document_build_path(),
       project_id: this.project_id,
     });
+    watcher.on("snapshot", (snapshot: DocumentBuildSnapshot) => {
+      this.apply_document_build_snapshot(snapshot);
+    });
+    watcher.on(
+      "active-change",
+      (snapshot: DocumentBuildSnapshot | undefined) => {
+        this.active_build_id = snapshot?.build_id;
+        this.is_building = snapshot != null;
+        if (snapshot == null) this.set_status("");
+      },
+    );
+    watcher.on("watch-error", (err: unknown) => {
+      if (this._state !== "closed") this.set_error(`${err}`);
+    });
+    this.document_build_watcher = watcher;
   }
 
   // similar to jupyter, where an empty document is really
@@ -340,13 +362,34 @@ export class Actions extends BaseActions<LatexEditorState> {
     return s != null && s.indexOf("\\document") != -1;
   }
 
-  private init_latexmk(): void {
+  private init_build_on_save(): void {
     if (this.is_read_only_preview()) return;
-    const handlePersistedSourceChange = reuseInFlight(async () => {
-      await this.maybeBuildAfterPersistedSourceChange();
-    });
+    const handlePersistedSourceChange = () => this.queuePersistedSourceChange();
     this._syncstring.on("save-to-disk", handlePersistedSourceChange);
     this._syncstring.on("filesystem-change", handlePersistedSourceChange);
+  }
+
+  private queuePersistedSourceChange(): void {
+    void this.handlePersistedSourceChange().catch((err) => {
+      if (this._state !== "closed") this.set_error(`${err}`);
+    });
+  }
+
+  private async handlePersistedSourceChange(): Promise<void> {
+    this.persisted_source_check_pending = true;
+    if (this.persisted_source_check_running) return;
+    this.persisted_source_check_running = true;
+    try {
+      while (this.persisted_source_check_pending) {
+        this.persisted_source_check_pending = false;
+        await this.maybeBuildAfterPersistedSourceChange();
+      }
+    } finally {
+      this.persisted_source_check_running = false;
+      if (this.persisted_source_check_pending) {
+        this.queuePersistedSourceChange();
+      }
+    }
   }
 
   private async maybeBuildAfterPersistedSourceChange(): Promise<void> {
@@ -363,6 +406,7 @@ export class Actions extends BaseActions<LatexEditorState> {
       return;
     }
     this._last_syncstring_hash = hash;
+    const generation = `save:${this.document_build_path()}:${hash}`;
     // there are two cases: the parent "master" file triggers the build (usual case)
     // or an included dependency – i.e. where parent_file is set
     if (this.parent_file != null && this.parent_file != this.path) {
@@ -371,10 +415,10 @@ export class Actions extends BaseActions<LatexEditorState> {
         this.parent_file,
       ) as Actions;
       // we're careful, maybe getEditorActions returns something else ...
-      await parent_actions?.build?.("", false);
+      await parent_actions?.build?.("", false, generation);
     } else if (this.parent_file == null && this.is_likely_master()) {
       // also check is_likely_master, b/c there must be a \\document* command.
-      await this.build("", false);
+      await this.build("", false, generation);
     }
   }
 
@@ -437,12 +481,12 @@ export class Actions extends BaseActions<LatexEditorState> {
       this.set_build_command(cocalc_cmd);
       this.setState({ build_command_hardcoded: true });
     } else if (program) {
-      // get_engine_from_config picks an "Engine" we know of via lower-case match
-      this.engine_config = get_engine_from_config(program);
+      // getLatexEngine picks an engine we know of via lower-case match.
+      this.engine_config = getLatexEngine(program);
       if (this.engine_config != null) {
         // Now set the build command to what is configured.
         this.set_build_command(
-          build_command(
+          buildLatexCommand(
             this.engine_config,
             path_split(this.path).tail,
             this.knitr,
@@ -529,7 +573,7 @@ export class Actions extends BaseActions<LatexEditorState> {
   }
 
   private set_default_build_command(): string[] {
-    const default_cmd = build_command(
+    const default_cmd = buildLatexCommand(
       this.engine_config || "PDFLaTeX",
       path_split(this.path).tail,
       this.knitr,
@@ -539,156 +583,22 @@ export class Actions extends BaseActions<LatexEditorState> {
     return default_cmd;
   }
 
-  private output_directory_cmd_flag(output_dir?: string): string {
-    // maybe at some point we want to wrap this in ''
-    const dir = output_dir != null ? output_dir : this.output_directory;
-    return `-output-directory=${dir}`;
-  }
-
   public sanitize_build_cmd_str(cmd: string): string {
-    if (cmd.indexOf(";") != -1) {
-      // if there is a semicolon we allow anything...
-      return cmd;
-    }
-    // This is when users manually set the command or possibly slightly edited it.
-    // It's very important NOT to ignore the output directory part!!! See #5183,
-    // where we see ignoring this leads to massive problems.
-
-    // Make sure the output directory matches what we are actually using (the sha1 hash).
-    const i = cmd.indexOf("-output-directory=");
-    if (i != -1) {
-      let j = cmd.indexOf(" ", i);
-      if (j == -1) {
-        // at the end
-        j = cmd.length;
-      }
-      if (this.output_directory) {
-        // ensure it is set properly
-        if (
-          cmd.slice(i + "-output-directory=".length, j) != this.output_directory
-        ) {
-          cmd =
-            cmd.slice(0, i) +
-            `-output-directory=${this.output_directory} ` +
-            cmd.slice(j);
-        }
-      } else {
-        // ensure it is NOT set since it will definitely break things
-        cmd = cmd.slice(0, i) + cmd.slice(j);
-      }
-    }
-
-    //console.log("before", { cmd });
-    cmd = ensureTargetPathIsCorrect(cmd, path_split(this.path).tail);
-    //console.log("after", { cmd });
-
-    // We also focus on setting -deps for latexmk
-    if (!cmd.trim().startsWith("latexmk")) return cmd;
-    // -dependents- or -deps- ← don't shows the dependency list, we remove these
-    // surrounded with spaces, to reduce changes of wrong matches
-    for (const bad of [" -dependents- ", " -deps- "]) {
-      if (cmd.indexOf(bad) !== -1) {
-        cmd = cmd.replace(bad, " ");
-      }
-    }
-    if (cmd.indexOf(" -deps ") !== -1) return cmd;
-    const cmdl = cmd.split(" ");
-    // assume latexmk -pdf [insert here] ...
-    cmdl.splice(2, 0, "-deps");
-    return cmdl.join(" ");
+    return sanitizeLatexCommandString(
+      cmd,
+      path_split(this.path).tail,
+      this.output_directory,
+    );
   }
 
   private sanitize_build_cmd(cmd: List<string>): List<string> {
-    // special case "false", to disable processing
-    if (cmd.get(0)?.startsWith("false")) {
-      return cmd;
-    }
-
-    // Next, we ensure the output directory is correct.
-    let outdir: string | undefined = undefined;
-    let i: number = -1;
-    for (const x of cmd) {
-      i += 1;
-      if (startswith(x, "-output-directory=")) {
-        outdir = x;
-        break;
-      }
-    }
-    // only bother tweaking/adding the output directory, if it exists in the first place
-    if (outdir != null) {
-      if (this.output_directory != null) {
-        // make sure it is right
-        const should_be = this.output_directory_cmd_flag();
-        if (outdir != should_be) {
-          cmd = cmd.set(i, should_be);
-        }
-      } else {
-        // remove it, if there is none set
-        cmd = cmd.delete(i);
-      }
-    }
-
-    // -dependents- or -deps- ← don't shows the dependency list, we remove these
-    for (const bad of ["-dependents-", "-deps-"]) {
-      const idx = cmd.indexOf(bad);
-      if (idx !== -1) {
-        cmd = cmd.delete(idx);
-      }
-    }
-    // and then we make sure -deps or -dependents exists
-    if (!cmd.some((x) => x === "-deps" || x === "-dependents")) {
-      cmd = cmd.splice(3, 0, "-deps");
-    }
-
-    // Finally make sure the filename is right.
-    const filename = path_split(this.path).tail;
-    if (filename != cmd.get(cmd.size - 1)) {
-      cmd = cmd.set(cmd.size - 1, filename);
-    }
-
-    return cmd;
-  }
-
-  // disable the output directory for pythontex and sagetex.
-  // the main reason is that it is likely to process files, load py modules or generated images.
-  // compiling tex in a tmp dir breaks all the paths. -- https://github.com/sagemathinc/cocalc/issues/4394
-  // returns true, if it really made a change.
-  private ensure_output_directory_disabled(): boolean {
-    this.output_directory = undefined;
-
-    // at this point we know that this.init_config already ran and set a build command
-    if (this._syncdb == null) throw Error("syncdb must be defined");
-    const x = this._syncdb.get_one({ key: "build_command" });
-    if (x == null) return false; // should not happen
-
-    const old_cmd: List<string> | string = x.get("value");
-    let new_cmd: string[] | string =
-      typeof old_cmd === "string" ? old_cmd : old_cmd.toJS();
-
-    // fortunately, we know exactly what we have to remove
-    const outdirflag = this.output_directory_cmd_flag(
-      this.output_directory_path(),
+    return List(
+      sanitizeLatexCommandArray(
+        cmd.toJS(),
+        path_split(this.path).tail,
+        this.output_directory,
+      ),
     );
-
-    let change = false;
-    if (typeof old_cmd === "string") {
-      const i = old_cmd.indexOf(outdirflag);
-      if (i >= 0) {
-        change = true;
-        const before = old_cmd.slice(0, i);
-        const after = old_cmd.slice(i + outdirflag.length);
-        new_cmd = `${before}${after}`;
-      }
-    } else {
-      const tmp = old_cmd.filter((x) => x != outdirflag);
-      change = !tmp.equals(old_cmd);
-      new_cmd = tmp.toJS();
-    }
-
-    //console.log("ensure_output_directory_disabled new_cmd", new_cmd, change);
-    // don't wrap this in if-change, weird corner cases
-    this.set_build_command(new_cmd);
-    return change;
   }
 
   // Source on the left, the unified output panel on the right.
@@ -727,39 +637,6 @@ export class Actions extends BaseActions<LatexEditorState> {
     }
   }
 
-  private get_streamed_latex_output(): BuildLog | undefined {
-    const log = this.store.getIn(["build_logs", "latex"]) as any;
-    const output = typeof log?.toJS === "function" ? log.toJS() : log;
-    if (output == null || typeof output !== "object") return;
-    if (!`${output.stdout ?? ""}`.trim() && !`${output.stderr ?? ""}`.trim()) {
-      return;
-    }
-    return {
-      ...output,
-      time: typeof output.time === "number" ? output.time : Date.now(),
-    } as BuildLog;
-  }
-
-  private is_generic_latex_transport_error(err: unknown): boolean {
-    let message =
-      err instanceof Error
-        ? err.message
-        : typeof err === "string"
-          ? err
-          : `${(err as any)?.message ?? err ?? ""}`;
-    message = message
-      .replace(/^unable to run the compilation\.?\s*/i, "")
-      .replace(/^error\s*:?\s*/i, "")
-      .replace(/\.+$/, "")
-      .trim()
-      .toLowerCase();
-    return (
-      !message ||
-      message === "an error occurred" ||
-      message === "error occurred"
-    );
-  }
-
   _forget_pdf_document(): void {
     void import("./pdfjs-doc-cache").then(({ forgetDocument, url_to_pdf }) => {
       forgetDocument(
@@ -778,8 +655,12 @@ export class Actions extends BaseActions<LatexEditorState> {
       this.pdf_watcher.close();
       this.pdf_watcher = undefined;
     }
-    this.build_job_watcher?.close();
-    this.build_job_watcher = undefined;
+    this.document_build_watcher?.close();
+    this.document_build_watcher = undefined;
+    for (const { reject } of this.build_waiters.values()) {
+      reject(new Error("LaTeX editor closed while waiting for document build"));
+    }
+    this.build_waiters.clear();
     this.chat.close();
     super.close();
   }
@@ -847,7 +728,17 @@ export class Actions extends BaseActions<LatexEditorState> {
 
   // used by generic framework – this is bound to the instance, otherwise "this" is undefined, hence
   // make sure to use an arrow function!
-  build = async (id?: string, force: boolean = false): Promise<void> => {
+  build = async (
+    id?: string,
+    force: boolean = false,
+    generation?: string,
+  ): Promise<void> => await this.build_document(id, force, generation);
+
+  private async build_document(
+    id?: string,
+    force: boolean = false,
+    generation?: string,
+  ): Promise<void> {
     if (this.is_read_only_preview()) return;
     this.set_error("");
     this.set_status("");
@@ -857,8 +748,15 @@ export class Actions extends BaseActions<LatexEditorState> {
         cm.focus();
       }
     }
+    if (this.bad_filename) {
+      this.set_error(
+        `ERROR: It is not possible to compile this LaTeX file with the name '${this.path}'.\n` +
+          "Please modify the filename so it does not contain two or more consecutive spaces.",
+      );
+      return;
+    }
     // initiating a build. if one is running & forced, we stop the build
-    if (this.is_building) {
+    if (this.is_building && generation == null) {
       if (force) {
         await this.stop_build();
       } else {
@@ -874,22 +772,58 @@ export class Actions extends BaseActions<LatexEditorState> {
       sample_successes: true,
     });
     this.is_building = true;
+    let wordCount: Promise<void> | undefined;
     try {
       await this.save_all(false);
+      await this.wait_for_build_command_save();
       buildTrace.mark("sources_saved");
-      await this.run_build(this.last_save_time(), force);
-      buildTrace.mark("build_pipeline_done");
-      afterNextPaint(() => {
-        buildTrace.record("latex_build_complete_v2", {
-          path_ext: "tex",
-          editor: "latex",
-          segment: force ? "forced" : "normal",
-          surface_visible: true,
-          details: {
-            preview_refresh_requested: true,
-          },
-        });
+      this.setState({ build_logs: IMap() });
+      if (this._has_frame_of_type("word_count")) {
+        wordCount = this.word_count(this.last_save_time(), force);
+      }
+      const snapshot = await this.document_build_api().start({
+        path: this.document_build_path(),
+        ...(generation == null ? undefined : { generation }),
+        expected_source_hash: hash_string(this.store.get("value") ?? ""),
+        force,
+        output_directory: this.get_output_directory() ?? null,
       });
+      if (this.document_build_watcher != null) {
+        this.document_build_watcher.track(snapshot);
+      } else {
+        this.apply_document_build_snapshot(snapshot);
+      }
+      const completeBuild = async () => {
+        await this.wait_for_document_build(snapshot.build_id);
+        await wordCount;
+        buildTrace.mark("build_pipeline_done");
+        afterNextPaint(() => {
+          buildTrace.record("latex_build_complete_v2", {
+            path_ext: "tex",
+            editor: "latex",
+            segment: force ? "forced" : "normal",
+            surface_visible: true,
+            details: {
+              preview_refresh_requested: true,
+            },
+          });
+        });
+      };
+      if (generation != null) {
+        void completeBuild().catch((err) => {
+          buildTrace.record("latex_build_failed_v2", {
+            path_ext: "tex",
+            editor: "latex",
+            segment: "build_on_save",
+            surface_visible: true,
+            details: {
+              error_name: err instanceof Error ? err.name : "unknown",
+            },
+          });
+        });
+        return;
+      }
+      await completeBuild();
     } catch (err) {
       buildTrace.record("latex_build_failed_v2", {
         path_ext: "tex",
@@ -904,24 +838,111 @@ export class Actions extends BaseActions<LatexEditorState> {
       // if there is an error, we issue a stop, but keep the build logs
       await this.stop_build();
     } finally {
-      this.is_building = false;
+      if (this.active_build_id == null) this.is_building = false;
     }
-  };
+  }
 
-  private async follow_project_build(
-    job: ExecuteCodeOutputAsync,
-  ): Promise<void> {
-    const aggregate = jobAggregateValue(job);
-    if (this.is_building || this.is_stopping || typeof aggregate !== "number") {
+  private document_build_path(): string {
+    return this.knitr ? this.filename_knitr : this.path;
+  }
+
+  private document_build_api(): DocumentBuildApi {
+    return webapp_client.project_client.conatApi(this.project_id).documentBuild;
+  }
+
+  private async wait_for_document_build(
+    build_id: string,
+  ): Promise<DocumentBuildSnapshot> {
+    const terminal = this.terminal_build_snapshots.get(build_id);
+    if (terminal != null) return terminal;
+    return await new Promise<DocumentBuildSnapshot>((resolve, reject) => {
+      this.build_waiters.set(build_id, { resolve, reject });
+    });
+  }
+
+  private apply_document_build_snapshot(snapshot: DocumentBuildSnapshot): void {
+    const previousSeq = this.build_snapshot_seq.get(snapshot.build_id) ?? -1;
+    if (snapshot.seq <= previousSeq) return;
+    this.build_snapshot_seq.set(snapshot.build_id, snapshot.seq);
+
+    const selectedActive =
+      this.document_build_watcher?.latestActiveBuildSnapshot();
+    const shouldProject =
+      selectedActive == null || selectedActive.build_id === snapshot.build_id;
+
+    if (shouldProject) {
+      this.setState({
+        build_logs: fromJS(snapshotBuildLogs(snapshot)) as unknown as BuildLogs,
+      });
+      this.parsed_output_log = snapshotParsedLog(snapshot);
+      this.setState({
+        knitr_error: snapshot.diagnostics.some(
+          ({ level, source }) => level === "error" && source === "knitr",
+        ),
+      });
+      if (!this.knitr && snapshot.dependencies.length > 0) {
+        void this.set_switch_to_files(snapshot.dependencies);
+      }
+      this.update_gutters();
+      void this.update_gutters_soon();
+      this.check_for_fatal_error();
+    }
+
+    if (!isDocumentBuildTerminal(snapshot)) {
+      const active = selectedActive ?? snapshot;
+      this.active_build_id = active.build_id;
+      this.is_building = true;
+      const running = active.stages
+        .slice()
+        .reverse()
+        .find(({ state }) => state === "running");
+      this.set_status(
+        running == null
+          ? "Document build queued..."
+          : `Running ${running.name}...`,
+      );
       return;
     }
-    this.is_building = true;
-    try {
-      await this.run_build(aggregate, false);
-    } catch (err) {
-      this.set_error(`${err}`);
-    } finally {
-      this.is_building = false;
+
+    this.terminal_build_snapshots.set(snapshot.build_id, snapshot);
+    const waiter = this.build_waiters.get(snapshot.build_id);
+    if (waiter != null) {
+      this.build_waiters.delete(snapshot.build_id);
+      waiter.resolve(snapshot);
+    }
+
+    const remainingActive =
+      this.document_build_watcher?.latestActiveBuildSnapshot();
+    this.active_build_id = remainingActive?.build_id;
+    this.is_building = remainingActive != null;
+    if (remainingActive == null) {
+      this.set_status("");
+    } else {
+      const running = remainingActive.stages
+        .slice()
+        .reverse()
+        .find(({ state }) => state === "running");
+      this.set_status(
+        running == null
+          ? "Document build queued..."
+          : `Running ${running.name}...`,
+      );
+    }
+    if (
+      remainingActive == null &&
+      (snapshot.state === "failed" || snapshot.state === "timed_out")
+    ) {
+      const message =
+        snapshot.error ??
+        snapshot.diagnostics.find(({ level }) => level === "error")?.message;
+      if (message) this.set_error(message);
+    }
+    if (
+      !this.refreshed_build_ids.has(snapshot.build_id) &&
+      snapshot.artifacts.some(({ type }) => type === "pdf")
+    ) {
+      this.refreshed_build_ids.add(snapshot.build_id);
+      this.update_pdf(snapshot.ended_at ?? Date.now(), true);
     }
   }
 
@@ -930,139 +951,20 @@ export class Actions extends BaseActions<LatexEditorState> {
     await this.build_action("clean");
   }
 
-  private async kill(job: ExecOutput): Promise<ExecOutput> {
-    return await cancel_exec_job({
-      project_id: this.project_id,
-      job,
-    });
-  }
-
-  // This stops all known jobs with a status "running" and resets the state.
+  // Cancel the authoritative project-side build. The service kills whichever
+  // stage is active and publishes the terminal snapshot to every client.
   async stop_build(_id?: string) {
-    const build_logs = this.store.get("build_logs");
     try {
-      this.is_stopping = true;
-      if (build_logs) {
-        for (const [name, job] of build_logs) {
-          // this.kill returns the job with a modified status, it's not the kill exec itself
-          this.set_build_logs({ [name]: await this.kill(job.toJS()) });
-        }
+      if (this.active_build_id != null) {
+        const snapshot = await this.document_build_api().cancel(
+          this.active_build_id,
+        );
+        this.apply_document_build_snapshot(snapshot);
       }
     } finally {
-      this.set_status("");
-      this.is_building = false;
-      this.is_stopping = false;
-    }
-  }
-
-  private async run_build(time: number, force: boolean): Promise<void> {
-    if (this.is_stopping) return;
-    // reset state of build_logs, since it is a fresh start
-    this.setState({ build_logs: IMap() });
-
-    if (this.bad_filename) {
-      const err = `ERROR: It is not possible to compile this LaTeX file with the name '${this.path}'.
-        Please modify the filename, such that it does **not** contain two or more consecutive spaces.`;
-      this.set_error(err);
-      return;
-    }
-
-    // for knitr related documents, we have to first build the derived tex file ...
-    if (this.knitr) {
-      await this.run_knitr(time, force);
-      if (this.store.get("knitr_error")) return;
-    }
-    // update word count asynchronously
-    let run_word_count: any = null;
-    if (this._has_frame_of_type("word_count")) {
-      run_word_count = this.word_count(time, force);
-    }
-    // update_pdf=false, because it is deferred until the end
-    await this.run_latex(time, force, false);
-    // ... and then patch the synctex file to align the source line numberings
-    if (this.knitr) {
-      await this.run_patch_synctex(time, force);
-    }
-
-    const s = this.store.unsafe_getIn(["build_logs", "latex", "stdout"]);
-    let update_pdf = true;
-    if (typeof s == "string") {
-      const is_sagetex = s.indexOf("sagetex.sty") != -1;
-      const is_pythontex =
-        s.indexOf("pythontex.sty") != -1 || s.indexOf("PythonTeX") != -1;
-      if (is_sagetex || is_pythontex) {
-        if (this.ensure_output_directory_disabled()) {
-          // rebuild if build command changed
-          await this.run_latex(time, true, false);
-        }
-        update_pdf = false;
-        if (is_sagetex) {
-          await this.run_sagetex(time, force);
-        }
-        // don't make this an else-if: audacious latexer might want to run both o_O
-        if (is_pythontex) {
-          await this.run_pythontex(time, force);
-        }
-      }
-    }
-
-    // we suppress a cycle of loading the PDF if sagetex or pythontex runs above
-    // because these two trigger a rebuild and update_pdf on their own at the end
-    if (update_pdf) {
-      this.update_pdf(time, force);
-    }
-
-    if (run_word_count != null) {
-      // and finally, wait for word count to finish -- to make clear the whole operation is done
-      await run_word_count;
-    }
-  }
-
-  private async run_knitr(time: number, force: boolean): Promise<void> {
-    if (this.is_stopping) return;
-    let output: BuildLog;
-    const status = (s) => this.set_status(`Running Knitr... ${s}`);
-    const set_job_info = (job) => this.set_build_logs({ knitr: job });
-    status("");
-
-    try {
-      output = await knitr(
-        this.project_id,
-        this.filename_knitr,
-        this.make_timestamp(time, force),
-        status,
-        set_job_info,
-      );
-    } catch (err) {
-      this.set_error(err);
-      this.setState({ knitr_error: true });
-      return;
-    } finally {
-      this.set_status("");
-    }
-    output.parse = knitr_errors(output).toJS();
-    this.merge_parsed_output_log(output.parse);
-    this.set_build_logs({ knitr: output });
-    this.update_gutters();
-    this.setState({ knitr_error: output.parse?.errors?.length > 0 });
-  }
-
-  async run_patch_synctex(time: number, force: boolean): Promise<void> {
-    // quotes around ${s} are just so codemirror doesn't syntax highlight the rest of this file:
-    const status = (s) => this.set_status(`Running Knitr/Synctex... "${s}"`);
-    status("");
-    try {
-      await patch_synctex(
-        this.project_id,
-        this.path,
-        this.make_timestamp(time, force),
-        status,
-      );
-    } catch (err) {
-      this.set_error(err);
-      return;
-    } finally {
-      this.set_status("");
+      this.active_build_id = this.document_build_watcher?.latestActiveBuildId();
+      this.is_building = this.active_build_id != null;
+      this.set_status(this.is_building ? "Document build running..." : "");
     }
   }
 
@@ -1095,102 +997,6 @@ export class Actions extends BaseActions<LatexEditorState> {
         }
       }
       return;
-    }
-  }
-
-  private async run_latex(
-    time: number,
-    force: boolean,
-    update_pdf: boolean = true,
-  ): Promise<void> {
-    if (this.is_stopping) return;
-    let output: BuildLog;
-    let build_command: string | string[];
-    const timestamp = this.make_timestamp(time, force);
-    const s: string | List<string> | undefined =
-      this.store.get("build_command");
-    if (!s) {
-      return;
-    }
-    this.set_error("");
-    this.set_build_logs({ latex: undefined });
-    // this.set_job_infos({ latex: undefined });
-    if (typeof s == "string") {
-      build_command = s;
-    } else {
-      build_command = s.toJS();
-    }
-    const status = (s) => this.set_status(`Running Latex... ${s}`);
-    const set_job_info = (job) => this.set_build_logs({ latex: job });
-
-    status("");
-    try {
-      output = await latexmk(
-        this.project_id,
-        this.path,
-        build_command,
-        timestamp,
-        status,
-        this.get_output_directory(),
-        set_job_info,
-      );
-      // console.log(output);
-    } catch (err) {
-      const streamedOutput = this.get_streamed_latex_output();
-      if (
-        streamedOutput != null &&
-        this.is_generic_latex_transport_error(err)
-      ) {
-        output = streamedOutput;
-      } else {
-        //console.info("LaTeX Editor/actions/run_latex error=", err);
-        this.set_error(err);
-        return;
-      }
-    } finally {
-      // In all cases, we want the status info to clear
-      this.set_status("");
-    }
-    // resetting parsed_output_log is ok, even if we do two passes.
-    // the reason is that in pythontex or sagetex there is a merge *after* this step.
-    // therefore, resetting this here will get rid of then stale errors related to
-    // missing tokens, because pythontex or sagetex just computed them.
-    this.parsed_output_log = output.parse = new LatexParser(output.stdout, {
-      ignoreDuplicates: true,
-    }).parse();
-    this.set_build_logs({ latex: output });
-    // TODO: knitr complicates multi-file a lot, so we do
-    // not support it yet.
-    if (!this.knitr && this.parsed_output_log.deps != null) {
-      this.set_switch_to_files(this.parsed_output_log.deps);
-    }
-    this.check_for_fatal_error();
-    this.update_gutters();
-    this.update_gutters_soon();
-    // Explicit PDF reload after latex compilation
-    if (update_pdf) {
-      this.update_pdf(time, force);
-    }
-  }
-
-  // this *merges* errors from log into an eventually already existing this.parsed_output_log
-  // the whole point is to keep latex errors while we add additional errors from
-  // pythontex, sagetex, etc.
-  private merge_parsed_output_log(log: IProcessedLatexLog) {
-    // easy case, never supposed to happen
-    if (this.parsed_output_log == null) {
-      this.parsed_output_log = log;
-      return;
-    }
-    for (const key of ["errors", "warnings", "typesetting", "all"]) {
-      const existing = this.parsed_output_log[key];
-      log[key].forEach((error) => existing.push(error));
-    }
-    for (const key of ["files", "deps"]) {
-      this.parsed_output_log[key] = union(
-        this.parsed_output_log[key],
-        log[key],
-      );
     }
   }
 
@@ -1334,127 +1140,6 @@ export class Actions extends BaseActions<LatexEditorState> {
     for (const x of VIEWERS) {
       this.set_reload(x, timestamp);
     }
-  }
-
-  async run_bibtex(time: number, force: boolean): Promise<void> {
-    this.set_status("Running BibTeX...");
-    try {
-      const output: BuildLog = await bibtex(
-        this.project_id,
-        this.path,
-        this.make_timestamp(time, force),
-        this.get_output_directory(),
-      );
-      this.set_build_logs({ bibtex: output });
-    } catch (err) {
-      this.set_error(err);
-    }
-    this.set_status("");
-  }
-
-  async run_sagetex(time: number, force: boolean): Promise<void> {
-    if (this.is_stopping) return;
-    const status = (s) => this.set_status(`Running SageTeX... ${s}`);
-    const set_job_info = (job) => this.set_build_logs({ sagetex: job });
-    status("");
-    // First compute hash of sagetex file.
-    let hash: string = "";
-    if (!force) {
-      try {
-        hash = await sagetex_hash(
-          this.project_id,
-          this.path,
-          time,
-          status,
-          this.get_output_directory(),
-        );
-        if (hash === this._last_sagetex_hash) {
-          // no change - nothing to do except updating the pdf preview
-          this.update_pdf(time, force);
-          return;
-        }
-      } catch (err) {
-        this.set_error(err);
-        this.update_pdf(time, force);
-        return;
-      } finally {
-        this.set_status("");
-      }
-    }
-
-    let output: BuildLog | undefined;
-    try {
-      // Next run Sage.
-      output = await sagetex(
-        this.project_id,
-        this.path,
-        hash,
-        status,
-        this.get_output_directory(),
-        set_job_info,
-      );
-      if (!output) throw new Error("Unable to run SageTeX.");
-      if (output.stderr.indexOf("sagetex.VersionError") != -1) {
-        // See https://github.com/sagemathinc/cocalc/issues/4432
-        throw Error(
-          "SageTex in CoCalc currently only works with the default version of Sage.  Delete ~/bin/sage and try again.",
-        );
-      }
-      // Now Run LaTeX, since we had to run sagetex, which changes the sage output.
-      // This +1 forces re-running latex... but still deduplicates it in case of multiple users.
-      await this.run_latex(time + 1, force);
-    } catch (err) {
-      this.set_error(err);
-      this.update_pdf(time, force);
-    } finally {
-      this._last_sagetex_hash = hash;
-      this.set_status("");
-    }
-
-    if (output != null) {
-      // process any errors
-      output.parse = sagetex_errors(path_split(this.path).tail, output).toJS();
-      this.merge_parsed_output_log(output.parse);
-      this.set_build_logs({ sagetex: output });
-      // there is no line information in the sagetex errors (and no concordance info either),
-      // hence we can't update the gutters.
-    }
-  }
-
-  async run_pythontex(time: number, force: boolean): Promise<void> {
-    if (this.is_stopping) return;
-    let output: BuildLog;
-    const status = (s) => this.set_status(`Running PythonTeX... ${s}`);
-    const set_job_info = (job) => this.set_build_logs({ pythontex: job });
-    status("");
-
-    try {
-      // Run PythonTeX
-      output = await pythontex(
-        this.project_id,
-        this.path,
-        time,
-        force,
-        status,
-        this.get_output_directory(),
-        set_job_info,
-      );
-      // Now run latex again, since we had to run pythontex, which changes the inserted snippets.
-      // This +2 forces re-running latex... but still deduplicates it in case of multiple users. (+1 is for sagetex)
-      await this.run_latex(time + 2, force);
-    } catch (err) {
-      this.set_error(err);
-      // this.setState({ pythontex_error: true });
-      this.update_pdf(time, force);
-      return;
-    } finally {
-      this.set_status("");
-    }
-    // this is similar to how knitr errors are processed
-    output.parse = pythontex_errors(path_split(this.path).tail, output).toJS();
-    this.merge_parsed_output_log(output.parse);
-    this.set_build_logs({ pythontex: output });
-    this.update_gutters();
   }
 
   async synctex_pdf_to_tex(
@@ -1747,20 +1432,6 @@ export class Actions extends BaseActions<LatexEditorState> {
     (this as any)._save_local_view_state();
   }
 
-  private set_build_logs(obj: { [K in keyof IBuildSpecs]?: BuildLog }): void {
-    let build_logs: BuildLogs = this.store.get("build_logs") ?? IMap();
-    let k: BuildSpecName;
-    for (k in obj) {
-      const v: BuildLog | undefined = obj[k];
-      if (v) {
-        build_logs = build_logs.set(k, fromJS(v) as any as TypedMap<BuildLog>);
-      } else {
-        build_logs = build_logs.delete(k);
-      }
-    }
-    this.setState({ build_logs });
-  }
-
   async run_clean(): Promise<void> {
     let log: string = "";
     this.setState({ build_logs: IMap() });
@@ -1791,29 +1462,9 @@ export class Actions extends BaseActions<LatexEditorState> {
     this.set_status("");
   }
 
-  // TODO: is this used in any way besides build_action("clean") ?
-  private async build_action(action: string, force?: boolean): Promise<void> {
+  private async build_action(action: string): Promise<void> {
     if (this.is_read_only_preview()) return;
-    if (force === undefined) {
-      force = false;
-    }
-    const now: number = server_time().valueOf();
     switch (action) {
-      case "build":
-        await this.run_build(now, false);
-        return;
-      case "latex":
-        await this.run_latex(now, false);
-        return;
-      case "bibtex":
-        await this.run_bibtex(now, false);
-        return;
-      case "sagetex":
-        await this.run_sagetex(now, false);
-        return;
-      case "pythontex":
-        await this.run_pythontex(now, false);
-        return;
       case "clean":
         await this.run_clean();
         return;
@@ -1933,10 +1584,10 @@ export class Actions extends BaseActions<LatexEditorState> {
     print_html({ src: raw_url(this.project_id, pdf_path(this.path)) });
   }
 
-  set_build_command(command: string | string[]): void {
+  set_build_command(command: string | string[]): Promise<void> {
     if (this.is_read_only_preview()) {
       this.setState({ build_command: fromJS(command) });
-      return;
+      return Promise.resolve();
     }
     if (this._syncdb == null) throw Error("syncdb must be defined");
     // I deleted the insane time:now in this syncdb set, since that
@@ -1944,22 +1595,34 @@ export class Actions extends BaseActions<LatexEditorState> {
     // surprised it wouldn't generate a feedback loop)!
     this._syncdb.set({ key: "build_command", value: command });
     this._syncdb.commit();
-    this.save_build_command_config_to_disk();
+    this.build_command_save_error = undefined;
+    this.build_command_save = (this.build_command_save ?? Promise.resolve())
+      .then(() => this.save_build_command_config_to_disk())
+      .catch((err) => {
+        this.build_command_save_error = err;
+        if (this._state !== "closed") {
+          this.set_error(
+            `Error saving LaTeX build command for '${this.path}' -- ${err}`,
+          );
+        }
+      });
     this.setState({ build_command: fromJS(command) });
+    return this.build_command_save;
   }
 
-  private save_build_command_config_to_disk(): void {
+  private async wait_for_build_command_save(): Promise<void> {
+    await this.build_command_save;
+    if (this.build_command_save_error != null) {
+      throw this.build_command_save_error;
+    }
+  }
+
+  private async save_build_command_config_to_disk(): Promise<void> {
     const syncdb = this._syncdb;
     if (syncdb == null) return;
-    void saveToDiskWithFileServerRetry({
+    await saveToDiskWithFileServerRetry({
       save: () => syncdb.save_to_disk(),
       shouldRetry: () => this._state !== "closed" && !this.isClosed(),
-    }).catch((err) => {
-      if (this._state !== "closed") {
-        this.set_error(
-          `Error saving LaTeX build command for '${this.path}' -- ${err}`,
-        );
-      }
     });
   }
 

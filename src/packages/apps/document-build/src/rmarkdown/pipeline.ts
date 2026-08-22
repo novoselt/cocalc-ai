@@ -14,6 +14,7 @@ import { extractFrontmatter } from "../markdown";
 import {
   createInitialSnapshot,
   executeStage,
+  failSnapshot,
   finishSnapshot,
   remainingTimeoutSeconds,
   terminalStateForStage,
@@ -29,7 +30,22 @@ export async function runRMarkdownPipeline(
   callbacks?: DocumentBuildCallbacks,
 ): Promise<DocumentBuildSnapshot> {
   const snapshot = createInitialSnapshot(identity, request, runtime, callbacks);
-  const source = await runtime.readText(identity.logical_path);
+  let source: string;
+  try {
+    source = await runtime.readText(identity.logical_path);
+  } catch (error) {
+    return failSnapshot(
+      snapshot,
+      runtime,
+      {
+        level: "error",
+        source: "transport",
+        file: identity.logical_path,
+        message: error instanceof Error ? error.message : `${error}`,
+      },
+      callbacks,
+    );
+  }
   const stage = await executeStage(
     snapshot,
     runtime,

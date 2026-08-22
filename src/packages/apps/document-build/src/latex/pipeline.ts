@@ -289,6 +289,7 @@ export async function runLatexPipeline(
         resourceKey: identity.resource_key,
         runDirectory,
         hash,
+        force: request.force ?? false,
         timeoutS: remainingTimeoutSeconds(snapshot, runtime, LATEX_TIMEOUT_S),
       }),
       callbacks,
@@ -311,7 +312,9 @@ export async function runLatexPipeline(
         stage_id: sage.stage_id,
       });
     }
-    if (shouldStop(sage)) return finishSnapshot(snapshot, runtime, callbacks);
+    if (terminalStateForStage(sage) != null) {
+      return finishSnapshot(snapshot, runtime, callbacks);
+    }
     latex = await runLatex(request.force ?? false);
     if (shouldStop(latex)) return finishSnapshot(snapshot, runtime, callbacks);
   }
@@ -340,7 +343,9 @@ export async function runLatexPipeline(
       ),
       python.stage_id,
     );
-    if (shouldStop(python)) return finishSnapshot(snapshot, runtime, callbacks);
+    if (terminalStateForStage(python) != null) {
+      return finishSnapshot(snapshot, runtime, callbacks);
+    }
     latex = await runLatex(request.force ?? false);
     if (shouldStop(latex)) return finishSnapshot(snapshot, runtime, callbacks);
   }

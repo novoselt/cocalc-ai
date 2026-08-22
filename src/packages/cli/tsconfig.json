@@ -5,6 +5,8 @@
     "outDir": "dist",
     "baseUrl": ".",
     "paths": {
+      "@cocalc/app-document-build": ["../apps/document-build/src"],
+      "@cocalc/app-document-build/*": ["../apps/document-build/src/*"],
       "@cocalc/app-notebook": ["../apps/notebook/src"],
       "@cocalc/app-notebook/*": ["../apps/notebook/src/*"],
       "@cocalc/app-tasks": ["../apps/tasks/src"],
@@ -44,6 +46,9 @@
     "**/*.spec.jsx"
   ],
   "references": [
+    {
+      "path": "../apps/document-build"
+    },
     {
       "path": "../apps/notebook"
     },

@@ -37,6 +37,7 @@ export interface DocumentBuildRequest {
   build_id?: string;
   request_id?: string;
   generation?: string;
+  expected_source_hash?: number;
   force?: boolean;
   build_timeout_ms?: number;
   output_directory?: string | null;
