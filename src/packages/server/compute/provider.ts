@@ -39,6 +39,11 @@ import { getComputeVmConfig, type ComputeVmConfig } from "./config";
 import type { ComputeVmRow, ComputeVolumeRow } from "./types";
 import { assertComputeVmSecurity } from "./security";
 import { regionFromComputeZone } from "./placement";
+import {
+  managedComputeVmProviderPrefix,
+  managedComputeVmResourceBelongsToEnvironment,
+  managedComputeVolumeResourceBelongsToEnvironment,
+} from "./resource-names";
 
 const gcpProvider = new GcpProvider();
 const nebiusProvider = new NebiusProvider();
@@ -930,7 +935,10 @@ async function context(
       config,
       creds: {
         service_account_json: config.gcp_service_account_json,
-        prefix: "cocalc-vm",
+        prefix: managedComputeVmProviderPrefix(config.environment).replace(
+          /-$/,
+          "",
+        ),
       },
     };
   }
@@ -1058,6 +1066,28 @@ export async function listProviderComputeInventory(opts: {
     ...opts.volumes.map(({ provider }) => provider),
   ]);
   const config = await getComputeVmConfig();
+  const expectedInstanceNames = new Set(
+    opts.vms.map(
+      (vm) =>
+        `${vm.metadata?.provider_instance_name ?? vm.provider_instance_id}`,
+    ),
+  );
+  const expectedDiskNames = new Set([
+    ...opts.vms.map(({ boot_disk_id }) => boot_disk_id),
+    ...opts.volumes.map(({ provider_disk_id }) => provider_disk_id),
+  ]);
+  const expectedAddressIds = new Set(
+    opts.vms
+      .map(({ public_address_id }) => public_address_id)
+      .filter((id): id is string => !!id),
+  );
+  const includeVmName = (name?: string) =>
+    expectedInstanceNames.has(`${name ?? ""}`) ||
+    managedComputeVmResourceBelongsToEnvironment(name, config.environment);
+  const includeDiskName = (name?: string) =>
+    expectedDiskNames.has(`${name ?? ""}`) ||
+    managedComputeVmResourceBelongsToEnvironment(name, config.environment) ||
+    managedComputeVolumeResourceBelongsToEnvironment(name, config.environment);
   let disks_observed = false;
   let addresses_observed = false;
   if (
@@ -1067,8 +1097,9 @@ export async function listProviderComputeInventory(opts: {
   ) {
     const { creds } = await context("gcp");
     for (const instance of await gcpProvider.listInstances(creds, {
-      namePrefix: "cocalc-vm-",
+      namePrefix: "cocalc-",
     })) {
+      if (!includeVmName(instance.name)) continue;
       instances.push({
         provider: "gcp",
         instance_id: instance.instance_id,
@@ -1085,14 +1116,11 @@ export async function listProviderComputeInventory(opts: {
     })) {
       const zone = `${zonePath ?? ""}`.split("/").pop();
       for (const disk of scoped.disks ?? []) {
-        if (
-          disk.name?.startsWith("cocalc-vm-") ||
-          disk.name?.startsWith("cocalc-vol-")
-        ) {
+        if (includeDiskName(disk.name ?? undefined)) {
           disks.push({
             provider: "gcp",
             id: `${disk.name}`,
-            name: disk.name,
+            name: `${disk.name}`,
             zone,
           });
         }
@@ -1107,7 +1135,13 @@ export async function listProviderComputeInventory(opts: {
     })) {
       const region = `${regionPath ?? ""}`.split("/").pop();
       for (const address of scoped.addresses ?? []) {
-        if (`${address.name ?? ""}`.startsWith("cocalc-vm-")) {
+        if (
+          managedComputeVmResourceBelongsToEnvironment(
+            address.name,
+            config.environment,
+          ) ||
+          expectedAddressIds.has(`${address.name ?? ""}`)
+        ) {
           addresses.push({
             provider: "gcp",
             id: `${address.name}`,
@@ -1132,8 +1166,9 @@ export async function listProviderComputeInventory(opts: {
   for (const region of nebiusRegions) {
     const { creds } = await context("nebius", region);
     for (const instance of await nebiusProvider.listInstances(creds, {
-      namePrefix: "cocalc-vm-",
+      namePrefix: "cocalc-",
     })) {
+      if (!includeVmName(instance.name)) continue;
       instances.push({
         provider: "nebius",
         instance_id: instance.instance_id,
@@ -1145,6 +1180,7 @@ export async function listProviderComputeInventory(opts: {
     for (const disk of await nebiusProvider.listPersistentDisks(creds, {
       namePrefix: "cocalc-",
     })) {
+      if (!includeDiskName(disk.name)) continue;
       disks.push({
         provider: "nebius",
         id: disk.id,
@@ -1153,8 +1189,17 @@ export async function listProviderComputeInventory(opts: {
       });
     }
     for (const address of await nebiusProvider.listPublicAddresses(creds, {
-      namePrefix: "cocalc-vm-",
+      namePrefix: "cocalc-",
     })) {
+      if (
+        !managedComputeVmResourceBelongsToEnvironment(
+          address.name,
+          config.environment,
+        ) &&
+        !expectedAddressIds.has(address.id)
+      ) {
+        continue;
+      }
       addresses.push({
         provider: "nebius",
         id: address.id,
@@ -1256,7 +1301,8 @@ export async function deleteOrphanProviderComputeBootDisk(
   resource: OrphanProviderResource,
 ): Promise<void> {
   const name = `${resource.resource_name ?? ""}`;
-  if (!name.startsWith("cocalc-vm-")) {
+  const config = await getComputeVmConfig();
+  if (!managedComputeVmResourceBelongsToEnvironment(name, config.environment)) {
     throw new Error("refusing to automatically delete a non-boot VM disk");
   }
   if (resource.provider === "nebius") {
@@ -1265,7 +1311,6 @@ export async function deleteOrphanProviderComputeBootDisk(
     return;
   }
   if (!resource.zone) throw new Error("orphan GCP boot disk has no zone");
-  const config = await getComputeVmConfig();
   const { options, project } = gcpClientOptions(config);
   try {
     const [operation] = await new DisksClient(options).delete({

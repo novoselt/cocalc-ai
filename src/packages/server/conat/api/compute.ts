@@ -116,6 +116,10 @@ import {
   refreshComputeVmProjectAccessKey,
   revokeComputeVmProjectAccess,
 } from "@cocalc/server/compute/project-access";
+import {
+  managedComputeVmProviderName,
+  managedComputeVolumeProviderName,
+} from "@cocalc/server/compute/resource-names";
 
 const MIN_VOLUME_GB = 10;
 const HOURS_PER_MONTH = 730;
@@ -994,7 +998,10 @@ export async function createVm(
     configure_project_ssh: opts.configure_project_ssh,
     project_key: projectKey,
   });
-  const providerInstanceId = `cocalc-vm-${id.replaceAll("-", "").slice(0, 24)}`;
+  const providerInstanceId = managedComputeVmProviderName(
+    id,
+    config.environment,
+  );
   const vm = await insertComputeVm(
     {
       id,
@@ -1238,7 +1245,10 @@ export async function createVolume(
       size_gb: sizeGb,
       desired_size_gb: sizeGb,
       effective_size_gb: effectiveSizeGb,
-      provider_disk_id: `cocalc-vol-${id.replaceAll("-", "").slice(0, 24)}`,
+      provider_disk_id: managedComputeVolumeProviderName(
+        id,
+        config.environment,
+      ),
       state: "requested",
       desired_state: "ready",
       attached_vm_id: null,
