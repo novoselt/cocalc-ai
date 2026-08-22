@@ -1920,6 +1920,9 @@ async function provision(
       provider_generation_provisioning: !!vm.ready_at,
     },
   }))!;
+  // This timestamp is the user-visible beginning of provider provisioning,
+  // not the later point when the provider creation call returns.
+  await insertComputeInstance(provisioning);
   let volume: ComputeVolumeRow | undefined;
   if (provisioning.home_volume_id) {
     volume = await getComputeVolumeById(provisioning.home_volume_id);
@@ -1963,6 +1966,11 @@ async function provision(
   const latest = await getComputeVmById(provisioning.id);
   if (!latest) return;
   provisioning = latest;
+  await updateComputeInstance(provisioning, {
+    provider_instance_id:
+      runtime.instance_id ?? provisioning.provider_instance_id,
+    public_ip: runtime.public_ip ?? provisioning.public_ip,
+  });
   const runtimeMetadata = {
     ...(provisioning.metadata ?? {}),
     runtime: computeRuntimeMetadata(provisioning.metadata?.runtime, runtime),

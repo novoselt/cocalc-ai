@@ -92,6 +92,7 @@ import {
   type VolumeCreateCliValues,
 } from "./compute-vms-cli";
 import { egressRateLabel, providerEgressIsFree } from "./compute-vms-egress";
+import { vmStartupExpectation } from "./compute-vms-startup";
 import { readProjectDeployPublicKey } from "./settings/project-to-project-ssh-service";
 import { NebiusCapacityPicker } from "../hosts/components/nebius-capacity-picker";
 import { SelectProject } from "@cocalc/frontend/projects/select-project";
@@ -3436,6 +3437,7 @@ export function ProjectComputeVms({
           state === "recovering" || vm.effective_pricing_model === "on_demand"
             ? vmSpotRecoverySummary(vm)
             : undefined;
+        const startupExpectation = vmStartupExpectation(vm);
         return (
           <Space direction="vertical" size={1} style={{ minWidth: 0 }}>
             <Popover
@@ -3519,6 +3521,18 @@ export function ProjectComputeVms({
               </Text>
             )}
             {recoverySummary && <Text type="secondary">{recoverySummary}</Text>}
+            {startupExpectation && (
+              <Text
+                type={
+                  startupExpectation.takingLongerThanUsual
+                    ? "warning"
+                    : "secondary"
+                }
+                style={{ fontSize: 12 }}
+              >
+                {startupExpectation.text}
+              </Text>
+            )}
             {state === "failed" && vm.error && (
               <Popover
                 trigger="click"

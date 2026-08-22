@@ -27,6 +27,7 @@ import {
   computeVmSshPublicKeys,
   enqueueComputeWork,
   insertComputeVm,
+  listCurrentComputeInstanceTimings,
   listOwnedComputeVms,
   listProjectComputeVms,
   resolveProjectComputeVm,
@@ -34,7 +35,10 @@ import {
   resolveOwnedComputeVm,
   updateComputeVm,
 } from "@cocalc/server/compute/db";
-import type { ComputeVmRow } from "@cocalc/server/compute/types";
+import type {
+  ComputeVmInstanceTimingRow,
+  ComputeVmRow,
+} from "@cocalc/server/compute/types";
 import type { ComputeVolumeRow } from "@cocalc/server/compute/types";
 import type { ComputeVmProjectAccessRow } from "@cocalc/server/compute/types";
 import {
@@ -368,7 +372,10 @@ function publicVmProjectAccess(access: ComputeVmProjectAccessRow) {
   return result;
 }
 
-async function publicVm(vm: ComputeVmRow): Promise<ComputeVm> {
+async function publicVmWithTiming(
+  vm: ComputeVmRow,
+  currentInstanceTiming?: ComputeVmInstanceTimingRow,
+): Promise<ComputeVm> {
   const {
     ssh_public_key: _sshPublicKey,
     dns_record_id: _dnsRecordId,
@@ -401,8 +408,32 @@ async function publicVm(vm: ComputeVmRow): Promise<ComputeVm> {
     provider_observed_at: providerObservation.observed_at ?? null,
     provider_checked_at: providerObservation.checked_at ?? null,
     provider_observation_error: providerObservation.error ?? null,
+    current_instance_timing: currentInstanceTiming
+      ? {
+          generation: currentInstanceTiming.generation,
+          created_at: currentInstanceTiming.created_at,
+          running_at: currentInstanceTiming.running_at ?? null,
+          ready_at: currentInstanceTiming.ready_at ?? null,
+        }
+      : null,
     metadata: publicMetadata,
   };
+}
+
+async function publicVms(vms: ComputeVmRow[]): Promise<ComputeVm[]> {
+  const timings = await listCurrentComputeInstanceTimings(
+    vms.map(({ id }) => id),
+  );
+  const timingsByVmId = new Map(
+    timings.map((timing) => [timing.vm_id, timing]),
+  );
+  return await Promise.all(
+    vms.map((vm) => publicVmWithTiming(vm, timingsByVmId.get(vm.id))),
+  );
+}
+
+async function publicVm(vm: ComputeVmRow): Promise<ComputeVm> {
+  return (await publicVms([vm]))[0]!;
 }
 
 function publicVolume(volume: ComputeVolumeRow): ComputeVolume {
@@ -1579,7 +1610,7 @@ export async function listVms(opts: {
     project_id: opts.project_id,
     include_deleted: opts.include_deleted,
   });
-  return await Promise.all(rows.map(publicVm));
+  return await publicVms(rows);
 }
 
 export async function listVmProjectAccess(opts: {
@@ -1706,13 +1737,11 @@ export async function listProjectVms(opts: {
     action: "read",
     project_id: projectId,
   });
-  return await Promise.all(
-    (
-      await listProjectComputeVms({
-        project_id: projectId,
-        include_deleted: opts.include_deleted,
-      })
-    ).map(publicVm),
+  return await publicVms(
+    await listProjectComputeVms({
+      project_id: projectId,
+      include_deleted: opts.include_deleted,
+    }),
   );
 }
 

@@ -6,7 +6,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import getPool from "@cocalc/database/pool";
 import { COMPUTE_VM_V2_SQL } from "./contract";
-import type { ComputeVmRow, ComputeVolumeRow, ComputeWorkRow } from "./types";
+import type {
+  ComputeVmInstanceTimingRow,
+  ComputeVmRow,
+  ComputeVolumeRow,
+  ComputeWorkRow,
+} from "./types";
 
 const pool = () => getPool();
 const MAX_COMPUTE_VM_SSH_KEYS = 32;
@@ -645,9 +650,25 @@ export async function insertComputeInstance(vm: ComputeVmRow) {
   );
 }
 
+export async function listCurrentComputeInstanceTimings(vmIds: string[]) {
+  if (!vmIds.length) return [];
+  const { rows } = await pool().query<ComputeVmInstanceTimingRow>(
+    `SELECT instance.vm_id, instance.generation, instance.created_at,
+            instance.running_at, instance.ready_at
+       FROM compute_vm_instances instance
+       JOIN compute_vms vm
+         ON vm.id=instance.vm_id
+        AND vm.instance_generation=instance.generation
+      WHERE vm.id=ANY($1::uuid[])`,
+    [vmIds],
+  );
+  return rows;
+}
+
 export async function updateComputeInstance(
   vm: ComputeVmRow,
   updates: {
+    provider_instance_id?: string;
     public_ip?: string | null;
     running?: boolean;
     ready?: boolean;
@@ -663,6 +684,9 @@ export async function updateComputeInstance(
     values.push(value);
     sets.push(`${sql}=$${values.length}`);
   };
+  if (updates.provider_instance_id !== undefined) {
+    addValue("provider_instance_id", updates.provider_instance_id);
+  }
   if (updates.public_ip !== undefined) {
     addValue("public_ip", updates.public_ip);
   }

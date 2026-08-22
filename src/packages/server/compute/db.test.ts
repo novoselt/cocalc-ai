@@ -21,6 +21,7 @@ import {
   listComputeVmsForBillingEnforcement,
   listComputeVmsForEgressMetering,
   listComputeVmsForInventory,
+  listCurrentComputeInstanceTimings,
   listOwnedComputeVms,
   listProjectComputeVms,
   removeComputeVmSshPublicKey,
@@ -28,6 +29,7 @@ import {
   updateComputeVmEgressMetadata,
   updateComputeVmProviderObservation,
   updateComputeInstance,
+  updateComputeVm,
 } from "./db";
 import type { ComputeVmRow } from "./types";
 import type { ComputeVolumeRow } from "./types";
@@ -190,6 +192,28 @@ describe("compute VM durable state", () => {
         terminal_reason: "provider_spot_interruption",
       },
     ]);
+  });
+
+  it("returns lifecycle timing only for the current instance generation", async () => {
+    const first = await insertComputeVm(vmInput());
+    await insertComputeInstance(first);
+    await updateComputeInstance(first, { running: true, ready: true });
+
+    const second = (await updateComputeVm(first.id, {
+      instance_generation: first.instance_generation + 1,
+      state: "provisioning",
+    }))!;
+    await insertComputeInstance(second);
+
+    const timings = await listCurrentComputeInstanceTimings([first.id]);
+    expect(timings).toHaveLength(1);
+    expect(timings[0]).toMatchObject({
+      vm_id: first.id,
+      generation: second.instance_generation,
+      running_at: null,
+      ready_at: null,
+    });
+    expect(timings[0]?.created_at).toBeInstanceOf(Date);
   });
 
   it("resolves only active project access grants", async () => {

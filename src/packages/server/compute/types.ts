@@ -94,6 +94,14 @@ export interface ComputeVmRow {
   metadata: Record<string, any>;
 }
 
+export interface ComputeVmInstanceTimingRow {
+  vm_id: string;
+  generation: number;
+  created_at: Date;
+  running_at?: Date | null;
+  ready_at?: Date | null;
+}
+
 export type ComputeVmProjectAccessState =
   | "pending"
   | "ready"

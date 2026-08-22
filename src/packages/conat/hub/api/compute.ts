@@ -123,6 +123,7 @@ export interface ComputeVm {
   provider_checked_at?: string | Date | null;
   provider_observation_error?: string | null;
   instance_generation: number;
+  current_instance_timing?: ComputeVmInstanceTiming | null;
   provider_instance_id: string;
   public_address_id?: string | null;
   public_address_state: string;
@@ -153,6 +154,13 @@ export interface ComputeVm {
   spot_recovery_state: Record<string, any>;
   error?: string | null;
   metadata: Record<string, any>;
+}
+
+export interface ComputeVmInstanceTiming {
+  generation: number;
+  created_at: string | Date;
+  running_at?: string | Date | null;
+  ready_at?: string | Date | null;
 }
 
 export interface CreateComputeVmRequest {
