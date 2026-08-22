@@ -19,6 +19,7 @@ import {
   providerStartDisposition,
   RetryableComputeWorkError,
   shouldRecoverSpotCapacityFailure,
+  shouldReplaceNebiusSpotInterruption,
   stoppedVmProviderInstanceNeedsReconciliation,
   runtimeIdentityChanged,
   runningVmWorkAlreadySatisfied,
@@ -156,6 +157,41 @@ describe("managed VM provider observations", () => {
     expect(stoppedVmProviderInstanceNeedsReconciliation("TERMINATED")).toBe(
       false,
     );
+  });
+});
+
+describe("Nebius Spot interruption recovery", () => {
+  const interrupted = {
+    provider: "nebius",
+    desired_pricing_model: "spot",
+    effective_pricing_model: "spot",
+    state: "recovering",
+    spot_recovery_state: {
+      phase: "retrying_spot",
+      last_preempted_at: "2026-08-22T00:00:00.000Z",
+    },
+  } as any;
+
+  it("replaces an interrupted instance to obtain a fresh placement", () => {
+    expect(shouldReplaceNebiusSpotInterruption(interrupted)).toBe(true);
+  });
+
+  it("does not replace unrelated recovery or GCP instances", () => {
+    expect(
+      shouldReplaceNebiusSpotInterruption({
+        ...interrupted,
+        spot_recovery_state: { phase: "retrying_spot" },
+      }),
+    ).toBe(false);
+    expect(
+      shouldReplaceNebiusSpotInterruption({ ...interrupted, provider: "gcp" }),
+    ).toBe(false);
+    expect(
+      shouldReplaceNebiusSpotInterruption({
+        ...interrupted,
+        effective_pricing_model: "on_demand",
+      }),
+    ).toBe(false);
   });
 });
 

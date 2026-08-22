@@ -1240,6 +1240,26 @@ export function shouldRecoverSpotCapacityFailure(
   );
 }
 
+export function shouldReplaceNebiusSpotInterruption(
+  vm: Pick<
+    ComputeVmRow,
+    | "provider"
+    | "desired_pricing_model"
+    | "effective_pricing_model"
+    | "state"
+    | "spot_recovery_state"
+  >,
+): boolean {
+  return (
+    vm.provider === "nebius" &&
+    vm.desired_pricing_model === "spot" &&
+    vm.effective_pricing_model === "spot" &&
+    vm.state === "recovering" &&
+    vm.spot_recovery_state?.phase === "retrying_spot" &&
+    !!vm.spot_recovery_state?.last_preempted_at
+  );
+}
+
 export function providerRuntimePublicAddressStatus(opts: {
   provider: ComputeVmRow["provider"];
   expected: string | null | undefined;
@@ -2520,7 +2540,9 @@ async function reconcile(vm: ComputeVmRow) {
       state: "recovering",
       public_ip: null,
       error:
-        "Provider stopped this Spot VM; restarting automatically. This is usually a Spot preemption, not a capacity error.",
+        vm.provider === "nebius"
+          ? "Provider stopped this Spot VM; recreating the instance on a fresh placement while preserving its disks and address. This is usually a Spot preemption, not a capacity error."
+          : "Provider stopped this Spot VM; restarting automatically. This is usually a Spot preemption, not a capacity error.",
       spot_recovery_state: {
         ...recorded.state,
         phase: "retrying_spot",
@@ -2551,8 +2573,23 @@ async function reconcile(vm: ComputeVmRow) {
     }
     vm = interrupted;
   }
-  // Starting the same instance preserves the named root disk and is
-  // idempotent.
+  if (shouldReplaceNebiusSpotInterruption(vm)) {
+    // A stopped Nebius preemptible instance can be evicted again immediately
+    // when restarted on the same placement. Recreate only the instance so the
+    // persistent disks and static address survive while Nebius chooses a fresh
+    // placement, matching a new Console VM creation.
+    await observeVmPhase(vm, "provider_replace_preempted_spot", async () =>
+      replaceProviderComputeInstance(vm),
+    );
+    await updateComputeInstance(vm, {
+      deleted: true,
+      preempted: true,
+      terminal_reason: "provider_spot_interruption",
+    });
+    return await provision(vm);
+  }
+  // GCP can restart the same terminated Spot instance while preserving its
+  // named root disk.
   await updateComputeVm(vm.id, {
     state: vm.desired_pricing_model === "spot" ? "recovering" : "starting",
     public_ip: null,
