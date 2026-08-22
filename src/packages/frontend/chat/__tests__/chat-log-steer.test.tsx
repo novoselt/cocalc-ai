@@ -638,7 +638,7 @@ describe("ChatLog immediate steer rendering", () => {
     ]);
   });
 
-  it("attaches steer messages back to the original prompt once the Codex turn is done", () => {
+  it("keeps completed steer messages on the assistant turn", () => {
     render(
       <ChatLog
         project_id="project-1"
@@ -708,11 +708,26 @@ describe("ChatLog immediate steer rendering", () => {
       />,
     );
 
-    expect(screen.queryByText("Guidance sent")).toBeNull();
     expect(lastRenderedMessageProps("steer-1")).toBeUndefined();
     expect(lastRenderedMessageProps("steer-2")).toBeUndefined();
     const userProps = lastRenderedMessageProps("user-1");
-    expect(userProps?.attachedSteers).toEqual([
+    expect(userProps?.attachedSteers).toBeUndefined();
+    const assistantProps = lastRenderedMessageProps("assistant-1");
+    expect(assistantProps?.activitySteers).toEqual([
+      expect.objectContaining({
+        messageId: "steer-1",
+        date: 3000,
+        text: "actually say hello",
+        state: "sent",
+      }),
+      expect.objectContaining({
+        messageId: "steer-2",
+        date: 4000,
+        text: "also add punctuation",
+        state: "sent",
+      }),
+    ]);
+    expect(assistantProps?.attachedSteers).toEqual([
       expect.objectContaining({
         messageId: "steer-1",
         date: 3000,
@@ -801,9 +816,10 @@ describe("ChatLog immediate steer rendering", () => {
     );
 
     const userProps = lastRenderedMessageProps("user-1");
-    expect(userProps?.attachedSteers).toEqual([]);
+    expect(userProps?.attachedSteers).toBeUndefined();
     const assistantProps = lastRenderedMessageProps("assistant-1");
     expect(assistantProps?.expandedCodexActivity).toBe(true);
+    expect(assistantProps?.attachedSteers).toEqual([]);
     expect(assistantProps?.activitySteers).toEqual([
       expect.objectContaining({
         messageId: "steer-1",

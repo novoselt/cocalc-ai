@@ -276,14 +276,16 @@ function collectSteers({
       continue;
     }
     if (!byMessageId.has(anchoredParentId)) continue;
-    if (assistantMessageId) {
-      const next = byAssistantMessageId.get(assistantMessageId) ?? [];
-      next.push(steer);
-      byAssistantMessageId.set(assistantMessageId, next);
-    }
-    const next = attachedByParentMessageId.get(anchoredParentId) ?? [];
+    if (!assistantMessageId) continue;
+    const activitySteers = byAssistantMessageId.get(assistantMessageId) ?? [];
+    activitySteers.push(steer);
+    byAssistantMessageId.set(assistantMessageId, activitySteers);
+    // Once a turn completes, keep its compact guidance status on the assistant
+    // message. Attaching it to the original user prompt implies the user was
+    // guided and makes the submitted message appear to vanish from agent work.
+    const next = attachedByParentMessageId.get(assistantMessageId) ?? [];
     next.push(steer);
-    attachedByParentMessageId.set(anchoredParentId, next);
+    attachedByParentMessageId.set(assistantMessageId, next);
     representedMessageIds.add(messageId);
   }
   for (const list of attachedByParentMessageId.values()) {

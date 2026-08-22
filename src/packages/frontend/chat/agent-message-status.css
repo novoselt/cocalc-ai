@@ -1,0 +1,24 @@
+/*
+ *  This file is part of CoCalc: Copyright © 2026 Sagemath, Inc.
+ *  License: MS-RSL - see LICENSE.md for details
+ */
+
+.cocalc-steer-guidance-list,
+.cocalc-steer-guidance-card,
+.cocalc-steer-guidance-content {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.cocalc-steer-guidance-list,
+.cocalc-steer-guidance-card {
+  overflow: hidden;
+}
+
+.cocalc-steer-guidance-content img {
+  display: block;
+  height: auto !important;
+  max-width: 100% !important;
+  object-fit: contain;
+}
