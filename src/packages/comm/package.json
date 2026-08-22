@@ -26,7 +26,6 @@
   "license": "SEE LICENSE.md",
   "dependencies": {
     "@cocalc/comm": "workspace:*",
-    "@cocalc/sync": "workspace:*",
     "@cocalc/util": "workspace:*"
   },
   "homepage": "https://github.com/sagemathinc/cocalc/tree/master/src/packages/comm",

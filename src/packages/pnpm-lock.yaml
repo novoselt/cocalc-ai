@@ -427,9 +427,6 @@ importers:
       '@cocalc/comm':
         specifier: workspace:*
         version: 'link:'
-      '@cocalc/sync':
-        specifier: workspace:*
-        version: link:../sync
       '@cocalc/util':
         specifier: workspace:*
         version: link:../util
@@ -5133,9 +5130,6 @@ packages:
     peerDependenciesMeta:
       '@types/react':
         optional: true
-
-  '@rinsuki/lz4-ts@1.0.1':
-    resolution: {integrity: sha512-vkQP6c9GGEvsND/tY6eyb5g6bq+zzbI8VcAPozr6siisIZKb4tq1Jr6Z2+5GqkEjxHGLCfncrBWR1h86t8CEIg==}
 
   '@rjsf/utils@5.24.13':
     resolution: {integrity: sha512-rNF8tDxIwTtXzz5O/U23QU73nlhgQNYJ+Sv5BAwQOIyhIE2Z3S5tUiSVMwZHt0julkv/Ryfwi+qsD4FiE5rOuw==}
@@ -12272,9 +12266,6 @@ packages:
     resolution: {integrity: sha512-vWOrt19lvcXTxu5tiHXfEGQuldSlU+qZn2TT+4EbRQzaciWGwNZ99QQTolQOmcwVgZLodv+1QfC6UZs2PX/6pQ==}
     engines: {node: '>= 12'}
 
-  zlibjs@0.3.1:
-    resolution: {integrity: sha512-+J9RrgTKOmlxFSDHo0pI1xM6BLVUv+o0ZT9ANtCxGkjIVCCUdx9alUF8Gm+dGLKbkkkidWIHFDZHDMpfITt4+w==}
-
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
@@ -15827,8 +15818,6 @@ snapshots:
       react-native: 0.86.2(@babel/core@7.29.7)(@react-native/metro-config@0.86.2(@babel/core@7.29.7)(bufferutil@4.0.9)(utf-8-validate@6.0.5))(@types/react@19.2.7)(bufferutil@4.0.9)(react@19.2.3)
     optionalDependencies:
       '@types/react': 19.2.7
-
-  '@rinsuki/lz4-ts@1.0.1': {}
 
   '@rjsf/utils@5.24.13(react@19.2.3)':
     dependencies:
@@ -24194,7 +24183,5 @@ snapshots:
     dependencies:
       cmake-ts: 1.0.2
       node-addon-api: 8.5.0
-
-  zlibjs@0.3.1: {}
 
   zod@4.3.6: {}
