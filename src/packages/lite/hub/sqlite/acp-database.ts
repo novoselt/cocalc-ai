@@ -1,6 +1,7 @@
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { performance } from "node:perf_hooks";
 import { data } from "@cocalc/backend/data";
 import getLogger from "@cocalc/backend/logger";
 
@@ -24,6 +25,10 @@ export interface AcpDatabaseOptions {
 const logger = getLogger("lite:hub:sqlite:acp-database");
 const LEGACY_ATTACH_ALIAS = "legacy_acp";
 const MIGRATION_META_TABLE = "acp_migration_meta";
+const ACP_SQLITE_SLOW_MS = Math.max(
+  0,
+  Number(process.env.COCALC_ACP_SQLITE_SLOW_MS ?? 250) || 250,
+);
 
 let db: SqliteDatabase | undefined;
 let dbFilename: string | undefined;
@@ -124,6 +129,45 @@ function logLockedOperation({
   });
 }
 
+function logSlowOperation({
+  filename,
+  op,
+  sql,
+  elapsedMs,
+}: {
+  filename: string;
+  op: "exec" | "run" | "all" | "get";
+  sql: string;
+  elapsedMs: number;
+}): void {
+  logger.warn("ACP sqlite operation was slow", {
+    filename,
+    op,
+    sql: summarizeSql(sql),
+    elapsed_ms: Math.round(elapsedMs),
+    slow_ms: ACP_SQLITE_SLOW_MS,
+    pid: process.pid,
+    worker_id: `${process.env.COCALC_ACP_INSTANCE_ID ?? ""}`.trim() || null,
+  });
+}
+
+function logSlowOperationIfNeeded({
+  filename,
+  op,
+  sql,
+  startedAt,
+}: {
+  filename: string;
+  op: "exec" | "run" | "all" | "get";
+  sql: string;
+  startedAt: number;
+}): void {
+  const elapsedMs = performance.now() - startedAt;
+  if (elapsedMs >= ACP_SQLITE_SLOW_MS) {
+    logSlowOperation({ filename, op, sql, elapsedMs });
+  }
+}
+
 function wrapStatement(
   raw: Statement,
   filename: string,
@@ -132,7 +176,7 @@ function wrapStatement(
   const wrap =
     (method: keyof Statement) =>
     (...args: any[]): any => {
-      const started = Date.now();
+      const started = performance.now();
       try {
         return (raw[method] as any)(...args);
       } catch (err) {
@@ -141,11 +185,18 @@ function wrapStatement(
             filename,
             op: method as "run" | "all" | "get",
             sql,
-            elapsedMs: Date.now() - started,
+            elapsedMs: performance.now() - started,
             err,
           });
         }
         throw err;
+      } finally {
+        logSlowOperationIfNeeded({
+          filename,
+          op: method as "run" | "all" | "get",
+          sql,
+          startedAt: started,
+        });
       }
     };
   return {
@@ -158,7 +209,7 @@ function wrapStatement(
 function wrapDatabase(raw: DatabaseSync, filename: string): SqliteDatabase {
   return {
     exec(sql: string): void {
-      const started = Date.now();
+      const started = performance.now();
       try {
         raw.exec(sql);
       } catch (err) {
@@ -167,11 +218,18 @@ function wrapDatabase(raw: DatabaseSync, filename: string): SqliteDatabase {
             filename,
             op: "exec",
             sql,
-            elapsedMs: Date.now() - started,
+            elapsedMs: performance.now() - started,
             err,
           });
         }
         throw err;
+      } finally {
+        logSlowOperationIfNeeded({
+          filename,
+          op: "exec",
+          sql,
+          startedAt: started,
+        });
       }
     },
     prepare(sql: string): Statement {
