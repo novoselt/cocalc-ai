@@ -3,8 +3,10 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
+import { spawnSync } from "node:child_process";
 import {
   BLIT_APPLICATIONS,
+  INSTALL_CHROMIUM_APPLICATION_COMMAND,
   INSTALL_BLIT_APPLICATION_COMMAND,
   LAUNCH_BLIT_APPLICATION_COMMAND,
   parseBlitApplicationAvailability,
@@ -19,12 +21,44 @@ describe("Blit application catalog", () => {
       expect(app.id).toMatch(/^[a-z0-9-]+$/);
       expect(app.command.every((argument) => argument.length > 0)).toBe(true);
       if ("install" in app) {
-        expect(app.install.packages.length).toBeGreaterThan(0);
-        for (const packageName of app.install.packages) {
-          expect(packageName).toMatch(/^[a-z0-9][a-z0-9+.-]*$/);
+        if (app.install.kind === "apt") {
+          expect(app.install.packages.length).toBeGreaterThan(0);
+          for (const packageName of app.install.packages) {
+            expect(packageName).toMatch(/^[a-z0-9][a-z0-9+.-]*$/);
+          }
+        } else {
+          expect(app.install.command).toContain("set -euo pipefail");
+          expect(app.install.summary).not.toHaveLength(0);
         }
       }
     }
+  });
+
+  it("installs Chromium from the pinned XtraDeb Ubuntu repository", () => {
+    const chromium = BLIT_APPLICATIONS.find(({ id }) => id === "chromium");
+    expect(chromium).toMatchObject({
+      command: ["chromium"],
+      executable: "chromium",
+      install: { kind: "script" },
+    });
+    expect(INSTALL_CHROMIUM_APPLICATION_COMMAND).toContain(
+      "5301FA4FD93244FBC6F6149982BB6851C64F6880",
+    );
+    expect(INSTALL_CHROMIUM_APPLICATION_COMMAND).toContain(
+      "https://ppa.launchpadcontent.net/xtradeb/apps/ubuntu/",
+    );
+    expect(INSTALL_CHROMIUM_APPLICATION_COMMAND).toContain(
+      "chromium chromium-driver chromium-sandbox",
+    );
+    expect(INSTALL_CHROMIUM_APPLICATION_COMMAND).toContain(
+      "Suites: $" + "{VERSION_CODENAME:-}",
+    );
+    const syntax = spawnSync("bash", ["-n"], {
+      encoding: "utf8",
+      input: INSTALL_CHROMIUM_APPLICATION_COMMAND,
+    });
+    expect(syntax.stderr).toBe("");
+    expect(syntax.status).toBe(0);
   });
 
   it("passes launch and install values as positional shell arguments", () => {

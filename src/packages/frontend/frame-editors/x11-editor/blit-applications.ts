@@ -5,6 +5,17 @@
 
 import type { IconName } from "@cocalc/frontend/components";
 
+export type BlitApplicationInstall =
+  | {
+      kind: "apt";
+      packages: readonly string[];
+    }
+  | {
+      kind: "script";
+      command: string;
+      summary: string;
+    };
+
 export interface BlitApplication {
   id: string;
   label: string;
@@ -12,11 +23,66 @@ export interface BlitApplication {
   icon: IconName;
   executable?: string;
   command: readonly string[];
-  install?: {
-    kind: "apt";
-    packages: readonly string[];
-  };
+  install?: BlitApplicationInstall;
 }
+
+const UBUNTU_ID = "$" + "{ID:-}";
+const UBUNTU_VERSION_CODENAME = "$" + "{VERSION_CODENAME:-}";
+
+export const INSTALL_CHROMIUM_APPLICATION_COMMAND = String.raw`set -euo pipefail
+key=5301FA4FD93244FBC6F6149982BB6851C64F6880
+
+. /etc/os-release
+if [ "${UBUNTU_ID}" != ubuntu ] || [ -z "${UBUNTU_VERSION_CODENAME}" ]; then
+  echo "The automatic Chromium installer currently supports Ubuntu projects only." >&2
+  exit 1
+fi
+
+sudo -n true
+sudo -n apt-get update
+sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  ca-certificates dirmngr gnupg
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -m 700 "$tmp/gnupg"
+gpg --batch --homedir "$tmp/gnupg" \
+  --keyserver hkps://keyserver.ubuntu.com --recv-keys "$key"
+gpg --batch --homedir "$tmp/gnupg" --export "$key" |
+  sudo -n tee /usr/share/keyrings/xtradeb-apps.gpg >/dev/null
+sudo -n chmod 0644 /usr/share/keyrings/xtradeb-apps.gpg
+
+sudo -n tee /etc/apt/sources.list.d/xtradeb-apps.sources >/dev/null <<EOF
+Types: deb
+URIs: https://ppa.launchpadcontent.net/xtradeb/apps/ubuntu/
+Suites: ${UBUNTU_VERSION_CODENAME}
+Components: main
+Signed-By: /usr/share/keyrings/xtradeb-apps.gpg
+EOF
+
+sudo -n tee /etc/apt/preferences.d/chromium-real-deb >/dev/null <<'EOF'
+Package: chromium-browser
+Pin: version 2:1snap*
+Pin-Priority: -1
+
+Package: chromium chromium-common chromium-driver chromium-headless-shell chromium-l10n chromium-sandbox chromium-shell
+Pin: release o=LP-PPA-xtradeb-apps
+Pin-Priority: 700
+EOF
+
+sudo -n apt-get update
+sudo -n apt-get purge -y chromium-browser || true
+sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  chromium chromium-driver chromium-sandbox
+
+sudo -n tee /usr/local/bin/chromium-browser >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exec /usr/bin/chromium "$@"
+EOF
+sudo -n chmod 0755 /usr/local/bin/chromium-browser
+sudo -n apt-get clean
+sudo -n rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb`;
 
 export const BLIT_APPLICATIONS = [
   {
@@ -25,6 +91,20 @@ export const BLIT_APPLICATIONS = [
     description: "Open another Blit terminal.",
     icon: "terminal",
     command: [],
+  },
+  {
+    id: "chromium",
+    label: "Chromium",
+    description: "The open-source Chromium web browser.",
+    icon: "compass",
+    executable: "chromium",
+    command: ["chromium"],
+    install: {
+      kind: "script",
+      command: INSTALL_CHROMIUM_APPLICATION_COMMAND,
+      summary:
+        "This adds the signed XtraDeb Ubuntu repository and installs its real Chromium Debian package, ChromiumDriver, and Chromium sandbox.",
+    },
   },
   {
     id: "xclock",

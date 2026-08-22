@@ -13,6 +13,7 @@ import {
   INSTALL_BLIT_APPLICATION_COMMAND,
   LAUNCH_BLIT_APPLICATION_COMMAND,
   type BlitApplication,
+  type BlitApplicationInstall,
   parseBlitApplicationAvailability,
 } from "./blit-applications";
 
@@ -22,6 +23,18 @@ interface Props {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : `${err}`;
+}
+
+function installExecArgs(install: BlitApplicationInstall): string[] {
+  if (install.kind === "script") {
+    return ["-c", install.command, "cocalc-blit-install"];
+  }
+  return [
+    "-c",
+    INSTALL_BLIT_APPLICATION_COMMAND,
+    "cocalc-blit-install",
+    ...install.packages,
+  ];
 }
 
 export function BlitLauncher({ project_id }: Props) {
@@ -109,12 +122,7 @@ export function BlitLauncher({ project_id }: Props) {
       const result = await exec({
         project_id,
         command: "bash",
-        args: [
-          "-c",
-          INSTALL_BLIT_APPLICATION_COMMAND,
-          "cocalc-blit-install",
-          ...app.install.packages,
-        ],
+        args: installExecArgs(app.install),
         timeout: 30 * 60,
         err_on_exit: true,
       });
@@ -206,14 +214,18 @@ export function BlitLauncher({ project_id }: Props) {
             <Typography.Paragraph style={{ marginBottom: 0 }}>
               {installApp.description}
             </Typography.Paragraph>
-            <Typography.Text>
-              This installs the Ubuntu package
-              {installApp.install?.packages.length === 1 ? "" : "s"}{" "}
-              <Typography.Text code>
-                {installApp.install?.packages.join(" ")}
-              </Typography.Text>{" "}
-              in this project, then launches the application.
-            </Typography.Text>
+            {installApp.install?.kind === "apt" ? (
+              <Typography.Text>
+                This installs the Ubuntu package
+                {installApp.install.packages.length === 1 ? "" : "s"}{" "}
+                <Typography.Text code>
+                  {installApp.install.packages.join(" ")}
+                </Typography.Text>{" "}
+                in this project, then launches the application.
+              </Typography.Text>
+            ) : (
+              <Typography.Text>{installApp.install?.summary}</Typography.Text>
+            )}
             {installError && (
               <Alert
                 description={installError}

@@ -6,6 +6,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   CHECK_BLIT_APPLICATION_COMMAND,
+  INSTALL_CHROMIUM_APPLICATION_COMMAND,
   INSTALL_BLIT_APPLICATION_COMMAND,
   LAUNCH_BLIT_APPLICATION_COMMAND,
 } from "./blit-applications";
@@ -136,6 +137,38 @@ describe("Blit application launcher", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
     expect(screen.getByRole("status")).toHaveTextContent("Inkscape launched.");
+  });
+
+  it("runs Chromium's repository installer after confirmation", async () => {
+    execMock
+      .mockResolvedValueOnce({
+        ...success,
+        stdout: "cocalc-blit-app:missing\n",
+      })
+      .mockResolvedValueOnce(success)
+      .mockResolvedValueOnce(success);
+    render(<BlitLauncher project_id="project-id" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Chromium" }));
+
+    expect(
+      await screen.findByRole("dialog", { name: "Install Chromium?" }),
+    ).toHaveTextContent("signed XtraDeb Ubuntu repository");
+    fireEvent.click(screen.getByRole("button", { name: "Install Chromium" }));
+
+    await waitFor(() => expect(execMock).toHaveBeenCalledTimes(3));
+    expect(execMock.mock.calls[1][0]).toMatchObject({
+      args: ["-c", INSTALL_CHROMIUM_APPLICATION_COMMAND, "cocalc-blit-install"],
+    });
+    expect(execMock.mock.calls[2][0]).toMatchObject({
+      args: [
+        "-c",
+        LAUNCH_BLIT_APPLICATION_COMMAND,
+        "cocalc-blit-launch",
+        "chromium",
+        "chromium",
+      ],
+    });
   });
 
   it("keeps an installation failure visible in the confirmation dialog", async () => {
