@@ -187,6 +187,19 @@ type SteerCollections = {
   representedMessageIds: Set<string>;
 };
 
+function steerRenderKey({
+  attachedByParentMessageId,
+  byAssistantMessageId,
+}: SteerCollections): string {
+  const serialize = (
+    entries: Map<string, AttachedSteerMessage[]>,
+  ): [string, AttachedSteerMessage[]][] => [...entries.entries()];
+  return JSON.stringify([
+    serialize(attachedByParentMessageId),
+    serialize(byAssistantMessageId),
+  ]);
+}
+
 function collectSteers({
   messages,
   visibleKeys,
@@ -424,6 +437,10 @@ export function ChatLog({
     () => collectSteers({ messages, visibleKeys, acpState }),
     [messages, visibleKeys, acpState],
   );
+  const guidanceRenderKey = useMemo(
+    () => steerRenderKey(steerCollections),
+    [steerCollections],
+  );
   const anyOverlayOpen = useAnyChatOverlayOpen();
   const activeTopTab = useTypedRedux("page", "active_top_tab");
   const activeProjectTab = useTypedRedux({ project_id }, "active_project_tab");
@@ -619,6 +636,7 @@ export function ChatLog({
             steerCollections.attachedByParentMessageId,
           activitySteersByAssistantMessageId:
             steerCollections.byAssistantMessageId,
+          guidanceRenderKey,
           searchQuery,
           searchJumpDate,
           searchJumpToken,
@@ -767,6 +785,7 @@ export function MessageList({
   acpState,
   attachedSteersByParentMessageId,
   activitySteersByAssistantMessageId,
+  guidanceRenderKey = "",
   searchQuery,
   searchJumpDate,
   searchJumpToken,
@@ -807,6 +826,7 @@ export function MessageList({
   acpState?;
   attachedSteersByParentMessageId?: Map<string, AttachedSteerMessage[]>;
   activitySteersByAssistantMessageId?: Map<string, AttachedSteerMessage[]>;
+  guidanceRenderKey?: string;
   searchQuery?: string;
   searchJumpDate?: string;
   searchJumpToken?: number;
@@ -1395,7 +1415,8 @@ export function MessageList({
   // react-virtuoso republishes changed function props synchronously from a
   // layout effect. Chat messages can rerender several times per second while
   // streaming, so keep the functions stable and forward them to current state
-  // through this ref instead of restarting Virtuoso's measurement graph.
+  // through this ref instead of restarting Virtuoso's measurement graph. The
+  // item renderer is invalidated narrowly when inline guidance changes below.
   const virtuosoCallbackStateRef = useRef({
     keepBottomAnchoredRef,
     manualScrollRef,
@@ -1432,14 +1453,20 @@ export function MessageList({
     }
     return height;
   }, []);
-  const renderVirtuosoItem = useCallback((index: number) => {
-    const { renderMessage, sortedDatesLength } =
-      virtuosoCallbackStateRef.current;
-    if (sortedDatesLength === index) {
-      return <div style={{ height: "25px" }} />;
-    }
-    return renderMessage(index);
-  }, []);
+  const renderVirtuosoItem = useCallback(
+    (index: number) => {
+      // Guidance is rendered inside an existing assistant row, so its state can
+      // change without changing Virtuoso's item count or row data.
+      void guidanceRenderKey;
+      const { renderMessage, sortedDatesLength } =
+        virtuosoCallbackStateRef.current;
+      if (sortedDatesLength === index) {
+        return <div style={{ height: "25px" }} />;
+      }
+      return renderMessage(index);
+    },
+    [guidanceRenderKey],
+  );
   const handleVirtuosoRangeChanged = useCallback(
     ({ endIndex }: { endIndex: number }) => {
       const {
