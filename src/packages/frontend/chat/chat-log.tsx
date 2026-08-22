@@ -10,14 +10,17 @@ Render all the messages in the chat.
 // cSpell:ignore: timespan
 
 import {
+  createContext,
   KeyboardEvent,
   MutableRefObject,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type ComponentProps,
   type ReactNode,
 } from "react";
 import { Button } from "antd";
@@ -187,6 +190,28 @@ type SteerCollections = {
   byAssistantMessageId: Map<string, AttachedSteerMessage[]>;
   representedMessageIds: Set<string>;
 };
+
+const ActivitySteersContext = createContext<
+  Map<string, AttachedSteerMessage[]> | undefined
+>(undefined);
+
+function ReactiveActivitySteersMessage({
+  steerMessageId,
+  activitySteers,
+  ...props
+}: ComponentProps<typeof Message> & { steerMessageId: string }) {
+  const currentActivitySteers = useContext(ActivitySteersContext);
+  return (
+    <Message
+      {...props}
+      activitySteers={
+        currentActivitySteers == null
+          ? activitySteers
+          : currentActivitySteers.get(steerMessageId)
+      }
+    />
+  );
+}
 
 function collectSteers({
   messages,
@@ -594,50 +619,54 @@ export function ChatLog({
 
   return (
     <div style={CHAT_LOG_CONTAINER_STYLE}>
-      <MessageList
-        {...{
-          virtuosoRef,
-          sortedDates,
-          messages,
-          account_id,
-          user_map,
-          project_id,
-          path,
-          fontSize,
-          actions,
-          manualScrollRef,
-          manualScroll,
-          setManualScroll,
-          mode,
-          selectedDate,
-          numChildren,
-          singleThreadView,
-          scrollCacheId,
-          isVisible,
-          scrollToDate,
-          scrollToBottomRef,
-          scrollToIndex,
-          keepBottomAnchoredRef,
-          acpState,
-          attachedSteersByParentMessageId:
-            steerCollections.attachedByParentMessageId,
-          activitySteersByAssistantMessageId:
-            steerCollections.byAssistantMessageId,
-          searchQuery,
-          searchJumpDate,
-          searchJumpToken,
-          onAtTopStateChange,
-          activityJumpDate,
-          activityJumpToken,
-          notifyOnTurnFinish,
-          onNotifyOnTurnFinishChange,
-          selectedThread,
-          anyOverlayOpen,
-          onOpenGitBrowser,
-          suppressInlineCodexStatusDate,
-          readOnly,
-        }}
-      />
+      <ActivitySteersContext.Provider
+        value={steerCollections.byAssistantMessageId}
+      >
+        <MessageList
+          {...{
+            virtuosoRef,
+            sortedDates,
+            messages,
+            account_id,
+            user_map,
+            project_id,
+            path,
+            fontSize,
+            actions,
+            manualScrollRef,
+            manualScroll,
+            setManualScroll,
+            mode,
+            selectedDate,
+            numChildren,
+            singleThreadView,
+            scrollCacheId,
+            isVisible,
+            scrollToDate,
+            scrollToBottomRef,
+            scrollToIndex,
+            keepBottomAnchoredRef,
+            acpState,
+            attachedSteersByParentMessageId:
+              steerCollections.attachedByParentMessageId,
+            activitySteersByAssistantMessageId:
+              steerCollections.byAssistantMessageId,
+            searchQuery,
+            searchJumpDate,
+            searchJumpToken,
+            onAtTopStateChange,
+            activityJumpDate,
+            activityJumpToken,
+            notifyOnTurnFinish,
+            onNotifyOnTurnFinishChange,
+            selectedThread,
+            anyOverlayOpen,
+            onOpenGitBrowser,
+            suppressInlineCodexStatusDate,
+            readOnly,
+          }}
+        />
+      </ActivitySteersContext.Provider>
       {!readOnly ? (
         <Composing
           actions={actions}
@@ -1280,7 +1309,8 @@ export function MessageList({
     return (
       <div style={wrapperStyle}>
         <DivTempHeight height={h ? `${h}px` : undefined}>
-          <Message
+          <ReactiveActivitySteersMessage
+            steerMessageId={messageId}
             messages={messages}
             key={date}
             index={index}
@@ -1408,8 +1438,16 @@ export function MessageList({
     scheduleAnchorCapture,
     setManualScroll,
     sortedDatesLength: sortedDates.length,
-    virtualRows: [] as ChatVirtualRow[],
   });
+  virtuosoCallbackStateRef.current = {
+    keepBottomAnchoredRef,
+    manualScrollRef,
+    markManualScrollAway,
+    onAtTopStateChange,
+    scheduleAnchorCapture,
+    setManualScroll,
+    sortedDatesLength: sortedDates.length,
+  };
 
   const handleVirtuosoScrollerRef = useCallback(
     (node: HTMLElement | Window | null) => {
@@ -1467,25 +1505,12 @@ export function MessageList({
       };
     },
   );
-  virtuosoCallbackStateRef.current = {
-    keepBottomAnchoredRef,
-    manualScrollRef,
-    markManualScrollAway,
-    onAtTopStateChange,
-    scheduleAnchorCapture,
-    setManualScroll,
-    sortedDatesLength: sortedDates.length,
-    virtualRows: virtuosoData,
-  };
-  type ChatVirtuosoContext = typeof virtuosoCallbackStateRef.current;
   const renderVirtuosoItem = useCallback(
-    (index: number, row: ChatVirtualRow, context?: ChatVirtuosoContext) =>
-      (context?.virtualRows[index] ?? row).render(),
+    (_index: number, row: ChatVirtualRow) => row.render(),
     [],
   );
   const computeVirtuosoItemKey = useCallback(
-    (index: number, row: ChatVirtualRow, context?: ChatVirtuosoContext) =>
-      (context?.virtualRows[index] ?? row).key,
+    (_index: number, row: ChatVirtualRow) => row.key,
     [],
   );
   const handleVirtuosoRangeChanged = useCallback(

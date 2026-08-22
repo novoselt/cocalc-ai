@@ -5,6 +5,7 @@ import { ChatLog } from "../chat-log";
 
 let renderedMessages: any[] = [];
 let latestVirtuosoProps: any;
+let freezeVirtuosoRows = false;
 
 jest.mock("@cocalc/frontend/app-framework", () => ({
   useTypedRedux: (arg1: any, arg2?: string) => {
@@ -32,12 +33,13 @@ jest.mock("@cocalc/frontend/components/stateful-virtuoso", () => {
   const React = require("react");
   return React.forwardRef((props: any, ref: any) => {
     latestVirtuosoProps = props;
+    const frozenRowsRef = React.useRef<any>();
     React.useImperativeHandle(ref, () => ({
       scrollToIndex: jest.fn(),
       scrollIntoView: jest.fn(),
       getState: jest.fn(),
     }));
-    return (
+    const rows = (
       <div data-testid="virtuoso">
         {Array.from({ length: props.totalCount ?? 0 }, (_, index) => (
           <div key={index}>
@@ -46,6 +48,10 @@ jest.mock("@cocalc/frontend/components/stateful-virtuoso", () => {
         ))}
       </div>
     );
+    if (!freezeVirtuosoRows || frozenRowsRef.current == null) {
+      frozenRowsRef.current = rows;
+    }
+    return frozenRowsRef.current;
   });
 });
 
@@ -75,6 +81,7 @@ describe("ChatLog immediate steer rendering", () => {
   beforeEach(() => {
     renderedMessages = [];
     latestVirtuosoProps = undefined;
+    freezeVirtuosoRows = false;
   });
 
   function lastRenderedMessageProps(messageId: string) {
@@ -239,6 +246,7 @@ describe("ChatLog immediate steer rendering", () => {
   });
 
   it("invalidates a mounted virtual row when guidance state changes", () => {
+    freezeVirtuosoRows = true;
     const messages = new Map([
       [
         "1000",
@@ -304,7 +312,6 @@ describe("ChatLog immediate steer rendering", () => {
     const whileSendingKey = latestVirtuosoProps.computeItemKey(
       1,
       whileSendingData[1],
-      latestVirtuosoProps.context,
     );
 
     expect(latestVirtuosoProps.totalCount).toBe(itemCount);
@@ -333,17 +340,9 @@ describe("ChatLog immediate steer rendering", () => {
     expect(latestVirtuosoProps.itemContent).toBe(stableItemRenderer);
     expect(latestVirtuosoProps.data).not.toBe(whileSendingData);
     expect(latestVirtuosoProps.data[0]).not.toBe(whileSendingData[0]);
-    const sentKey = latestVirtuosoProps.computeItemKey(
-      1,
-      whileSendingData[1],
-      latestVirtuosoProps.context,
-    );
-    expect(sentKey).not.toBe(whileSendingKey);
-    latestVirtuosoProps.itemContent(
-      1,
-      whileSendingData[1],
-      latestVirtuosoProps.context,
-    );
+    expect(
+      latestVirtuosoProps.computeItemKey(1, latestVirtuosoProps.data[1]),
+    ).not.toBe(whileSendingKey);
     expect(lastRenderedMessageProps("assistant-1")?.activitySteers).toEqual([
       expect.objectContaining({ messageId: "steer-1", state: "sent" }),
     ]);
