@@ -4,6 +4,7 @@ import { render, screen } from "@testing-library/react";
 import { ChatLog } from "../chat-log";
 
 let renderedMessages: any[] = [];
+let latestVirtuosoProps: any;
 
 jest.mock("@cocalc/frontend/app-framework", () => ({
   useTypedRedux: (arg1: any, arg2?: string) => {
@@ -30,6 +31,7 @@ jest.mock("@cocalc/frontend/app-framework", () => ({
 jest.mock("@cocalc/frontend/components/stateful-virtuoso", () => {
   const React = require("react");
   return React.forwardRef((props: any, ref: any) => {
+    latestVirtuosoProps = props;
     React.useImperativeHandle(ref, () => ({
       scrollToIndex: jest.fn(),
       scrollIntoView: jest.fn(),
@@ -70,6 +72,7 @@ jest.mock("../composing", () => ({
 describe("ChatLog immediate steer rendering", () => {
   beforeEach(() => {
     renderedMessages = [];
+    latestVirtuosoProps = undefined;
   });
 
   function lastRenderedMessageProps(messageId: string) {
@@ -230,6 +233,91 @@ describe("ChatLog immediate steer rendering", () => {
         text: "actually say hello",
         state: "sending",
       }),
+    ]);
+  });
+
+  it("invalidates a mounted virtual row when guidance state changes", () => {
+    const messages = new Map([
+      [
+        "1000",
+        {
+          date: 1000,
+          message_id: "user-1",
+          thread_id: "thread-1",
+          sender_id: "acct-1",
+          history: [{ content: "say hi" }],
+        },
+      ],
+      [
+        "2000",
+        {
+          date: 2000,
+          message_id: "assistant-1",
+          thread_id: "thread-1",
+          parent_message_id: "user-1",
+          sender_id: "acct-codex",
+          acp_account_id: "acct-codex",
+          generating: true,
+          history: [{ content: "hello" }],
+        },
+      ],
+    ]) as any;
+    const props = {
+      project_id: "project-1",
+      path: "thread.chat",
+      mode: "standalone" as const,
+      actions: { clearScrollRequest: jest.fn() } as any,
+      selectedThread: "thread-1",
+    };
+    const { rerender } = render(
+      <ChatLog {...props} acpState={new Map() as any} messages={messages} />,
+    );
+    const beforeGuidance = latestVirtuosoProps.itemContent;
+    const itemCount = latestVirtuosoProps.totalCount;
+
+    const sendingMessages = new Map(messages);
+    sendingMessages.set("3000", {
+      date: 3000,
+      message_id: "steer-1",
+      thread_id: "thread-1",
+      sender_id: "acct-1",
+      acp_send_mode: "immediate",
+      acp_state: "sending",
+      parent_message_id: "assistant-1",
+      history: [{ content: "actually say hello" }],
+    });
+    rerender(
+      <ChatLog
+        {...props}
+        acpState={new Map([["message:steer-1", "sending"]]) as any}
+        messages={sendingMessages}
+      />,
+    );
+    const whileSending = latestVirtuosoProps.itemContent;
+
+    expect(latestVirtuosoProps.totalCount).toBe(itemCount);
+    expect(whileSending).not.toBe(beforeGuidance);
+    expect(lastRenderedMessageProps("assistant-1")?.activitySteers).toEqual([
+      expect.objectContaining({ messageId: "steer-1", state: "sending" }),
+    ]);
+
+    const sentMessages = new Map(sendingMessages);
+    sentMessages.set("3000", {
+      ...sentMessages.get("3000"),
+      acp_state: "sent",
+    });
+    rerender(
+      <ChatLog
+        {...props}
+        acpState={new Map([["message:steer-1", "sent"]]) as any}
+        messages={sentMessages}
+      />,
+    );
+
+    expect(latestVirtuosoProps.totalCount).toBe(itemCount);
+    expect(latestVirtuosoProps.itemContent).not.toBe(whileSending);
+    expect(lastRenderedMessageProps("assistant-1")?.activitySteers).toEqual([
+      expect.objectContaining({ messageId: "steer-1", state: "sent" }),
     ]);
   });
 
