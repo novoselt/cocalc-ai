@@ -428,6 +428,15 @@ describe("compute VM work failure state", () => {
         desired_state: "running",
       } as any),
     ).toBe(false);
+    expect(
+      runningVmWorkAlreadySatisfied(
+        {
+          state: "ready",
+          desired_state: "running",
+        } as any,
+        { providerConfirmedMissing: true },
+      ),
+    ).toBe(false);
   });
 
   it("cancels readiness polling when newer intent stops or deletes the VM", () => {

@@ -1281,8 +1281,13 @@ export function providerStartDisposition(
 
 export function runningVmWorkAlreadySatisfied(
   vm: Pick<ComputeVmRow, "state" | "desired_state">,
+  opts?: { providerConfirmedMissing?: boolean },
 ): boolean {
-  return vm.state === "ready" && vm.desired_state === "running";
+  return (
+    !opts?.providerConfirmedMissing &&
+    vm.state === "ready" &&
+    vm.desired_state === "running"
+  );
 }
 
 export function vmReadinessIntentIsRunning(
@@ -1883,13 +1888,16 @@ async function markReady(vm: ComputeVmRow, runtime: ObservedRuntime) {
   await reconcileVmBilling(next!, "running");
 }
 
-async function provision(vm: ComputeVmRow) {
+async function provision(
+  vm: ComputeVmRow,
+  opts?: { providerConfirmedMissing?: boolean },
+) {
   if (vm.desired_state === "deleted") return await remove(vm);
   if (vm.desired_state === "stopped") {
     await updateComputeVm(vm.id, { state: "stopped", error: null });
     return;
   }
-  if (runningVmWorkAlreadySatisfied(vm)) return;
+  if (runningVmWorkAlreadySatisfied(vm, opts)) return;
   const beginningNewGeneration =
     !!vm.ready_at && vm.metadata?.provider_generation_provisioning !== true;
   let provisioning = (await updateComputeVm(vm.id, {
@@ -2516,7 +2524,7 @@ async function reconcile(vm: ComputeVmRow) {
     return;
   }
   if (observed.status === "missing") {
-    return await provision(vm);
+    return await provision(vm, { providerConfirmedMissing: true });
   }
   if (observed.status === "starting" || observed.status === "stopping") {
     // Nebius reports CREATING, UPDATING, STARTING, STOPPING, and DELETING as
