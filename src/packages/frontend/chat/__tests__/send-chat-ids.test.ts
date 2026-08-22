@@ -42,6 +42,7 @@ function makeActions(messages: Map<string, any> = new Map()): any {
         : undefined,
   };
   actions.messageCache = {
+    upsertLocalMessage: jest.fn(),
     getMessages: () => messages,
     getThreadIndex: () => new Map(),
     getByMessageId: (messageId: string) => {
@@ -180,6 +181,63 @@ describe("sendChat identity fields", () => {
     expect(actions.store.setState).toHaveBeenCalledWith({
       acpState: expect.anything(),
     });
+  });
+
+  it("publishes immediate guidance as sending before ACP dispatch", () => {
+    const actions = makeActions(
+      new Map([
+        [
+          "1000",
+          {
+            event: "chat",
+            date: 1000,
+            sender_id: "acct-codex",
+            message_id: "assistant-1",
+            thread_id: "thread-1",
+            acp_account_id: "acct-codex",
+            generating: true,
+            history: [{ content: "working" }],
+          },
+        ],
+      ]),
+    );
+    const identity = {
+      date: "2026-02-21T18:04:00.000Z",
+      message_id: "guidance-1",
+      thread_id: "thread-1",
+    };
+
+    actions.sendChat({
+      input: "use the indexed implementation",
+      reply_thread_id: "thread-1",
+      parent_message_id: "assistant-1",
+      send_mode: "immediate",
+      chatIdentity: identity,
+    });
+
+    const guidance = actions.syncdb.set.mock.calls
+      .map((call) => call[0])
+      .find((row: any) => row?.message_id === identity.message_id);
+    expect(guidance).toEqual(
+      expect.objectContaining({
+        acp_send_mode: "immediate",
+        acp_state: "sending",
+        parent_message_id: "assistant-1",
+      }),
+    );
+    expect(actions.messageCache.upsertLocalMessage).toHaveBeenCalledWith(
+      guidance,
+    );
+    const stateUpdate = actions.store.setState.mock.calls.find(
+      ([state]: any[]) => state?.acpState != null,
+    )?.[0];
+    expect(stateUpdate.acpState.get("message:guidance-1")).toBe("sending");
+    expect(actions.processAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: guidance,
+        acpSendMode: "immediate",
+      }),
+    );
   });
 
   it("bumps send timestamp when the proposed millisecond already exists", async () => {

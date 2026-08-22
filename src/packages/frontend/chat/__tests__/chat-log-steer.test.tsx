@@ -174,7 +174,7 @@ describe("ChatLog immediate steer rendering", () => {
         mode="standalone"
         actions={{ clearScrollRequest: jest.fn() } as any}
         selectedThread="thread-1"
-        acpState={new Map([["message:steer-1", "sending"]]) as any}
+        acpState={new Map() as any}
         messages={
           new Map([
             [
@@ -208,6 +208,7 @@ describe("ChatLog immediate steer rendering", () => {
                 thread_id: "thread-1",
                 sender_id: "acct-1",
                 acp_send_mode: "immediate",
+                acp_state: "sending",
                 parent_message_id: "assistant-1",
                 history: [{ content: "actually say hello" }],
               },
