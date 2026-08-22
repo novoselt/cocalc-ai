@@ -40,7 +40,9 @@ jest.mock("@cocalc/frontend/components/stateful-virtuoso", () => {
     return (
       <div data-testid="virtuoso">
         {Array.from({ length: props.totalCount ?? 0 }, (_, index) => (
-          <div key={index}>{props.itemContent?.(index)}</div>
+          <div key={index}>
+            {props.itemContent?.(index, props.data?.[index], props.context)}
+          </div>
         ))}
       </div>
     );
@@ -272,7 +274,7 @@ describe("ChatLog immediate steer rendering", () => {
     const { rerender } = render(
       <ChatLog {...props} acpState={new Map() as any} messages={messages} />,
     );
-    const beforeGuidance = latestVirtuosoProps.itemContent;
+    const stableItemRenderer = latestVirtuosoProps.itemContent;
     const beforeGuidanceData = latestVirtuosoProps.data;
     const itemCount = latestVirtuosoProps.totalCount;
 
@@ -294,12 +296,12 @@ describe("ChatLog immediate steer rendering", () => {
         messages={sendingMessages}
       />,
     );
-    const whileSending = latestVirtuosoProps.itemContent;
+    const whileSendingData = latestVirtuosoProps.data;
 
     expect(latestVirtuosoProps.totalCount).toBe(itemCount);
     expect(latestVirtuosoProps.data).not.toBe(beforeGuidanceData);
     expect(latestVirtuosoProps.data[0]).not.toBe(beforeGuidanceData[0]);
-    expect(whileSending).not.toBe(beforeGuidance);
+    expect(latestVirtuosoProps.itemContent).toBe(stableItemRenderer);
     expect(lastRenderedMessageProps("assistant-1")?.activitySteers).toEqual([
       expect.objectContaining({ messageId: "steer-1", state: "sending" }),
     ]);
@@ -318,7 +320,9 @@ describe("ChatLog immediate steer rendering", () => {
     );
 
     expect(latestVirtuosoProps.totalCount).toBe(itemCount);
-    expect(latestVirtuosoProps.itemContent).not.toBe(whileSending);
+    expect(latestVirtuosoProps.itemContent).toBe(stableItemRenderer);
+    expect(latestVirtuosoProps.data).not.toBe(whileSendingData);
+    expect(latestVirtuosoProps.data[0]).not.toBe(whileSendingData[0]);
     expect(lastRenderedMessageProps("assistant-1")?.activitySteers).toEqual([
       expect.objectContaining({ messageId: "steer-1", state: "sent" }),
     ]);
