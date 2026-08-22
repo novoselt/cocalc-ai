@@ -5,9 +5,27 @@
 
 import type { DocsEntry } from "../types";
 import { docsIcon, projectActionParameters } from "../helpers";
-import { SSH_ACCESS_BODY, USE_TERMINAL_BODY } from "../content";
+import {
+  GRAPHICAL_APPLICATIONS_BODY,
+  SSH_ACCESS_BODY,
+  USE_TERMINAL_BODY,
+} from "../content";
 
 export const TERMINAL_ENTRIES: DocsEntry[] = [
+  {
+    audiences: ["researchers", "students", "teams"],
+    body: GRAPHICAL_APPLICATIONS_BODY.trim(),
+    category: "Terminal",
+    id: "terminal.graphical-applications",
+    lastReviewed: "2026-08-22",
+    searchKeywords:
+      "X11 X Window Wayland Xwayland Blit GUI desktop DISPLAY graphical applications Chromium GIMP Inkscape modal dialog popup",
+    slug: "terminal/graphical-applications",
+    status: "ready",
+    summary:
+      "Launch Wayland and X11 applications, switch their windows, and connect terminals or notebooks to the graphical session.",
+    title: "Run graphical Linux applications",
+  },
   {
     audiences: ["researchers", "students", "teams"],
     body: SSH_ACCESS_BODY.trim(),

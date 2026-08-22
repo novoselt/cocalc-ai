@@ -19,7 +19,6 @@ import { access, readFile, statfs } from "node:fs/promises";
 
 import { pidToPath as terminalPidToPath } from "@cocalc/project/conat/terminal";
 import { getLogger } from "@cocalc/project/logger";
-import { get_path_for_pid as x11_pid2path } from "@cocalc/project/x11/server";
 import type {
   CGroup,
   CoCalcInfo,
@@ -183,10 +182,6 @@ export class ProjectInfoServer extends EventEmitter {
     const termpath = terminalPidToPath(pid);
     if (termpath != null) {
       return { type: "terminal", path: termpath };
-    }
-    const x11_path = x11_pid2path(pid);
-    if (x11_path != null) {
-      return { type: "x11", path: x11_path };
     }
     // SSHD: strangely, just one long string in cmdline[0]
     if (

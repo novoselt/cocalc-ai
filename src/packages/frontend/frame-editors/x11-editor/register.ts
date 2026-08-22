@@ -13,5 +13,5 @@ register_file_editor({
   icon: "window-restore",
   ext: "x11",
   editor: async () => await import("./editor"),
-  actions: async () => await import("./actions"),
+  actions: async () => await import("./blit-actions"),
 });

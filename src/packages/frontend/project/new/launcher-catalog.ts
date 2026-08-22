@@ -27,6 +27,7 @@ export const QUICK_CREATE_CATALOG: QuickCreateSpec[] = [
     icon: NEW_FILETYPE_ICONS.ipynb,
   },
   { id: "term", ext: "term", label: "Terminal", icon: NEW_FILETYPE_ICONS.term },
+  { id: "x11", ext: "x11", label: "X11", icon: NEW_FILETYPE_ICONS.x11 },
   {
     id: "course",
     ext: "course",
@@ -87,6 +88,8 @@ export function isQuickCreateAvailable(
       return availableFeatures.qmd !== false;
     case "rmd":
       return availableFeatures.rmd !== false;
+    case "x11":
+      return availableFeatures.x11 !== false;
     default:
       return true;
   }

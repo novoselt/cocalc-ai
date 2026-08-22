@@ -354,15 +354,6 @@ export const ProjectInfo: React.FC<Props> = React.memo(
             />
           );
 
-        case "x11":
-          return (
-            <CoCalcFile
-              icon={"window-restore"}
-              path={cocalc.path}
-              project_actions={project_actions}
-            />
-          );
-
         default:
           unreachable(cocalc);
       }

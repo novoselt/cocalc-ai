@@ -34,6 +34,7 @@ import { toUrlPath } from "@cocalc/frontend/project/redux/path-routing";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { getProjectUrlPath } from "@cocalc/frontend/project-routing";
 import { COLORS } from "@cocalc/util/theme";
+import { createLazyClient } from "./lazy-filesystem-client";
 
 interface Props {
   is_active: boolean;
@@ -169,14 +170,16 @@ export const ProjectPage: React.FC<Props> = ({ is_active, project_id }) => {
   const viewer = reducedProject?.viewer === true;
   const filesystem = useMemo(() => {
     if (reducedProject == null) return;
-    const client = webapp_client.conat_client.projectFs({
-      caller: "ReducedProjectPage",
-      project_id,
-      viewer: viewer || undefined,
-    });
+    const getClient = createLazyClient(() =>
+      webapp_client.conat_client.projectFs({
+        caller: "ReducedProjectPage",
+        project_id,
+        viewer: viewer || undefined,
+      }),
+    );
     return {
-      getListing: async (path: string) => (await client).getListing(path),
-      listing: async (path: string) => (await client).listing(path),
+      getListing: async (path: string) => (await getClient()).getListing(path),
+      listing: async (path: string) => (await getClient()).listing(path),
     };
   }, [filesystemRevision, project_id, reducedProject == null, viewer]);
   const refreshFilesystem = useCallback(() => {

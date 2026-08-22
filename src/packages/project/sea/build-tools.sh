@@ -18,8 +18,10 @@ WORK_DIR="$OUT_DIR/tools"
 OS="linux"
 ARCHES=("amd64" "arm64")
 CLI_PKG_DIR="$ROOT/packages/cli"
+BACKEND_PKG_DIR="$ROOT/packages/backend"
 CLI_BUNDLE_JS="$CLI_PKG_DIR/build/bundle/index.js"
 CLI_BUNDLE_LICENSES="$CLI_PKG_DIR/build/bundle/licenses.txt"
+X11_LAUNCHER="$(dirname "$0")/cocalc-x11"
 
 source "$(dirname "$0")/tools-cache.sh"
 CACHE_ROOT="$(cocalc_tools_cache_root)"
@@ -38,6 +40,9 @@ if [ ! -f "$CLI_BUNDLE_JS" ]; then
   echo "Missing cocalc-cli bundle entrypoint: $CLI_BUNDLE_JS" >&2
   exit 1
 fi
+
+echo "- Building tool installer"
+pnpm --dir "$BACKEND_PKG_DIR" exec tsc --build
 
 install_cocalc_cli_runtime() {
   local work_dir="$1"
@@ -59,6 +64,8 @@ EOF
     cp "$CLI_BUNDLE_LICENSES" \
       "$work_dir/share/licenses/cocalc-cli/licenses.txt"
   fi
+
+  install -m 0755 "$X11_LAUNCHER" "$work_dir/bin/cocalc-x11"
 }
 
 for ARCH in "${ARCHES[@]}"; do
@@ -70,10 +77,13 @@ for ARCH in "${ARCHES[@]}"; do
   if cocalc_tools_restore_cache "$CACHE_DIR" "$WORK_DIR"; then
     echo "  - Restored downloaded tools from cache: $CACHE_DIR"
   else
-    COCALC_BIN_PATH="$WORK_DIR/bin" \
-    COCALC_TOOL_PLATFORM="$OS" \
-    COCALC_TOOL_ARCH="$ARCH" \
-      node -e 'require("@cocalc/backend/sandbox/install").install()'
+    (
+      cd "$BACKEND_PKG_DIR"
+      COCALC_BIN_PATH="$WORK_DIR/bin" \
+      COCALC_TOOL_PLATFORM="$OS" \
+      COCALC_TOOL_ARCH="$ARCH" \
+        node -e 'require("./dist/sandbox/install").install()'
+    )
     cocalc_tools_save_cache "$CACHE_DIR" "$WORK_DIR"
     echo "  - Saved downloaded tools cache: $CACHE_DIR"
   fi

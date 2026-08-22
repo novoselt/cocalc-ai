@@ -22,12 +22,7 @@ export interface MainConfiguration {
 
 export type Capabilities = { [key: string]: boolean };
 
-export interface X11Configuration {
-  timestamp: Date;
-  capabilities: Capabilities;
-}
-
-export type Configuration = MainConfiguration | X11Configuration;
+export type Configuration = MainConfiguration;
 
 export interface MainCapabilities {
   jupyter: boolean | Capabilities;

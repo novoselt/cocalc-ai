@@ -112,11 +112,6 @@ function cocalcInfoFromRoot(root: OwnedRootProcess): CoCalcInfo | undefined {
         return { type: "jupyter", path: root.path };
       }
       return;
-    case "x11":
-      if (root.path != null) {
-        return { type: "x11", path: root.path };
-      }
-      return;
     default:
       return;
   }

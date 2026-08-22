@@ -48,27 +48,17 @@ export async function init(opts?) {
   });
   logger.debug(`initAPI -- project subject '${subject}'`);
   const sub = await client.subscribe(subject);
-  logger.debug(
-    `browser primus subject: ${getSubject({ ...id, service: "primus" })}`,
-  );
-  const primus = client.socket.listen(getSubject({ ...id, service: "primus" }));
-  primus.on("connection", (spark) => {
-    logger.debug("got a spark");
-    spark.on("data", (data) => {
-      spark.write(`${data}`.repeat(3));
-    });
-  });
   for await (const mesg of sub) {
     const data = mesg.data ?? ({} as any);
-    handleRequest({ data, mesg, primus });
+    handleRequest({ data, mesg });
   }
 }
 
-async function handleRequest({ data, mesg, primus }) {
+async function handleRequest({ data, mesg }) {
   let resp;
   logger.debug("received cmd:", data?.cmd);
   try {
-    resp = await handleApiCall({ data, primus });
+    resp = await handleApiCall({ data });
   } catch (err) {
     resp = { error: `${err}` };
   }

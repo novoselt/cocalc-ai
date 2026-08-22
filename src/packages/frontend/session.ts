@@ -52,6 +52,19 @@ interface State {
   [k: string]: string[];
 }
 
+export function getOpenFilesForSessionClose(
+  redux: AppRedux,
+  project_id: string,
+): string[] | undefined {
+  // Reduced project tabs intentionally have no full project Redux store.
+  // Closing one must not initialize the lazy project runtime just to persist
+  // an open-file list that cannot exist.
+  if (!redux.hasProjectStore(project_id)) {
+    return;
+  }
+  return redux.getProjectStore(project_id).get("open_files_order")?.toJS?.();
+}
+
 class SessionManager {
   private name: string;
   private redux: AppRedux;
@@ -157,10 +170,7 @@ class SessionManager {
     if (!this._initialized) {
       return;
     }
-    const open_files = this.redux
-      .getProjectStore(project_id)
-      .get("open_files_order")
-      .toJS();
+    const open_files = getOpenFilesForSessionClose(this.redux, project_id);
 
     if (open_files == null) {
       return;

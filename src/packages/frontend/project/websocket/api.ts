@@ -23,11 +23,7 @@ import type {
 import { syntax2tool } from "@cocalc/util/code-formatter";
 import { DirectoryListingEntry } from "@cocalc/util/types";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
-import type {
-  Channel,
-  Mesg,
-  NbconvertParams,
-} from "@cocalc/comm/websocket/types";
+import type { Mesg, NbconvertParams } from "@cocalc/comm/websocket/types";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { type ProjectApi } from "@cocalc/conat/project/api";
 import type {
@@ -68,13 +64,6 @@ export class API {
     });
     log("_call worked and returned", resp);
     return resp;
-  };
-
-  private getChannel = (channel: string): Channel => {
-    return webapp_client.conat_client.primus({
-      project_id: this.project_id,
-      channel,
-    }) as unknown as Channel;
   };
 
   call = async (mesg: Mesg, timeout: number) => {
@@ -226,19 +215,5 @@ export class API {
       timeout: 60 + 2 * max_total_time_ms,
     });
     return await api.jupyter.runNotebook(opts);
-  };
-
-  // Get the x11 *channel* for the given '.x11' path.
-  x11_channel = async (path: string, display: number): Promise<Channel> => {
-    const channel_name = await this._call(
-      {
-        cmd: "x11_channel",
-        path,
-        display,
-      },
-      60000,
-    );
-    log("x11_channel");
-    return this.getChannel(channel_name);
   };
 }

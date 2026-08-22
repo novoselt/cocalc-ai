@@ -101,6 +101,134 @@ new terminal for independent diagnosis, and inspect project memory if commands
 are being killed.
 `;
 
+export const GRAPHICAL_APPLICATIONS_BODY = String.raw`
+## Run Linux graphical applications in CoCalc
+
+Open or create a file ending in \`.x11\` to start the graphical applications
+workspace. CoCalc uses [Blit](https://blit.sh/) to provide a terminal and a
+headless Wayland compositor inside the project. Applications that use Wayland
+connect directly; X11 applications connect through Xwayland.
+
+The application and its files still run in your project. Blit sends the
+application windows to your browser and sends keyboard, pointer, and clipboard
+input back to the project.
+
+## One shared session per project
+
+All \`.x11\` files in a project connect to the same graphical session. The file
+name is an access point, not the name of an independent desktop. Opening
+\`a.x11\` and \`experiment.x11\` therefore shows the same terminals, application
+windows, and previews.
+
+Multiple collaborators and multiple browsers can open \`.x11\` files at the same
+time. They all see and can control the shared session, including the same
+terminal input, pointer, clipboard, and application windows. Coordinate with
+collaborators before typing into or closing a window that somebody else may be
+using.
+
+This project-wide model keeps graphical applications easy to find and avoids
+running several hidden compositors and display servers in one project.
+
+## Start an application
+
+Use either of these methods:
+
+- Click an application button in the toolbar. If the application is missing,
+  CoCalc offers to install it in the project before launching it.
+- Type a graphical command, such as \`xclock\`, \`gimp\`, or \`inkscape\`, in
+  the terminal shown in the middle of the workspace.
+
+The embedded terminal already has the Wayland and X11 environment variables
+for this graphical session. You do not need to set \`DISPLAY\` there.
+
+Chromium needs additional flags in a project container. The Chromium launcher
+adds them automatically. To start it from the embedded terminal, run:
+
+~~~sh
+chromium --ozone-platform=wayland --no-sandbox --disable-gpu
+~~~
+
+The \`--no-sandbox\` flag is necessary because project containers prohibit the
+nested namespaces used by Chromium's Linux sandbox. This removes Chromium's
+renderer-level security boundary: a compromised web page could access files
+and processes available to your project user. Only open sites you trust. The
+project container remains isolated from other projects and the project host.
+
+## Select an application window
+
+Each application window first appears as a small surface preview in the column
+on the right. Click its preview to show that window at full size in the middle
+of the workspace. Click another preview to switch windows.
+
+Closing a preview closes that application window. An application can have
+several previews when it opens several windows.
+
+## Shut down the graphical session
+
+Choose **Shut down** at the right side of the launcher toolbar when you are
+finished. Confirming stops the Blit server and closes every graphical terminal
+and application window in the shared project session.
+
+Shutdown affects every open \`.x11\` file and every connected browser, not only
+the current view. The stopped view offers a button to start a fresh session.
+
+## Find popup and dialog windows
+
+Popup windows and modal dialogs also appear as new previews in the right-hand
+column. They do not automatically replace the main window in the middle.
+
+If the main application suddenly stops responding, look for a new preview on
+the right. The application may be waiting for you to answer a file chooser,
+warning, confirmation, or other modal dialog. Click that preview, respond to
+the dialog, and then select the main application again.
+
+## Launch X11 applications from another terminal or notebook
+
+The embedded graphical terminal receives \`DISPLAY\` automatically. A regular
+CoCalc terminal or a Jupyter kernel does not, because it was started outside
+the graphical session.
+
+Blit normally claims display \`:20\`. In the embedded graphical terminal, run
+this to confirm the actual value:
+
+~~~sh
+echo "$DISPLAY"
+~~~
+
+Blit tries the next available display if \`:20\` is already occupied. Use the
+value printed above in a regular terminal. For the normal \`:20\` case:
+
+~~~sh
+export DISPLAY=:20
+xclock
+~~~
+
+In a Jupyter notebook:
+
+~~~python
+import os
+import subprocess
+
+os.environ["DISPLAY"] = ":20"  # Replace this if the graphical terminal differs.
+subprocess.Popen(["xclock"])
+~~~
+
+Keep the \`.x11\` workspace running while using that display. Do not set
+\`DISPLAY=:20\` globally for every project process: without a running graphical
+session it points applications at a display that does not exist, and a session
+may occasionally use a different display number.
+
+## Current limitations
+
+- Graphical application support is currently available on Linux project
+  environments.
+- Application compatibility varies. Blit describes its graphical compositor
+  as experimental even though many common Wayland and X11 applications work.
+- New windows do not automatically take over the main view. Always check the
+  preview column when an application appears frozen or asks you to open, save,
+  confirm, or configure something.
+`;
+
 export const SSH_ACCESS_BODY = String.raw`
 ## SSH access on cocalc.ai
 

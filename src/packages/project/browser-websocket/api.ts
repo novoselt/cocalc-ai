@@ -20,7 +20,6 @@ import { formatString } from "../formatters";
 import { nbconvert as jupyter_nbconvert } from "../jupyter/convert";
 import { jupyter_strip_notebook } from "@cocalc/jupyter/nbgrader/jupyter-parse";
 import { jupyter_run_notebook } from "@cocalc/jupyter/nbgrader/jupyter-run";
-import { x11_channel } from "../x11/server";
 import { eval_code } from "./eval-code";
 import { realpath } from "./realpath";
 import query from "./query";
@@ -31,11 +30,8 @@ import execCode from "./exec-code";
 
 const log = getLogger("websocket-api");
 
-let primus: any = undefined;
 export function init_websocket_api(_primus: any): void {
-  primus = _primus;
-
-  primus.on("connection", function (spark) {
+  _primus.on("connection", function (spark) {
     // Now handle the connection, which can be either from a web browser, or
     // from a project client.
     log.debug(`new connection from ${spark.address.ip} -- ${spark.id}`);
@@ -44,7 +40,7 @@ export function init_websocket_api(_primus: any): void {
       log.debug("primus-api", "request", data, "REQUEST");
       const t0 = Date.now();
       try {
-        const resp = await handleApiCall({ data, primus });
+        const resp = await handleApiCall({ data });
         //log.debug("primus-api", "response", resp);
         done(resp);
       } catch (err) {
@@ -63,7 +59,7 @@ export function init_websocket_api(_primus: any): void {
     });
   });
 
-  primus.on("disconnection", function (spark) {
+  _primus.on("disconnection", function (spark) {
     log.debug(
       "primus-api",
       `end connection from ${spark.address.ip} -- ${spark.id}`,
@@ -71,13 +67,7 @@ export function init_websocket_api(_primus: any): void {
   });
 }
 
-export async function handleApiCall({
-  data,
-  primus,
-}: {
-  data: Mesg;
-  primus;
-}): Promise<any> {
+export async function handleApiCall({ data }: { data: Mesg }): Promise<any> {
   const client = getClient();
   switch (data.cmd) {
     case "version":
@@ -105,9 +95,6 @@ export async function handleApiCall({
       return await jupyter_nbconvert(data.opts);
     case "jupyter_run_notebook":
       return await jupyter_run_notebook(data.opts);
-
-    case "x11_channel":
-      return await x11_channel(client, primus, log, data.path, data.display);
 
     default:
       throw Error(

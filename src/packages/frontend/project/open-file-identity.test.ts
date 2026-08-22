@@ -11,9 +11,11 @@ import {
   log_opened_time,
   mark_open_phase,
   open_file,
+  publishSagewsNotebookAtomically,
   readSagewsWorksheetText,
   resolveSyncPath,
   resolveSyncPathWithRetry,
+  shouldConvertLegacyWorksheetOnOpen,
 } from "./open-file";
 import * as workspaceRecordsRuntime from "./workspaces/records-runtime";
 import * as workspaceSelectionRuntime from "./workspaces/selection-runtime";
@@ -95,6 +97,97 @@ describe("legacy worksheet reads", () => {
       path: "large.sagews",
     });
     expect(readTextFile).not.toHaveBeenCalled();
+  });
+
+  it("publishes a complete conversion by atomic rename", async () => {
+    const content = '{"title":"Grüße"}';
+    const writeTextFile = jest
+      .spyOn(webapp_client.project_client, "write_text_file")
+      .mockResolvedValue(undefined);
+    const fs = {
+      stat: jest.fn().mockResolvedValue({
+        size: new TextEncoder().encode(content).byteLength,
+      }),
+      rename: jest.fn().mockResolvedValue(undefined),
+      rm: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await publishSagewsNotebookAtomically({
+      project_id: "project-id",
+      path: "/home/user/worksheet.ipynb",
+      content,
+      fs: fs as any,
+    });
+
+    const tempPath = writeTextFile.mock.calls[0][0].path;
+    expect(tempPath).toMatch(
+      /^\/home\/user\/\.worksheet\.ipynb\.cocalc-sagews-.+\.tmp$/,
+    );
+    expect(writeTextFile).toHaveBeenCalledWith({
+      project_id: "project-id",
+      path: tempPath,
+      content,
+    });
+    expect(fs.rename).toHaveBeenCalledWith(
+      tempPath,
+      "/home/user/worksheet.ipynb",
+    );
+    expect(fs.rm).not.toHaveBeenCalled();
+  });
+
+  it("removes an incomplete conversion without publishing it", async () => {
+    jest
+      .spyOn(webapp_client.project_client, "write_text_file")
+      .mockResolvedValue(undefined);
+    const fs = {
+      stat: jest.fn().mockResolvedValue({ size: 0 }),
+      rename: jest.fn().mockResolvedValue(undefined),
+      rm: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      publishSagewsNotebookAtomically({
+        project_id: "project-id",
+        path: "/home/user/worksheet.ipynb",
+        content: "not empty",
+        fs: fs as any,
+      }),
+    ).rejects.toThrow("converted notebook write was incomplete");
+
+    expect(fs.rename).not.toHaveBeenCalled();
+    expect(fs.rm).toHaveBeenCalledWith(expect.stringMatching(/\.tmp$/), {
+      force: true,
+    });
+  });
+});
+
+describe("legacy worksheet open policy", () => {
+  it("converts foreground collaborator opens", () => {
+    expect(
+      shouldConvertLegacyWorksheetOnOpen(
+        { path: "/home/user/worksheet.sagews", foreground: true },
+        false,
+      ),
+    ).toBe(true);
+  });
+
+  it("leaves lazy background and viewer opens alone", () => {
+    expect(
+      shouldConvertLegacyWorksheetOnOpen(
+        {
+          path: "/home/user/worksheet.sagews",
+          foreground: false,
+          wait_for_ready: false,
+        },
+        false,
+      ),
+    ).toBe(false);
+    expect(
+      shouldConvertLegacyWorksheetOnOpen(
+        { path: "/home/user/worksheet.sagews", foreground: true },
+        true,
+      ),
+    ).toBe(false);
   });
 });
 

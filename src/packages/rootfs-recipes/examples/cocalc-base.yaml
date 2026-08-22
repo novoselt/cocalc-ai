@@ -58,6 +58,8 @@ steps:
         - uv
         - jupyter-console
 
+  - uses: cocalc/graphical-apps
+
   - name: Install apt-get wrapper that refreshes missing package lists
     run: |
       set -euo pipefail
@@ -133,7 +135,7 @@ verify:
 publish:
   label: CoCalc Basic
   slug: basic-1-7
-  description: The standard CoCalc environment with shell tools, basic LaTeX, a writable Python/pip/Jupyter environment, NumPy, pandas, Matplotlib, SciPy, seaborn, scikit-learn, Polars, uv, SFTP support, Python and bash Jupyter kernels, and an apt-get wrapper that refreshes package lists automatically before installs.
+  description: The standard CoCalc environment with shell tools, basic LaTeX, a writable Python/pip/Jupyter environment, NumPy, pandas, Matplotlib, SciPy, seaborn, scikit-learn, Polars, uv, browser-streamed graphical application support, SFTP support, Python and bash Jupyter kernels, and an apt-get wrapper that refreshes package lists automatically before installs.
   family: ubuntu
   version: "1.7"
   channel: stable
@@ -149,6 +151,7 @@ publish:
       - Matplotlib and seaborn
       - SciPy and scikit-learn
       - JupyterLab
+      - Graphical Linux applications
       - User pip installs
   tags:
     - preset:standard

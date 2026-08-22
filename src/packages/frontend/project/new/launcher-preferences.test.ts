@@ -12,6 +12,10 @@ import {
 } from "./launcher-preferences";
 
 describe("launcher exact-list preferences", () => {
+  test("includes X11 in the built-in quick-create launchers", () => {
+    expect(LAUNCHER_GLOBAL_DEFAULTS.quickCreate).toContain("x11");
+  });
+
   test("uses account list before site list before built-in defaults", () => {
     expect(
       getEffectiveLauncher({

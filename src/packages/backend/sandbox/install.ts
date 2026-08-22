@@ -139,6 +139,87 @@ function getCodexInstallScript(version: string): string {
   ].join(" && ");
 }
 
+const BLIT_VERSION = "0.55.1";
+const BLIT_LICENSE_SHA256 =
+  "bd48ff0dc768d8a2425e852d1f242be474b00f4f9a0d982a007ce4f89d5691fa";
+const OPENH264_CRATE_VERSION = "0.9.7";
+const OPENH264_CRATE_SHA256 =
+  "75a8867e48183bbd9147380227448c065fe456eb30b0ebc68929809c36c30985";
+const BLIT_SHA256 = {
+  arm64: "6e49a9c58a344d8018603ce3d1aea208acf4954e9086a53035cc2d3572e0eb36",
+  x64: "95964bc0d1ad61c8c1cb5755fd06f341a3365ddb985477e108ebc84e0bcacb9d",
+} as const;
+
+const XWAYLAND_SATELLITE_VERSION = "v0.8.2";
+const XWAYLAND_SATELLITE_RELEASE = "v0.8.2-cocalc.2";
+const XWAYLAND_SATELLITE_SHA256 = {
+  arm64: "5ce4ebee0df7ba2f7e43d5533f2c0b0c9f41043d63a618faf1099f3299b64872",
+  x64: "8989aee33baf15f4e73e4c7f68aacadf218978e1282108cb66c5ca97bda58b4c",
+} as const;
+
+function graphicalToolArch(): keyof typeof BLIT_SHA256 {
+  const currentArch = effectiveArch();
+  if (currentArch !== "x64" && currentArch !== "arm64") {
+    throw Error(`unsupported graphical tool arch ${currentArch}`);
+  }
+  return currentArch;
+}
+
+function getBlitInstallScript(): string {
+  const currentArch = graphicalToolArch();
+  const releaseArch = currentArch === "x64" ? "x86_64" : "aarch64";
+  const archive = `blit_${BLIT_VERSION}_linux_${releaseArch}.tar.gz`;
+  const releaseBase = `https://github.com/indent-com/blit/releases/download/v${BLIT_VERSION}`;
+  const licenseUrl =
+    "https://raw.githubusercontent.com/indent-com/blit/05002b31cbe429b3198b528e3cb2a0f6a068c750/LICENSE";
+  const openh264Archive = `openh264-sys2-${OPENH264_CRATE_VERSION}.crate`;
+  const openh264Url = `https://static.crates.io/crates/openh264-sys2/${openh264Archive}`;
+  const prefix = join(binPath, "..");
+  const licenseDir = join(prefix, "share", "licenses", "blit");
+  const target = join(binPath, "blit");
+  return [
+    "set -eu",
+    'tmp="$(mktemp -d)"',
+    "trap 'rm -rf \"$tmp\"' EXIT",
+    `curl -fL "${releaseBase}/${archive}" -o "$tmp/${archive}"`,
+    `printf '%s  %s\\n' "${BLIT_SHA256[currentArch]}" "$tmp/${archive}" | sha256sum -c -`,
+    `mkdir -p "${binPath}" "${licenseDir}"`,
+    `tar -xzf "$tmp/${archive}" -C "$tmp" bin/blit`,
+    `curl -fL "${licenseUrl}" -o "$tmp/LICENSE"`,
+    `printf '%s  %s\\n' "${BLIT_LICENSE_SHA256}" "$tmp/LICENSE" | sha256sum -c -`,
+    `install -m 0644 "$tmp/LICENSE" "${licenseDir}/LICENSE"`,
+    `curl -fL "${openh264Url}" -o "$tmp/${openh264Archive}"`,
+    `printf '%s  %s\\n' "${OPENH264_CRATE_SHA256}" "$tmp/${openh264Archive}" | sha256sum -c -`,
+    `tar -xzf "$tmp/${openh264Archive}" -C "$tmp" "openh264-sys2-${OPENH264_CRATE_VERSION}/upstream/LICENSE"`,
+    `install -m 0644 "$tmp/openh264-sys2-${OPENH264_CRATE_VERSION}/upstream/LICENSE" "${licenseDir}/OPENH264-LICENSE"`,
+    `printf '%s\\n' 'Blit ${BLIT_VERSION} (non-GPL OpenH264 build)' 'Source: https://github.com/indent-com/blit/tree/05002b31cbe429b3198b528e3cb2a0f6a068c750' 'Binary: ${releaseBase}/${archive}' 'OpenH264 source crate: ${openh264Url}' > "${licenseDir}/SOURCE"`,
+    `install -m 0755 "$tmp/bin/blit" "${target}"`,
+  ].join("; ");
+}
+
+function getXwaylandSatelliteInstallScript(): string {
+  const currentArch = graphicalToolArch();
+  const releaseArch = currentArch === "x64" ? "x86_64" : "aarch64";
+  const archive = `xwayland-satellite-${XWAYLAND_SATELLITE_VERSION}-linux-${releaseArch}.tar.xz`;
+  const archiveRoot = archive.slice(0, -".tar.xz".length);
+  const releaseBase = `https://github.com/sagemathinc/xwayland-satellite-builds/releases/download/${XWAYLAND_SATELLITE_RELEASE}`;
+  const prefix = join(binPath, "..");
+  const licenseDir = join(prefix, "share", "licenses", "xwayland-satellite");
+  const target = join(binPath, "xwayland-satellite");
+  return [
+    "set -eu",
+    'tmp="$(mktemp -d)"',
+    "trap 'rm -rf \"$tmp\"' EXIT",
+    `curl -fL "${releaseBase}/${archive}" -o "$tmp/${archive}"`,
+    `printf '%s  %s\\n' "${XWAYLAND_SATELLITE_SHA256[currentArch]}" "$tmp/${archive}" | sha256sum -c -`,
+    `mkdir -p "${binPath}" "${licenseDir}"`,
+    `tar -xJf "$tmp/${archive}" -C "$tmp"`,
+    `install -m 0644 "$tmp/${archiveRoot}/share/licenses/xwayland-satellite/LICENSE" "${licenseDir}/LICENSE"`,
+    `install -m 0644 "$tmp/${archiveRoot}/share/licenses/xwayland-satellite/SOURCE" "${licenseDir}/SOURCE"`,
+    `install -m 0755 "$tmp/${archiveRoot}/bin/xwayland-satellite" "${target}"`,
+  ].join("; ");
+}
+
 interface Spec {
   nonFatal?: boolean; // true if failure to install is non-fatal
   VERSION?: string;
@@ -284,6 +365,26 @@ export const SPEC = {
     script: () => getCodexInstallScript(SPEC.codex.VERSION),
     BASE: "https://github.com/sagemathinc/codex/releases",
   },
+  blit: {
+    optional: false,
+    desc: "Blit browser compositor",
+    path: join(binPath, "blit"),
+    getVersion: "blit --version | awk '{print $2}'",
+    VERSION: BLIT_VERSION,
+    platforms: ["linux"],
+    script: getBlitInstallScript,
+    BASE: "https://github.com/indent-com/blit/releases",
+  },
+  xwaylandSatellite: {
+    optional: false,
+    desc: "Xwayland compatibility bridge for Blit",
+    path: join(binPath, "xwayland-satellite"),
+    getVersion: "xwayland-satellite -version",
+    VERSION: XWAYLAND_SATELLITE_VERSION,
+    platforms: ["linux"],
+    script: getXwaylandSatelliteInstallScript,
+    BASE: "https://github.com/sagemathinc/xwayland-satellite-builds/releases",
+  },
   btm: {
     optional: true,
     // See https://github.com/ClementTsang/bottom/releases
@@ -354,6 +455,8 @@ export const rustic = SPEC.rustic.path;
 export const restServer = SPEC.restServer.path;
 export const ouch = SPEC.ouch.path;
 export const sshpiper = SPEC.sshpiper.path;
+export const blit = SPEC.blit.path;
+export const xwaylandSatellite = SPEC.xwaylandSatellite.path;
 export const btm = SPEC.btm.path;
 export const dropbear = SPEC.dropbear.path;
 export const curl = SPEC.curl.path;

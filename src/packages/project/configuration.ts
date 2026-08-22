@@ -9,7 +9,6 @@
  * The corresponding file in the webapp is @cocalc/frontend/project_configuration.ts
  */
 
-import { APPS } from "@cocalc/comm/x11-apps";
 import {
   Capabilities,
   Configuration,
@@ -63,24 +62,12 @@ async function have(name: string): Promise<boolean> {
 // we cache this as long as the project runs
 const conf: { [key in ConfigurationAspect]?: Configuration } = {};
 
-// check for all X11 apps.
-// UI will only show buttons for existing executables.
-async function x11_apps(): Promise<Capabilities> {
-  const status: Promise<boolean>[] = [];
-  const KEYS = Object.keys(APPS);
-  for (const key of KEYS) {
-    const app = APPS[key];
-    status.push(have(app.command != null ? app.command : key));
-  }
-  const results = await Promise.all(status);
-  const ret: { [key: string]: boolean } = {};
-  KEYS.map((name, idx) => (ret[name] = results[idx]));
-  return ret;
-}
-
-// determines if X11 support exists at all
+// Graphical applications use project-host tools injected into the project PATH.
 async function get_x11(): Promise<boolean> {
-  return await have("xpra");
+  const tools = await Promise.all(
+    ["blit", "cocalc-x11", "xwayland-satellite"].map(have),
+  );
+  return tools.every(Boolean);
 }
 
 // Quarto document formatter (on top of pandoc)
@@ -463,10 +450,7 @@ const capabilities = reuseInFlight(async (): Promise<MainCapabilities> => {
   }
 });
 
-// this is the entry point for the API call
-// "main": everything that's needed throughout the project
-// "x11": additional checks which are queried when an X11 editor opens up
-// TODO similarly, query available "shells" to use for the corresponding code editor button
+// This is the entry point for the project configuration API.
 
 // This is expensive, so put in a reuseInFlight to make it cheap in case a frontend
 // annoyingly calls this dozens of times at once -- https://github.com/sagemathinc/cocalc/issues/7806
@@ -485,11 +469,6 @@ export const get_configuration = reuseInFlight(
             timestamp: new Date(),
             capabilities: await capabilities(),
           };
-        case "x11":
-          return {
-            timestamp: new Date(),
-            capabilities: await x11_apps(),
-          };
       }
     })();
     new_conf.timing_s = (new Date().getTime() - t0) / 1000;
@@ -500,6 +479,5 @@ export const get_configuration = reuseInFlight(
 
 // testing: uncomment, and run $ ts-node configuration.ts
 // (async () => {
-// console.log(await x11_apps());
 // console.log(await capabilities());
 // })();

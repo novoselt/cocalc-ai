@@ -77,6 +77,7 @@ overrides:
 patchedDependencies:
   '@rc-component/portal@2.2.0': b6f877518e590497afc1bc08045e7388a098c2d276d59c861683811ebfb8da04
   '@rc-component/tabs@1.7.0': 012320e45fed87a7ebc8585e9bff0595e697985e698f0b21fece4ab202a0bee5
+  dropzone@5.9.3: be96936e7311bf6c69b2316841bc586344ec9388ef93ff008eebe8aabac14b25
   fs-ext@2.1.1: 8de34bb8636073ff75cba28e1092a4e6bd4b0f9f8b2cc05b5fc95f80d978408b
   slate-react@0.124.0: 480c324a03628679a405b79a110bbd6bd6802f7d1379a491163e19156c5d7c85
 
@@ -426,9 +427,6 @@ importers:
       '@cocalc/comm':
         specifier: workspace:*
         version: 'link:'
-      '@cocalc/sync':
-        specifier: workspace:*
-        version: link:../sync
       '@cocalc/util':
         specifier: workspace:*
         version: link:../util
@@ -861,9 +859,6 @@ importers:
       '@react-hook/mouse-position':
         specifier: ^4.1.3
         version: 4.1.3(react@19.2.3)
-      '@rinsuki/lz4-ts':
-        specifier: ^1.0.1
-        version: 1.0.1
       '@simplewebauthn/browser':
         specifier: ^13.3.0
         version: 13.3.0
@@ -995,7 +990,7 @@ importers:
         version: 2.1.0
       dropzone:
         specifier: ^5.9.2
-        version: 5.9.3
+        version: 5.9.3(patch_hash=be96936e7311bf6c69b2316841bc586344ec9388ef93ff008eebe8aabac14b25)
       entities:
         specifier: ^4.3.1
         version: 4.5.0
@@ -1077,9 +1072,6 @@ importers:
       mermaid:
         specifier: ^11.16.1
         version: 11.16.1
-      node-forge:
-        specifier: ^1.4.0
-        version: 1.4.0
       onecolor:
         specifier: ^3.1.0
         version: 3.1.0
@@ -1176,9 +1168,6 @@ importers:
       video-extensions:
         specifier: ^1.2.0
         version: 1.2.0
-      zlibjs:
-        specifier: ^0.3.1
-        version: 0.3.1
 
   http-api:
     dependencies:
@@ -5141,9 +5130,6 @@ packages:
     peerDependenciesMeta:
       '@types/react':
         optional: true
-
-  '@rinsuki/lz4-ts@1.0.1':
-    resolution: {integrity: sha512-vkQP6c9GGEvsND/tY6eyb5g6bq+zzbI8VcAPozr6siisIZKb4tq1Jr6Z2+5GqkEjxHGLCfncrBWR1h86t8CEIg==}
 
   '@rjsf/utils@5.24.13':
     resolution: {integrity: sha512-rNF8tDxIwTtXzz5O/U23QU73nlhgQNYJ+Sv5BAwQOIyhIE2Z3S5tUiSVMwZHt0julkv/Ryfwi+qsD4FiE5rOuw==}
@@ -12280,9 +12266,6 @@ packages:
     resolution: {integrity: sha512-vWOrt19lvcXTxu5tiHXfEGQuldSlU+qZn2TT+4EbRQzaciWGwNZ99QQTolQOmcwVgZLodv+1QfC6UZs2PX/6pQ==}
     engines: {node: '>= 12'}
 
-  zlibjs@0.3.1:
-    resolution: {integrity: sha512-+J9RrgTKOmlxFSDHo0pI1xM6BLVUv+o0ZT9ANtCxGkjIVCCUdx9alUF8Gm+dGLKbkkkidWIHFDZHDMpfITt4+w==}
-
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
@@ -15836,8 +15819,6 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.2.7
 
-  '@rinsuki/lz4-ts@1.0.1': {}
-
   '@rjsf/utils@5.24.13(react@19.2.3)':
     dependencies:
       json-schema-merge-allof: 0.8.1
@@ -18416,7 +18397,7 @@ snapshots:
       abs-svg-path: 0.1.1
       normalize-svg-path: 0.1.0
 
-  dropzone@5.9.3: {}
+  dropzone@5.9.3(patch_hash=be96936e7311bf6c69b2316841bc586344ec9388ef93ff008eebe8aabac14b25): {}
 
   dtype@2.0.0: {}
 
@@ -24202,7 +24183,5 @@ snapshots:
     dependencies:
       cmake-ts: 1.0.2
       node-addon-api: 8.5.0
-
-  zlibjs@0.3.1: {}
 
   zod@4.3.6: {}

@@ -18,6 +18,7 @@ export const LAUNCHER_GLOBAL_DEFAULTS: Required<LauncherPrefs> = {
     "chat",
     "ipynb",
     "term",
+    "x11",
     "md",
     "tex",
     "board",

@@ -14,3 +14,13 @@ describe("archive file associations", () => {
     expect(file_associations.lz4?.editor).toBe("archive");
   });
 });
+
+describe("graphical application file association", () => {
+  it("opens .x11 files in the graphical application editor", () => {
+    expect(file_associations.x11).toMatchObject({
+      editor: "x11",
+      icon: "window-restore",
+      name: "Linux Graphical Applications",
+    });
+  });
+});

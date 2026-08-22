@@ -51,7 +51,6 @@ export function init(redux) {
   init.token = global["REGISTER"];
   init.strategies = global["STRATEGIES"];
   init.other_settings.show_global_info2 = "loading"; // indicates there is no data yet
-  init.editor_settings.physical_keyboard = "NO_DATA"; // indicator that there is no data
   init.user_type = hasRememberMe(appBasePath) ? "signing_in" : "public"; // default
   const store = redux.createStore("account", AccountStore, init);
   const actions = redux.createActions("account", AccountActions);

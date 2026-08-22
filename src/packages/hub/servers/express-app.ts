@@ -42,6 +42,7 @@ import initHttpServer from "./http";
 import initRobots from "./robots";
 import initSitemap from "./sitemap";
 import { applyBaselineSecurityHeaders } from "./security-headers";
+import { setApplicationShellCacheHeaders } from "./application-shell-cache";
 import getServerSettings from "./server-settings";
 import { expiresAfterSeconds } from "./cache-headers";
 import basePath from "@cocalc/backend/base-path";
@@ -65,7 +66,6 @@ const PYTHON_API_PATH = join(root, "python", "cocalc-api", "site");
 
 // Used for longterm caching of files. This should be in units of seconds.
 const MAX_AGE = Math.round(ms("10 days") / 1000);
-const SHORT_AGE = Math.round(ms("10 seconds") / 1000);
 const PUBLIC_APP_SUBDOMAIN_REWRITE_TIMEOUT_MS = 250;
 
 function isEnabled(value: unknown): boolean {
@@ -363,14 +363,6 @@ export default async function init(opts: Options): Promise<{
   return { httpServer, router };
 }
 
-function cacheShortTerm(res) {
-  res.setHeader(
-    "Cache-Control",
-    `public, max-age=${SHORT_AGE}, must-revalidate`,
-  );
-  res.setHeader("Expires", expiresAfterSeconds(SHORT_AGE));
-}
-
 function cacheNoStore(res) {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Expires", "0");
@@ -497,25 +489,25 @@ async function initStatic(router) {
     "/static/app.html",
     staticCompression,
     express.static(join(staticPath, "app.html"), {
-      setHeaders: cacheShortTerm,
+      setHeaders: setApplicationShellCacheHeaders,
     }),
   );
   router.use(
     "/static/embed.html",
     staticCompression,
     express.static(join(staticPath, "embed.html"), {
-      setHeaders: cacheShortTerm,
+      setHeaders: setApplicationShellCacheHeaders,
     }),
   );
   router.use(
     "/static/ultralite.html",
     staticCompression,
     express.static(join(staticPath, "ultralite.html"), {
-      setHeaders: cacheShortTerm,
+      setHeaders: setApplicationShellCacheHeaders,
     }),
   );
   router.get(/^\/essential(?:\/.*)?$/, staticCompression, (_req, res, next) => {
-    cacheShortTerm(res);
+    setApplicationShellCacheHeaders(res);
     const staticBase = basePath === "/" ? "/static/" : `${basePath}/static/`;
     void readFile(join(staticPath, "ultralite.html"), "utf8")
       .then((html) => {
