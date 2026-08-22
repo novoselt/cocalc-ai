@@ -309,11 +309,19 @@ interface DocumentBuildSnapshot {
   build_id: string;
   request_id?: string;
   identity: BuildDocumentIdentity;
-  state: "queued" | "running" | "succeeded" | "failed" | "canceled";
+  state:
+    | "queued"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "canceled"
+    | "timed_out";
   seq: number;
   submitted_at: number;
   started_at?: number;
   ended_at?: number;
+  build_timeout_ms: number;
+  deadline_at?: number;
   force: boolean;
   stages: BuildStageSnapshot[];
   diagnostics: BuildDiagnostic[];
@@ -339,6 +347,9 @@ reconstruct it afterward from mutable frontend state.
 - `failed` uses the first meaningful failed-stage exit code, or `1` for an
   orchestration/parser failure without a subprocess code.
 - `canceled` is distinct from `failed` and maps to a nonzero CLI exit status.
+- `timed_out` means the project-side build deadline expired. The manager
+  cancels the active subprocess, does not start further stages, and records a
+  terminal snapshot.
 - A generated PDF does not by itself make a build successful when LaTeX
   reported errors.
 - Transport failures are represented separately from compiler diagnostics.
@@ -422,6 +433,7 @@ src/packages/project/document-build/
   numbers
 - publish progress snapshots/events
 - cancel the current underlying exec stage when requested
+- enforce the project-side whole-build deadline
 - retain bounded completed snapshots for reconnect/status inspection
 - expose active builds by logical path and resource key
 
@@ -483,6 +495,11 @@ interface DocumentBuildApi {
 
 `start` returns quickly with a queued/running snapshot. Callers do not hold one
 request/reply RPC open for an entire compilation.
+
+`DocumentBuildRequest` includes an optional positive `build_timeout_ms`. The
+project service validates it against deployment limits. If omitted, the
+document pipeline's server-side default applies. The deadline begins when the
+build leaves the queue, not while it is waiting for its resource lock.
 
 ### Progress Events
 
@@ -554,13 +571,21 @@ and independently signal every process a browser happens to know about.
 The first user-facing command remains:
 
 ```bash
-cocalc project build <path> [--project <project>] [--force] [--detach]
+cocalc project build <path> [--project <project>] [--force] [--detach] \
+  [--build-timeout <duration>]
 ```
 
 Behavior:
 
 - Waiting is the default because agents invoke this command to verify edits.
 - `--detach` returns after submission with the build ID.
+- The existing root `cocalc --timeout <duration>` controls how long the CLI
+  waits for completion. The build command must not redefine `--timeout`.
+- `--build-timeout <duration>` overrides the project-side whole-build
+  deadline. When it expires, the manager terminates the active stage and the
+  authoritative build state becomes `timed_out`.
+- The existing root `--rpc-timeout` remains only the limit for each individual
+  RPC. It is not a compilation deadline.
 - The CLI resolves the routed direct project API and calls
   `documentBuild.start`.
 - Waiting polls `documentBuild.get`; it may also consume progress events for
@@ -568,7 +593,9 @@ Behavior:
 - Compiler failure, cancellation, unsupported type, stale-source rejection,
   and wait timeout all produce a nonzero process exit status.
 - A wait timeout does not silently cancel a still-running build; output includes
-  its build ID and state.
+  its build ID and state. Both a local wait timeout and a completed
+  `timed_out` build may use process exit status `124`, but the structured state
+  and human message distinguish them.
 - Structured output includes the build ID, identity, stages, exit code,
   diagnostics summary, artifacts, and bounded logs.
 - The command works when no browser session exists and must have an end-to-end
@@ -577,9 +604,47 @@ Behavior:
 Status and cancel CLI subcommands may be added after the primary command, but
 the underlying API supports them from the start for the frontend.
 
-Agent prompts should change only after this command is available in the tools
-bundle used by projects. Guidance should state that the command builds saved
-project files and returns a nonzero status when verification fails.
+### Agent Guidance Delivery
+
+There are currently two separate Codex guidance mechanisms:
+
+- [`codex-app-server.ts`](../packages/ai/acp/codex-app-server.ts) prepends a
+  hidden `[CoCalc runtime capabilities]` block to ordinary turns, currently
+  only when both project and browser IDs are present.
+- [`skills/cocalc/SKILL.md`](../packages/cli/skills/cocalc/SKILL.md) is the
+  canonical detailed CoCalc skill. The project host's
+  [`getBuiltinLaunchpadSkillMounts`](../packages/project-host/codex/codex-project.ts)
+  mounts an already-installed host `$CODEX_HOME/skills/cocalc` into the
+  project runtime unless the project has its own skill.
+
+The repository skill is not currently installed by that mount code; it relies
+on a separately synchronized host copy. Productionizing build guidance must
+remove that hidden deployment dependency.
+
+After the command is present in the project tools bundle:
+
+- Add one concise always-on instruction to the runtime capability preamble:
+  use `cocalc project build -h` and `cocalc project build <path>` for supported
+  documents instead of invoking only one underlying compiler stage.
+- Inject project capability guidance whenever `COCALC_PROJECT_ID` exists.
+  Browser-specific guidance remains conditional on `COCALC_BROWSER_ID`; a
+  headless project agent must still learn project-side commands.
+- Add the detailed workflow to the canonical CoCalc skill, including supported
+  extensions, saved-file semantics, exit statuses, `--build-timeout`, and the
+  distinction between root `--timeout` and build execution timeout.
+- Extend the skill frontmatter/decision order so document-build work actually
+  triggers the skill.
+- Package or install the canonical repo skill as part of the project-host/tools
+  release, then mount that version. Do not require an operator to copy it into
+  the host's home directory manually.
+- Keep CLI `--help` and project API capabilities authoritative. The hidden
+  prompt should stay short and point to help rather than duplicate every flag.
+
+The hidden preamble is the reliable minimum for first-party Codex sessions,
+including projects that override the bundled skill. The skill contains richer
+on-demand guidance and also supports sessions where browser context is absent.
+External agents that use only the CLI still discover correct behavior through
+`--help` and exit/status contracts.
 
 ## Implementation Sequence
 
@@ -690,8 +755,13 @@ Acceptance:
 ### Phase 6: Add The CLI And Agent Guidance
 
 - Register `cocalc project build` as a thin project API client.
-- Make waiting and exit-status semantics explicit and tested.
+- Add `--build-timeout` without shadowing the root wait `--timeout` and make
+  waiting, deadline, and exit-status semantics explicit and tested.
 - Add human and JSON formatting from the same result DTO.
+- Split always-on project guidance from browser-only guidance in the Codex app
+  server.
+- Update the canonical CoCalc skill and package its installation with project
+  host/tools deployment.
 - Add runtime guidance only after the command is included in project tools.
 
 Acceptance:
@@ -699,8 +769,11 @@ Acceptance:
 - A fresh project with no browser open builds `.tex`, `.Rnw`/`.Rtex`, `.Rmd`,
   and `.qmd` through the CLI.
 - Valid documents exit `0` and invalid documents exit nonzero.
-- Timeout and cancellation exit nonzero and report the build ID.
+- Local wait timeout, project-side build timeout, and cancellation exit nonzero
+  and report the build ID and unambiguous state.
 - CLI and frontend report the same build result for the same build ID.
+- A project-only Codex session receives the short command guidance without a
+  browser ID, and the installed CoCalc skill matches the canonical repo copy.
 
 ### Phase 7: Delete Browser-Orchestrated Build Code
 
@@ -741,6 +814,8 @@ Acceptance:
 - same-generation idempotency
 - resource locking and global admission limits
 - cancellation during every stage type
+- queue wait does not consume the build deadline, followed by deadline expiry
+  while running
 - client disconnect during a build
 - completed-result retention and expiry
 - project daemon restart/lost-build semantics
@@ -749,7 +824,9 @@ Acceptance:
 
 - supported and unsupported extensions
 - path normalization and missing files
-- success, compiler failure, timeout, and cancellation process status
+- success, compiler failure, local wait timeout, build timeout, and
+  cancellation process status
+- root `--timeout` versus `--build-timeout` parsing and behavior
 - detached submission
 - bounded human logs and complete-enough JSON diagnostics
 - direct project API use with no browser session
@@ -764,20 +841,89 @@ Acceptance:
 - PDF/HTML reload only after relevant artifact completion
 - diagnostics update gutters without rerunning parsers in Redux actions
 
+### Headless Smoke Suite
+
+Add a one-command smoke harness and fixture corpus under the document-build app,
+for example:
+
+```text
+src/packages/apps/document-build/smoke/
+  run.ts
+  fixtures/
+    plain-latex/
+    latex-bibliography/
+    knitr-rnw/
+    knitr-rtex/
+    sagetex/
+    pythontex/
+    sagetex-pythontex/
+    rmarkdown-pdf/
+    rmarkdown-html/
+    quarto-pdf/
+    quarto-html/
+    failures/
+```
+
+Expose it as a developer/operator command such as:
+
+```bash
+cocalc project build-smoke [--project <project>] [--keep] [--json]
+```
+
+The harness creates a uniquely named scratch directory in the target project,
+submits every fixture through the public `documentBuild` project API used by
+`cocalc project build`, waits for completion, verifies results, and removes the
+directory on success. `--keep` preserves all inputs, logs, and artifacts; a
+failure preserves them automatically and prints the location.
+
+Adapt the semantic-marker approach already used by the pinned
+[`texlive-installer`](https://github.com/sagemathinc/texlive-installer)
+document tests. Each successful fixture must contain a value computed only by
+the stage being tested, and the harness must inspect rendered PDF/HTML content,
+not merely check that a nonempty artifact exists. This catches cases where
+`latexmk -f` emits a PDF despite a skipped or broken preprocessing stage.
+
+The suite should cover:
+
+- plain LaTeX with references, bibliography, dependency extraction, and
+  SyncTeX output
+- supported engine/configuration directives and output-directory behavior
+- `.Rnw` and `.Rtex` Knitr generation followed by LaTeX
+- SageTeX and PythonTeX independently, plus a document requiring both
+- R Markdown and Quarto to both PDF and HTML
+- generated figures and computed inline values
+- one intentional syntax/compiler failure per document family, asserting a
+  nonzero result and useful typed diagnostics
+- a controlled build deadline expiry, asserting `timed_out` and no later stage
+- detach followed by status lookup, proving no browser is involved
+- same-generation submission returning one build ID
+- `.Rnw` and generated `.tex` resource-key serialization
+
+Run full capability mode in CI/reference project images: a missing required
+tool is a failure, not a skip. An optional diagnostic mode may report unsupported
+capabilities for smaller user images, but release validation must exercise the
+complete matrix.
+
+Keep this distinct from the installer-level `texlive-installer/tests/run.sh`.
+Those tests validate that raw compilers and packages were installed correctly;
+this suite validates CoCalc's orchestration and public headless contract. Reuse
+small fixtures or marker conventions where useful, but do not shell out to the
+raw pipeline from the CoCalc smoke harness.
+
 ### Live Validation
 
-Use a project with the required TeX, R, Sage, PythonTeX, and Quarto tools.
-Validate at least:
+Use a project with the required TeX, R, Sage, PythonTeX, and Quarto tools. Run
+`cocalc project build-smoke` first as the repeatable release gate, then do only
+the following targeted interactive checks that add coverage beyond it:
 
-- a quick plain LaTeX document
 - a deliberately slow LaTeX document while opening a second browser
-- a failing LaTeX document
 - Knitr with a long LaTeX stage and a reconnect after Knitr completes
 - direct `paper.tex` submission while `paper.Rnw` holds the shared resource
-- SageTeX and PythonTeX documents
-- R Markdown to HTML and PDF
-- Quarto to HTML and PDF
 - CLI builds after all browsers are closed
+
+The smoke suite should replace repeated manual compilation of every format;
+browser validation is limited to shared progress rendering, reconnect, preview
+reload, and editor diagnostics.
 
 ## Rollout
 
@@ -786,6 +932,8 @@ Validate at least:
 - Migrate one document kind at a time using the registry capability response.
 - Keep old frontend rendering fields temporarily, not old execution authority.
 - Enable CLI support only for kinds reported by the project service.
+- Ship the canonical CoCalc skill with the same release before advertising the
+  command in hidden runtime guidance.
 - Dogfood against Lite/Launchpad and CoCalc Plus because both use the same
   project API boundary.
 - Remove the feature flag after every supported editor has moved and the legacy
@@ -804,6 +952,10 @@ The work is complete only when all of the following are true:
 - Knitr logical identity and generated `.tex` resource locking are correct.
 - Build configuration is resolved without Redux or an open editor.
 - Compiler failures reliably cause nonzero CLI status.
+- Local wait timeout and project-side build timeout have distinct, tested
+  semantics.
+- First-party project agents learn the command from the short runtime preamble,
+  with detailed guidance available from the packaged canonical CoCalc skill.
 - No build request/reply protocol depends on `true` exec jobs, browser
   hydration, or first-browser-response-wins behavior.
 - The old frontend pipeline implementations and duplicate registries are
