@@ -304,6 +304,7 @@ describe("ChatLog immediate steer rendering", () => {
     const whileSendingKey = latestVirtuosoProps.computeItemKey(
       1,
       whileSendingData[1],
+      latestVirtuosoProps.context,
     );
 
     expect(latestVirtuosoProps.totalCount).toBe(itemCount);
@@ -332,9 +333,17 @@ describe("ChatLog immediate steer rendering", () => {
     expect(latestVirtuosoProps.itemContent).toBe(stableItemRenderer);
     expect(latestVirtuosoProps.data).not.toBe(whileSendingData);
     expect(latestVirtuosoProps.data[0]).not.toBe(whileSendingData[0]);
-    expect(
-      latestVirtuosoProps.computeItemKey(1, latestVirtuosoProps.data[1]),
-    ).not.toBe(whileSendingKey);
+    const sentKey = latestVirtuosoProps.computeItemKey(
+      1,
+      whileSendingData[1],
+      latestVirtuosoProps.context,
+    );
+    expect(sentKey).not.toBe(whileSendingKey);
+    latestVirtuosoProps.itemContent(
+      1,
+      whileSendingData[1],
+      latestVirtuosoProps.context,
+    );
     expect(lastRenderedMessageProps("assistant-1")?.activitySteers).toEqual([
       expect.objectContaining({ messageId: "steer-1", state: "sent" }),
     ]);

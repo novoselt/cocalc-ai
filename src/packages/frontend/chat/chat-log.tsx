@@ -1408,16 +1408,8 @@ export function MessageList({
     scheduleAnchorCapture,
     setManualScroll,
     sortedDatesLength: sortedDates.length,
+    virtualRows: [] as ChatVirtualRow[],
   });
-  virtuosoCallbackStateRef.current = {
-    keepBottomAnchoredRef,
-    manualScrollRef,
-    markManualScrollAway,
-    onAtTopStateChange,
-    scheduleAnchorCapture,
-    setManualScroll,
-    sortedDatesLength: sortedDates.length,
-  };
 
   const handleVirtuosoScrollerRef = useCallback(
     (node: HTMLElement | Window | null) => {
@@ -1475,12 +1467,25 @@ export function MessageList({
       };
     },
   );
+  virtuosoCallbackStateRef.current = {
+    keepBottomAnchoredRef,
+    manualScrollRef,
+    markManualScrollAway,
+    onAtTopStateChange,
+    scheduleAnchorCapture,
+    setManualScroll,
+    sortedDatesLength: sortedDates.length,
+    virtualRows: virtuosoData,
+  };
+  type ChatVirtuosoContext = typeof virtuosoCallbackStateRef.current;
   const renderVirtuosoItem = useCallback(
-    (_index: number, row: ChatVirtualRow) => row.render(),
+    (index: number, row: ChatVirtualRow, context?: ChatVirtuosoContext) =>
+      (context?.virtualRows[index] ?? row).render(),
     [],
   );
   const computeVirtuosoItemKey = useCallback(
-    (_index: number, row: ChatVirtualRow) => row.key,
+    (index: number, row: ChatVirtualRow, context?: ChatVirtuosoContext) =>
+      (context?.virtualRows[index] ?? row).key,
     [],
   );
   const handleVirtuosoRangeChanged = useCallback(
