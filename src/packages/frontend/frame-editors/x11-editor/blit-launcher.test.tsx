@@ -196,6 +196,9 @@ describe("Blit application launcher", () => {
         "cocalc-blit-launch",
         "chromium",
         "chromium",
+        "--ozone-platform=wayland",
+        "--no-sandbox",
+        "--disable-gpu",
       ],
     });
   });

@@ -98,7 +98,12 @@ export const BLIT_APPLICATIONS = [
     description: "The open-source Chromium web browser.",
     icon: "compass",
     executable: "chromium",
-    command: ["chromium"],
+    command: [
+      "chromium",
+      "--ozone-platform=wayland",
+      "--no-sandbox",
+      "--disable-gpu",
+    ],
     install: {
       kind: "script",
       command: INSTALL_CHROMIUM_APPLICATION_COMMAND,

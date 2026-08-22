@@ -37,7 +37,12 @@ describe("Blit application catalog", () => {
   it("installs Chromium from the pinned XtraDeb Ubuntu repository", () => {
     const chromium = BLIT_APPLICATIONS.find(({ id }) => id === "chromium");
     expect(chromium).toMatchObject({
-      command: ["chromium"],
+      command: [
+        "chromium",
+        "--ozone-platform=wayland",
+        "--no-sandbox",
+        "--disable-gpu",
+      ],
       executable: "chromium",
       install: { kind: "script" },
     });

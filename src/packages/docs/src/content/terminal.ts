@@ -135,11 +135,24 @@ Use either of these methods:
 
 - Click an application button in the toolbar. If the application is missing,
   CoCalc offers to install it in the project before launching it.
-- Type a graphical command, such as \`xclock\`, \`gimp\`, \`inkscape\`, or
-  \`chromium\`, in the terminal shown in the middle of the workspace.
+- Type a graphical command, such as \`xclock\`, \`gimp\`, or \`inkscape\`, in
+  the terminal shown in the middle of the workspace.
 
 The embedded terminal already has the Wayland and X11 environment variables
 for this graphical session. You do not need to set \`DISPLAY\` there.
+
+Chromium needs additional flags in a project container. The Chromium launcher
+adds them automatically. To start it from the embedded terminal, run:
+
+~~~sh
+chromium --ozone-platform=wayland --no-sandbox --disable-gpu
+~~~
+
+The \`--no-sandbox\` flag is necessary because project containers prohibit the
+nested namespaces used by Chromium's Linux sandbox. This removes Chromium's
+renderer-level security boundary: a compromised web page could access files
+and processes available to your project user. Only open sites you trust. The
+project container remains isolated from other projects and the project host.
 
 ## Select an application window
 
