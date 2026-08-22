@@ -54,7 +54,7 @@ ROOT_EXCLUDES = [
     ".julia",
     ".local/share/pnpm",
     ".jupyter-blobs-v0.db",
-    ".xpra",
+    ".xpra",  # Obsolete graphical-session state must not be imported.
 ]
 # Empty or nearly-empty legacy projects can still produce valid tiny tar.zst files.
 MIN_ARTIFACT_BYTES = 16

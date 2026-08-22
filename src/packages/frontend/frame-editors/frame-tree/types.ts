@@ -102,7 +102,6 @@ type EditorType =
   | "whiteboard-search"
   | "whiteboard"
   | "wiki"
-  | "x11-apps"
   | "x11";
 
 // Editor spec

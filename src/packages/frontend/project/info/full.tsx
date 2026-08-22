@@ -770,11 +770,7 @@ export function Full(props: Readonly<Props>): React.JSX.Element {
     ): React.JSX.Element | undefined => {
       const cocalc = proc.cocalc;
       if (cocalc == null) return;
-      if (
-        cocalc.type !== "jupyter" &&
-        cocalc.type !== "terminal" &&
-        cocalc.type !== "x11"
-      ) {
+      if (cocalc.type !== "jupyter" && cocalc.type !== "terminal") {
         return;
       }
       const openPath = cocalc.path;
@@ -782,12 +778,7 @@ export function Full(props: Readonly<Props>): React.JSX.Element {
       const displayPath = sourcePath.startsWith("/")
         ? sourcePath
         : `/${sourcePath}`;
-      const icon =
-        cocalc.type === "jupyter"
-          ? "ipynb"
-          : cocalc.type === "terminal"
-            ? "terminal"
-            : "window-restore";
+      const icon = cocalc.type === "jupyter" ? "ipynb" : "terminal";
       return (
         <Button
           shape="round"

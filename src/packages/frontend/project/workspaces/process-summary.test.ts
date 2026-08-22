@@ -38,7 +38,7 @@ function workspace(root_path: string): WorkspaceRecord {
 
 function process(
   path: string,
-  opts?: Partial<Process> & { kind?: "terminal" | "jupyter" | "x11" },
+  opts?: Partial<Process> & { kind?: "terminal" | "jupyter" },
 ): Process {
   const kind = opts?.kind ?? "terminal";
   return {
@@ -67,9 +67,7 @@ function process(
     cocalc:
       kind === "terminal"
         ? { type: "terminal", path }
-        : kind === "jupyter"
-          ? { type: "jupyter", path }
-          : { type: "x11", path },
+        : { type: "jupyter", path },
   };
 }
 

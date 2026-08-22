@@ -21,7 +21,6 @@ import {
   MainCapabilities,
   MainConfiguration,
   Capabilities,
-  X11Configuration,
   ALL_AVAIL,
   NO_AVAIL,
 } from "@cocalc/comm/project-configuration";
@@ -34,7 +33,6 @@ export type {
   Configuration,
   ConfigurationAspect,
   MainConfiguration,
-  X11Configuration,
 };
 
 export type ProjectConfiguration = iMap<ConfigurationAspect, Configuration>;
@@ -54,7 +52,7 @@ function isMainCapabilities(
 }
 
 export function isMainConfiguration(
-  config: MainConfiguration | X11Configuration,
+  config: Configuration,
 ): config is MainConfiguration {
   const mconf = <MainConfiguration>config;
   // don't test for disabled_ext, because that's added later

@@ -12,11 +12,9 @@ import type {
   NBGraderAPIOptions,
   RunNotebookOptions,
 } from "@cocalc/util/jupyter/nbgrader-types";
-import type { Channel } from "@cocalc/sync/client/types";
 import type { Options } from "@cocalc/util/code-formatter";
-export type { Channel };
 
-export type ConfigurationAspect = "main" | "x11";
+export type ConfigurationAspect = "main";
 
 export interface NbconvertParams {
   args: string[];
@@ -127,12 +125,6 @@ interface MesgLeanChannel {
   path: string;
 }
 
-interface MesgX11Channel {
-  cmd: "x11_channel";
-  path: string;
-  display: number;
-}
-
 interface MesgRealpath {
   cmd: "realpath";
   path: string;
@@ -164,7 +156,6 @@ export type Mesg =
   | MesgLean
   | MesgLeanChannel
   | MesgQuery
-  | MesgX11Channel
   | MesgRealpath
   | MesgNBGrader
   | MesgJupyterNbconvert

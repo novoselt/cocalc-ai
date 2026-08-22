@@ -67,7 +67,6 @@
     "@playwright/test": "^1.57.0",
     "@rc-component/tabs": "1.7.0",
     "@react-hook/mouse-position": "^4.1.3",
-    "@rinsuki/lz4-ts": "^1.0.1",
     "@simplewebauthn/browser": "^13.3.0",
     "@stripe/react-stripe-js": "^6.4.0",
     "@stripe/stripe-js": "^9.6.0",
@@ -139,7 +138,6 @@
     "md5": "^2",
     "memoize-one": "^5.1.1",
     "mermaid": "^11.16.1",
-    "node-forge": "^1.4.0",
     "onecolor": "^3.1.0",
     "pdfjs-dist": "^4.6.82",
     "plotly.js": "^2.29.1",
@@ -171,8 +169,7 @@
     "use-async-effect": "^2.2.7",
     "use-debounce": "^7.0.1",
     "use-resize-observer": "^9.1.0",
-    "video-extensions": "^1.2.0",
-    "zlibjs": "^0.3.1"
+    "video-extensions": "^1.2.0"
   },
   "scripts": {
     "preinstall": "npx only-allow pnpm",

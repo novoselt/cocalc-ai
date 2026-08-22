@@ -37,7 +37,7 @@ export function set_buffer(s: string | undefined): void {
     // https://developer.mozilla.org/en-US/docs/Web/API/Document/execCommand
     // This ignores the input s above, since it operates on whatever is selected.
     // NOTE: there might be no context in CoCalc where this will actually work, since
-    // it is supposed to be used in an event handler (like in the x11 xpra code?).
+    // it is supposed to be used in an event handler.
     document.execCommand("copy");
   } catch (_) {}
 }

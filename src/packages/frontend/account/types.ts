@@ -43,8 +43,6 @@ export interface AccountState {
     jupyter_classic?: boolean;
     jupyter?: { kernel: string };
     theme?: string;
-    physical_keyboard?: string;
-    keyboard_variant?: string;
   }>;
   font_size: number;
   other_settings: TypedMap<{
@@ -123,7 +121,6 @@ export interface AccountState {
   ephemeral?: number;
   strategies?: List<TypedMap<PassportStrategyFrontend>>;
   token?: boolean; // whether or not a registration token is required when creating an account
-  keyboard_variant_options?: List<any>;
   show_forgot_password?: boolean;
   email_address_verified?: Map<string, Date>;
   evaluate_key?: string;

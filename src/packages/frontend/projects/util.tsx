@@ -495,10 +495,6 @@ export function useServersMenuItems(
           isAvailable =
             available.rserver && !student_project_functionality.disableRServer;
           break;
-        case "xpra":
-          // this is not yet fully implemented...
-          isAvailable = true;
-          break;
         default:
           unreachable(appName);
       }

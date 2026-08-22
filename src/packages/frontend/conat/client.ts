@@ -3543,32 +3543,6 @@ export class ConatClient extends EventEmitter {
     });
   };
 
-  primus = ({
-    project_id,
-    channel,
-  }: {
-    project_id: string;
-    channel?: string;
-  }) => {
-    let subject = projectSubject({
-      project_id,
-      service: "primus",
-    });
-    if (channel) {
-      subject += "." + channel;
-    }
-    const routing = this.getProjectRoutingInfo(project_id);
-    if (!routing) {
-      this.noteProjectRuntimeHubFallback({ project_id, caller: "primus" });
-    }
-    const client = routing
-      ? this.getOrCreateRoutedHubClient({ ...routing, project_id })
-      : this.conat();
-    return client.socket.connect(subject, {
-      desc: `primus-${channel ?? ""}`,
-    });
-  };
-
   pubsub = async ({
     project_id,
     path,

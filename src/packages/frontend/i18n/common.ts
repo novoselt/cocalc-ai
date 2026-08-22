@@ -510,12 +510,6 @@ export const labels = defineMessages({
     defaultMessage: "Log",
     description: "a short label for showing a chronological log of activities",
   },
-  x11_desktop: {
-    id: "labels.x11_desktop",
-    defaultMessage: "Graphical X11 Desktop",
-    description:
-      "Short label of a button to create an emulated X11 desktop environment",
-  },
   chatroom: {
     id: "labels.chatroom",
     defaultMessage: "Chatroom",
