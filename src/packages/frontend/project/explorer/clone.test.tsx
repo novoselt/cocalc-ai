@@ -44,6 +44,7 @@ test("opens and confirms cloning when tooltips are hidden", async () => {
 
   fireEvent.click(screen.getByRole("button", { name: "Create Clone" }));
   expect(cloneProject).toHaveBeenCalledWith({
+    grant_compute_vm_access: false,
     project_id: "project-id",
     title: "Clone of Source project",
   });

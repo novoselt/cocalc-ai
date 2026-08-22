@@ -21,6 +21,7 @@ describe("CoCalc Plus docs filter", () => {
       new Set([
         "projects.open-terminal",
         "terminal.use-terminal",
+        "terminal.graphical-applications",
         "files.project-files",
         "files.explorer",
         "files.markdown",
