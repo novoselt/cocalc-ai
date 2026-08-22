@@ -1266,6 +1266,9 @@ export function providerRuntimePublicAddressStatus(opts: {
   observed: string | undefined;
 }): "ready" | "pending" | "mismatch" {
   if (opts.provider === "nebius" && !opts.observed) return "pending";
+  if (opts.provider === "nebius" && !opts.expected && opts.observed) {
+    return "ready";
+  }
   if (opts.observed === opts.expected) return "ready";
   return "mismatch";
 }
@@ -1613,6 +1616,10 @@ export function runtimeIdentityChanged(
 }
 
 async function ensureVmPublicAddress(vm: ComputeVmRow): Promise<ComputeVmRow> {
+  // Nebius-managed VMs use provider-assigned dynamic addresses. The instance
+  // controller records the observed address and updates DNS after creation.
+  // Existing leases with a reserved address keep using it until it is released.
+  if (vm.provider === "nebius" && !vm.public_address_id) return vm;
   const observed = await observeVmPhase(vm, "ensure_public_address", async () =>
     ensureProviderComputePublicAddress(vm),
   );

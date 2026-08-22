@@ -377,6 +377,13 @@ describe("compute VM work failure state", () => {
       }),
     ).toBe("pending");
     expect(
+      providerRuntimePublicAddressStatus({
+        provider: "nebius",
+        expected: undefined,
+        observed: "203.0.113.11",
+      }),
+    ).toBe("ready");
+    expect(
       shouldRecoverSpotCapacityFailure(
         {
           desired_pricing_model: "spot",
