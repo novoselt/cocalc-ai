@@ -580,6 +580,68 @@ describe("useCodexLog", () => {
     );
   });
 
+  it("preserves a buffered final preview delta when generation ends", async () => {
+    jest.useFakeTimers();
+    const stream = new FakeDstream();
+    dstreamMock.mockResolvedValue(stream);
+    conatMock.mockReturnValue({
+      subscribe: jest.fn(),
+      sync: {
+        akv: () => ({ get: jest.fn(() => new Promise(() => {})) }),
+      },
+    });
+
+    const props = {
+      logKey: "log-key-projected-final-delta",
+      liveLogStream: "preview-stream-final-delta",
+      liveStreamIsProjection: true,
+    } as const;
+    const mounted = render(
+      <LiveResponseComponent {...props} generating={true} />,
+    );
+
+    await waitFor(() => expect(stream.listenerCount("change")).toBe(1));
+    act(() => {
+      stream.push({
+        type: "event",
+        seq: 1,
+        time: 10,
+        event: {
+          type: "message",
+          text: "There is significant engineering around AI",
+          delta: false,
+        },
+      });
+    });
+    expect(screen.getByTestId("live-response").textContent).toBe(
+      "There is significant engineering around AI",
+    );
+
+    act(() => {
+      stream.push({
+        type: "event",
+        seq: 2,
+        time: 20,
+        event: {
+          type: "message",
+          text: " agents.",
+          delta: true,
+        },
+      });
+    });
+    expect(screen.getByTestId("live-response").textContent).toBe(
+      "There is significant engineering around AI",
+    );
+
+    mounted.rerender(<LiveResponseComponent {...props} generating={false} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("live-response").textContent).toBe(
+        "There is significant engineering around AI agents.",
+      );
+    });
+  });
+
   it("restores a running preview from memory and resumes after its stream sequence", async () => {
     const first = new FakeDstream(
       [
