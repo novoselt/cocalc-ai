@@ -208,7 +208,7 @@ function formatCodexUsageReason(reason?: string): string | undefined {
     reason.includes("account/rateLimits/read") ||
     reason.includes("authentication required to read rate limits")
   ) {
-    return "ChatGPT Codex usage is connected, but live rate-limit details are not available from Codex right now. Use the ChatGPT usage page for the latest limits.";
+    return "Codex could not authenticate the stored ChatGPT sign-in. Sign in again, then retry the usage check.";
   }
   return reason;
 }
@@ -909,6 +909,28 @@ function CodexCredentialsPanelBody({
     }
   }, [deviceAuthPending, embedded, openSubscriptionAuthPanel]);
 
+  const codexUsageAuthProblem = isCodexUsageAuthProblem(codexUsageStatus);
+  const codexConnectionVerified =
+    !codexUsageAuthProblem &&
+    (!!codexUsageStatus?.available ||
+      !!getChatGptAccountInfo(codexUsageStatus));
+  const codexConnectionChecking =
+    codexUsageLoading && !codexUsageStatus && !codexUsageAuthProblem;
+  const codexConnectionLabel = codexUsageAuthProblem
+    ? "Sign-in needs refresh"
+    : codexConnectionVerified
+      ? "Connected"
+      : codexConnectionChecking
+        ? "Checking sign-in"
+        : "Connection not verified";
+  const codexConnectionTitle = codexUsageAuthProblem
+    ? "Refresh your ChatGPT sign-in"
+    : codexConnectionVerified
+      ? "ChatGPT is connected"
+      : codexConnectionChecking
+        ? "Checking your ChatGPT sign-in"
+        : "Could not verify your ChatGPT sign-in";
+
   const content = (
     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
       <div style={recommendedCardStyle}>
@@ -918,33 +940,31 @@ function CodexCredentialsPanelBody({
               <Space wrap>
                 <Tag
                   color={
-                    isCodexUsageAuthProblem(codexUsageStatus)
+                    codexUsageAuthProblem
                       ? "orange"
-                      : "green"
+                      : codexConnectionVerified
+                        ? "green"
+                        : "gold"
                   }
                 >
-                  {isCodexUsageAuthProblem(codexUsageStatus)
-                    ? "Sign-in needs refresh"
-                    : "Connected"}
+                  {codexConnectionLabel}
                 </Tag>
                 <Text strong style={{ fontSize: 18 }}>
-                  {isCodexUsageAuthProblem(codexUsageStatus)
-                    ? "Refresh your ChatGPT sign-in"
-                    : "ChatGPT is connected"}
+                  {codexConnectionTitle}
                 </Text>
               </Space>
               <Text type="secondary">
-                {isCodexUsageAuthProblem(codexUsageStatus)
+                {codexUsageAuthProblem
                   ? "Your ChatGPT plan is selected for Codex, but the stored sign-in needs to be refreshed before Codex can use it."
-                  : "CoCalc is using your ChatGPT subscription for Codex. ChatGPT shows your exact plan and remaining Codex usage."}
+                  : codexConnectionVerified
+                    ? "CoCalc is using your ChatGPT subscription for Codex. ChatGPT shows your exact plan and remaining Codex usage."
+                    : codexConnectionChecking
+                      ? "CoCalc found a stored ChatGPT credential and is checking whether Codex can use it."
+                      : "CoCalc found a stored ChatGPT credential, but the live check did not confirm that Codex can use it. Refresh usage or sign in again."}
               </Text>
               <Space wrap>
                 <Button
-                  type={
-                    isCodexUsageAuthProblem(codexUsageStatus)
-                      ? "primary"
-                      : undefined
-                  }
+                  type={codexUsageAuthProblem ? "primary" : undefined}
                   onClick={() => void startDeviceAuth()}
                   loading={deviceAuthActionPending}
                   disabled={deviceAuth?.state === "pending"}

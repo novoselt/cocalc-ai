@@ -277,6 +277,7 @@ import {
   touchExternalCredential,
   upsertExternalCredential,
 } from "@cocalc/server/external-credentials/store";
+import { refreshCodexSubscriptionAuth } from "@cocalc/server/external-credentials/codex-subscription-refresh";
 import { getDedicatedHostPolicySnapshotLocal } from "@cocalc/server/project-host/admission";
 import {
   closeDedicatedHostPurchaseSessionLocal,
@@ -2040,6 +2041,14 @@ async function startExternalCredentialsService(): Promise<void> {
       }),
     revoke: async ({ id, owner_account_id }) =>
       await revokeExternalCredential({ id, owner_account_id }),
+    refreshCodexSubscription: async ({
+      owner_account_id,
+      previous_access_token_hash,
+    }) =>
+      await refreshCodexSubscriptionAuth({
+        ownerAccountId: owner_account_id,
+        previousAccessTokenHash: previous_access_token_hash,
+      }),
   };
   services.push(
     ...createInterBayExternalCredentialsHandlers({

@@ -2817,7 +2817,8 @@ export type ExternalCredentialMethod =
   | "has"
   | "touch"
   | "list"
-  | "revoke";
+  | "revoke"
+  | "refresh-codex-subscription";
 export type AccountProjectFeedMethod = "upsert" | "remove";
 export type AccountNotificationFeedMethod = "upsert";
 
@@ -3158,6 +3159,14 @@ export interface InterBayExternalCredentialsApi {
     scope?: ExternalCredentialSelector["scope"];
   }) => Promise<InterBayExternalCredentialInfo[]>;
   revoke: (opts: { id: string; owner_account_id?: string }) => Promise<boolean>;
+  refreshCodexSubscription: (opts: {
+    owner_account_id: string;
+    previous_access_token_hash: string;
+  }) => Promise<{
+    payload: string;
+    updated: Date;
+    refreshed: boolean;
+  }>;
 }
 
 export interface InterBayHostConnectionApi {
@@ -4788,6 +4797,10 @@ const EXTERNAL_CREDENTIAL_METHOD_SPECS = [
   { name: "touch", method: "touch" },
   { name: "list", method: "list" },
   { name: "revoke", method: "revoke" },
+  {
+    name: "refreshCodexSubscription",
+    method: "refresh-codex-subscription",
+  },
 ] as const satisfies ReadonlyArray<{
   name: ExternalCredentialName;
   method: ExternalCredentialMethod;

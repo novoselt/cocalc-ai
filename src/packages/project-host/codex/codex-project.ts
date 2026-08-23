@@ -53,7 +53,10 @@ import {
   resolveCodexAuthRuntime,
   resolveSharedCodexHome,
 } from "./codex-auth";
-import { syncSubscriptionAuthToRegistryIfChanged } from "./codex-auth-registry";
+import {
+  refreshSubscriptionAuthFromRegistry,
+  syncSubscriptionAuthToRegistryIfChanged,
+} from "./codex-auth-registry";
 import { beginSiteFundedCodexTurn } from "./codex-site-metering";
 import type {
   CodexSiteFundedTurnRequest,
@@ -820,39 +823,57 @@ async function resolveAppServerLoginHint(
   }
 }
 
-async function resolveLatestAppServerLoginHint({
-  projectId,
-  accountId,
-}: {
-  projectId: string;
-  accountId?: string;
-}): Promise<CodexAppServerLoginHint | undefined> {
-  const authRuntime = await resolveCodexAuthRuntime({
-    projectId,
-    accountId,
-  });
-  return await resolveAppServerLoginHint(authRuntime);
-}
-
 function createAppServerRequestHandler({
   projectId,
   accountId,
   authRuntime,
+  appServerLogin,
 }: {
   projectId: string;
   accountId?: string;
   authRuntime: CodexAuthRuntime;
+  appServerLogin?: CodexAppServerLoginHint;
 }): CodexAppServerRequestHandler {
+  let lastAccessToken =
+    appServerLogin?.type === "chatgptAuthTokens"
+      ? appServerLogin.accessToken
+      : undefined;
   return async (request: CodexAppServerRequest) => {
     switch (request.method) {
       case "account/chatgptAuthTokens/refresh": {
-        const refreshed = await resolveLatestAppServerLoginHint({
-          projectId,
-          accountId,
-        });
-        if (refreshed?.type !== "chatgptAuthTokens") {
+        if (
+          authRuntime.source !== "subscription" ||
+          !accountId ||
+          !authRuntime.codexHome ||
+          !lastAccessToken
+        ) {
           throw new Error(
             `chatgptAuthTokens refresh is not available for auth source ${authRuntime.source}`,
+          );
+        }
+        let refreshed = await resolveAppServerLoginHint(authRuntime);
+        if (
+          refreshed?.type !== "chatgptAuthTokens" ||
+          refreshed.accessToken === lastAccessToken
+        ) {
+          await refreshSubscriptionAuthFromRegistry({
+            projectId,
+            accountId,
+            codexHome: authRuntime.codexHome,
+            previousAccessTokenHash: createHash("sha256")
+              .update(lastAccessToken)
+              .digest("hex"),
+          });
+          refreshed = await resolveAppServerLoginHint(authRuntime);
+        }
+        if (refreshed?.type !== "chatgptAuthTokens") {
+          throw new Error(
+            "ChatGPT sign-in refresh returned no usable credential. Sign in again with ChatGPT in CoCalc.",
+          );
+        }
+        if (refreshed.accessToken === lastAccessToken) {
+          throw new Error(
+            "ChatGPT sign-in refresh returned an unchanged access token. Sign in again with ChatGPT in CoCalc.",
           );
         }
         const previousAccountId =
@@ -873,6 +894,7 @@ function createAppServerRequestHandler({
             },
           );
         }
+        lastAccessToken = refreshed.accessToken;
         return {
           accessToken: refreshed.accessToken,
           chatgptAccountId: refreshed.chatgptAccountId,
@@ -1670,11 +1692,6 @@ async function spawnCodexAppServerInProjectRuntime({
     preference: paymentSource,
   });
   logResolvedCodexAuthRuntime(projectId, accountId, authRuntime);
-  const handleAppServerRequest = createAppServerRequestHandler({
-    projectId,
-    accountId,
-    authRuntime,
-  });
   await ensureProjectContainerRunning({ projectId, accountId });
   const { home, scratch } = await localPath({ project_id: projectId });
   await scrubBrokenProjectCodexAuthArtifacts(home, authRuntime);
@@ -1697,6 +1714,12 @@ async function spawnCodexAppServerInProjectRuntime({
   const appServerLogin = siteFundedTurn
     ? undefined
     : await resolveAppServerLoginHint(authRuntime);
+  const handleAppServerRequest = createAppServerRequestHandler({
+    projectId,
+    accountId,
+    authRuntime,
+    appServerLogin,
+  });
   const name = projectContainerName(projectId);
   const cliTokenLease = await createProjectCliTokenLease({
     projectId,

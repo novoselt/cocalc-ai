@@ -140,6 +140,15 @@ async function readLocalAuth(codexHome: string): Promise<string | undefined> {
   }
 }
 
+function authLastRefreshMs(payload: string): number | undefined {
+  try {
+    const value = Date.parse(JSON.parse(payload)?.last_refresh);
+    return Number.isFinite(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function localAuthSignature(
   codexHome: string,
 ): Promise<string | undefined> {
@@ -161,6 +170,23 @@ async function localAuthMtimeMs(
     return stat.mtimeMs;
   } catch {
     return undefined;
+  }
+}
+
+async function writeLocalAuth({
+  codexHome,
+  payload,
+}: {
+  codexHome: string;
+  payload: string;
+}): Promise<void> {
+  await fs.mkdir(codexHome, { recursive: true, mode: 0o700 });
+  const authPath = join(codexHome, "auth.json");
+  await fs.writeFile(authPath, payload, { mode: 0o600 });
+  await ensureCodexCredentialsStoreFile(codexHome);
+  const signature = await localAuthSignature(codexHome);
+  if (signature) {
+    syncedSubscriptionAuthSignatures.set(codexHome, signature);
   }
 }
 
@@ -232,10 +258,58 @@ export async function syncSubscriptionAuthToRegistryIfChanged({
   if (!force && syncedSubscriptionAuthSignatures.get(codexHome) === signature) {
     return { ok: true, skipped: true };
   }
+  const payload = await readLocalAuth(codexHome);
+  if (!payload) {
+    return { ok: false, skipped: true };
+  }
+  if (!force) {
+    const caller = getHubCaller();
+    if (!caller) return { ok: false, skipped: true };
+    try {
+      const current = await callHub({
+        ...caller,
+        name: "hosts.getExternalCredential",
+        args: [
+          {
+            project_id: projectId,
+            selector: {
+              ...SUBSCRIPTION_CREDENTIAL_SELECTOR,
+              owner_account_id: accountId,
+            },
+          },
+        ],
+        timeout: 15_000,
+      });
+      const registryPayload = current?.payload;
+      if (typeof registryPayload === "string" && registryPayload.trim()) {
+        if (registryPayload === payload) {
+          syncedSubscriptionAuthSignatures.set(codexHome, signature);
+          return { ok: true, id: current.id, skipped: true };
+        }
+        const localRefreshMs = authLastRefreshMs(payload);
+        const registryRefreshMs = authLastRefreshMs(registryPayload);
+        if (
+          localRefreshMs == null ||
+          (registryRefreshMs != null && registryRefreshMs >= localRefreshMs)
+        ) {
+          await writeLocalAuth({ codexHome, payload: registryPayload });
+          return { ok: true, id: current.id, skipped: true };
+        }
+      }
+    } catch (err) {
+      logger.debug("failed comparing subscription auth with registry", {
+        projectId,
+        accountId,
+        err: `${err}`,
+      });
+      return { ok: false, skipped: true };
+    }
+  }
   const result = await pushSubscriptionAuthToRegistry({
     projectId,
     accountId,
     codexHome,
+    content: payload,
   });
   if (result.ok) {
     syncedSubscriptionAuthSignatures.set(codexHome, signature);
@@ -402,14 +476,7 @@ export async function pullSubscriptionAuthFromRegistry({
         };
       }
     }
-    await fs.mkdir(codexHome, { recursive: true, mode: 0o700 });
-    const authPath = join(codexHome, "auth.json");
-    await fs.writeFile(authPath, payload, { mode: 0o600 });
-    await ensureCodexCredentialsStoreFile(codexHome);
-    const signature = await localAuthSignature(codexHome);
-    if (signature) {
-      syncedSubscriptionAuthSignatures.set(codexHome, signature);
-    }
+    await writeLocalAuth({ codexHome, payload });
     return { pulled: true, source: "registry", registryUpdatedAt };
   } catch (err) {
     logger.debug("pullSubscriptionAuthFromRegistry failed", {
@@ -419,6 +486,51 @@ export async function pullSubscriptionAuthFromRegistry({
     });
     return { pulled: false };
   }
+}
+
+export async function refreshSubscriptionAuthFromRegistry({
+  projectId,
+  accountId,
+  codexHome,
+  previousAccessTokenHash,
+}: {
+  projectId: string;
+  accountId: string;
+  codexHome: string;
+  previousAccessTokenHash: string;
+}): Promise<{ refreshed: boolean; updated?: string }> {
+  const caller = getHubCaller();
+  if (!caller) {
+    throw new Error(
+      "ChatGPT sign-in cannot be refreshed because the project host is disconnected from the hub.",
+    );
+  }
+  const result = await callHub({
+    ...caller,
+    name: "hosts.refreshCodexSubscriptionAuth",
+    args: [
+      {
+        project_id: projectId,
+        owner_account_id: accountId,
+        previous_access_token_hash: previousAccessTokenHash,
+      },
+    ],
+    timeout: 9_000,
+  });
+  const payload = result?.payload;
+  if (typeof payload !== "string" || !payload.trim()) {
+    throw new Error(
+      "ChatGPT sign-in refresh returned no credential. Sign in again with ChatGPT in CoCalc.",
+    );
+  }
+  await writeLocalAuth({ codexHome, payload });
+  return {
+    refreshed: !!result?.refreshed,
+    updated:
+      typeof result?.updated === "string" || result?.updated instanceof Date
+        ? new Date(result.updated).toISOString()
+        : undefined,
+  };
 }
 
 async function getCredentialPayloadFromRegistry({

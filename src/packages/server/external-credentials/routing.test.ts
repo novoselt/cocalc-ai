@@ -13,6 +13,7 @@ let getInterBayBridgeMock: jest.Mock;
 let upsertExternalCredentialMock: jest.Mock;
 let getExternalCredentialMock: jest.Mock;
 let listExternalCredentialsMock: jest.Mock;
+let refreshCodexSubscriptionAuthMock: jest.Mock;
 
 jest.mock("@cocalc/server/bay-config", () => ({
   getConfiguredBayId: (...args: any[]) => getConfiguredBayIdMock(...args),
@@ -46,6 +47,11 @@ jest.mock("./store", () => ({
   revokeExternalCredential: jest.fn(async () => true),
 }));
 
+jest.mock("./codex-subscription-refresh", () => ({
+  refreshCodexSubscriptionAuth: (...args: any[]) =>
+    refreshCodexSubscriptionAuthMock(...args),
+}));
+
 describe("external credential bay routing", () => {
   beforeEach(() => {
     jest.resetModules();
@@ -64,6 +70,11 @@ describe("external credential bay routing", () => {
     }));
     getExternalCredentialMock = jest.fn(async () => undefined);
     listExternalCredentialsMock = jest.fn(async () => []);
+    refreshCodexSubscriptionAuthMock = jest.fn(async () => ({
+      payload: "local-refreshed",
+      updated: new Date("2026-08-22T00:00:00Z"),
+      refreshed: true,
+    }));
     getInterBayBridgeMock = jest.fn(() => ({
       externalCredentials: jest.fn(() => ({
         upsert: jest.fn(async () => ({
@@ -72,6 +83,7 @@ describe("external credential bay routing", () => {
         })),
         get: jest.fn(async () => undefined),
         list: jest.fn(async () => []),
+        refreshCodexSubscription: jest.fn(),
       })),
     }));
   });
@@ -153,6 +165,34 @@ describe("external credential bay routing", () => {
     );
     expect(remoteUpsert).toHaveBeenCalled();
     expect(upsertExternalCredentialMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes subscription auth on the account home bay", async () => {
+    const remoteRefresh = jest.fn(async () => ({
+      payload: "remote-refreshed",
+      updated: new Date("2026-08-22T00:00:00Z"),
+      refreshed: true,
+    }));
+    resolveAccountHomeBayMock = jest.fn(async () => ({
+      home_bay_id: "bay-remote",
+    }));
+    getInterBayBridgeMock = jest.fn(() => ({
+      externalCredentials: jest.fn(() => ({
+        refreshCodexSubscription: remoteRefresh,
+      })),
+    }));
+    const { refreshCodexSubscriptionAuthRouted } = await import("./routing");
+
+    await refreshCodexSubscriptionAuthRouted({
+      owner_account_id: "11111111-1111-4111-8111-111111111111",
+      previous_access_token_hash: "a".repeat(64),
+    });
+
+    expect(remoteRefresh).toHaveBeenCalledWith({
+      owner_account_id: "11111111-1111-4111-8111-111111111111",
+      previous_access_token_hash: "a".repeat(64),
+    });
+    expect(refreshCodexSubscriptionAuthMock).not.toHaveBeenCalled();
   });
 
   it("stores site credentials on the seed bay", async () => {

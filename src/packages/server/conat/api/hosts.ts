@@ -150,6 +150,7 @@ import {
 import {
   getExternalCredentialRouted,
   hasExternalCredentialRouted,
+  refreshCodexSubscriptionAuthRouted,
   touchExternalCredentialRouted,
   upsertExternalCredentialRouted,
 } from "@cocalc/server/external-credentials/routing";
@@ -2812,6 +2813,40 @@ export async function getExternalCredential({
     revoked: result.revoked,
     last_used: result.last_used,
   };
+}
+
+export async function refreshCodexSubscriptionAuth({
+  host_id,
+  project_id,
+  owner_account_id,
+  previous_access_token_hash,
+}: {
+  host_id?: string;
+  project_id: string;
+  owner_account_id: string;
+  previous_access_token_hash: string;
+}): Promise<{
+  payload: string;
+  updated: Date;
+  refreshed: boolean;
+}> {
+  if (!host_id) throw new Error("host_id must be specified");
+  if (!project_id) throw new Error("project_id must be specified");
+  if (!owner_account_id) {
+    throw new Error("owner_account_id must be specified");
+  }
+  if (!/^[a-f0-9]{64}$/i.test(previous_access_token_hash)) {
+    throw new Error("previous_access_token_hash must be a SHA-256 hash");
+  }
+  await assertHostCredentialProjectAccess({
+    host_id,
+    project_id,
+    owner_account_id,
+  });
+  return await refreshCodexSubscriptionAuthRouted({
+    owner_account_id,
+    previous_access_token_hash,
+  });
 }
 
 export async function hasExternalCredential({
