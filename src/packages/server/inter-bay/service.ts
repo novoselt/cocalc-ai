@@ -88,6 +88,7 @@ import {
   resendEmailAuthChallengeDirect,
   startEmailAuthChallengeDirect,
 } from "@cocalc/server/auth/email/challenge-store";
+import { getArchiveLifecycleAccountStatusesLocal } from "@cocalc/server/accounts/archive-lifecycle-status";
 import adminVerifyEmailAddressLocal from "@cocalc/server/accounts/admin-verify-email-address";
 import sendEmailVerificationLocal from "@cocalc/server/accounts/send-email-verification";
 import {
@@ -1071,6 +1072,8 @@ async function startAccountLocalService(): Promise<void> {
     },
     getMembership: async ({ account_id }) =>
       await resolveMembershipForAccount(account_id),
+    getArchiveLifecycleStatuses: async ({ account_ids }) =>
+      await getArchiveLifecycleAccountStatusesLocal({ account_ids }),
     getMembershipDetails: async ({ account_id, refresh_usage_status }) =>
       await resolveMembershipDetailsForAccount(account_id, {
         refresh_usage_status,

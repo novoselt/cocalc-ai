@@ -281,6 +281,7 @@ export const TABLE_OWNERSHIP = {
       "project_access_request_blocks",
       "project_access_requests",
       "project_backup_indexes",
+      "project_archive_lifecycle_jobs",
       "project_collab_invite_blocks",
       "project_collab_invites",
       "project_entitlement_override_events",

@@ -953,6 +953,18 @@ export interface AccountLocalGetMembershipRequest {
   account_id: string;
 }
 
+export interface AccountLocalGetArchiveLifecycleStatusesRequest {
+  account_ids: string[];
+}
+
+export interface AccountLocalArchiveLifecycleStatus {
+  account_id: string;
+  resolved: boolean;
+  banned: boolean;
+  banned_at: string | null;
+  membership: MembershipResolution | null;
+}
+
 export interface AccountLocalGetMembershipDetailsRequest {
   account_id: string;
   refresh_usage_status?: boolean;
@@ -2611,6 +2623,7 @@ export type AccountLocalMethod =
   | "upsert-membership-grant"
   | "revoke-membership-grant"
   | "get-membership"
+  | "get-archive-lifecycle-statuses"
   | "get-membership-details"
   | "get-account-usage-overview"
   | "record-site-funded-codex-usage"
@@ -4053,6 +4066,9 @@ export interface InterBayAccountLocalApi {
   getMembership: (
     opts: AccountLocalGetMembershipRequest,
   ) => Promise<MembershipResolution>;
+  getArchiveLifecycleStatuses: (
+    opts: AccountLocalGetArchiveLifecycleStatusesRequest,
+  ) => Promise<AccountLocalArchiveLifecycleStatus[]>;
   getMembershipDetails: (
     opts: AccountLocalGetMembershipDetailsRequest,
   ) => Promise<MembershipDetails>;
@@ -6661,6 +6677,15 @@ export function createInterBayAccountLocalClient({
       method: "get-membership",
     }),
   });
+  const getArchiveLifecycleStatusesClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "getArchiveLifecycleStatuses">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "get-archive-lifecycle-statuses",
+    }),
+  });
   const getMembershipDetailsClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "getMembershipDetails">
   >({
@@ -7611,6 +7636,8 @@ export function createInterBayAccountLocalClient({
       await revokeMembershipGrantClient.revokeMembershipGrant(opts),
     getMembership: async (opts) =>
       await getMembershipClient.getMembership(opts),
+    getArchiveLifecycleStatuses: async (opts) =>
+      await getArchiveLifecycleStatusesClient.getArchiveLifecycleStatuses(opts),
     getMembershipDetails: async (opts) =>
       await getMembershipDetailsClient.getMembershipDetails(opts),
     getAccountUsageOverview: async (opts) =>
@@ -8389,6 +8416,20 @@ export function createInterBayAccountLocalHandler({
       }),
       impl: {
         getMembership: async (opts) => await impl.getMembership(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "getArchiveLifecycleStatuses">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "get-archive-lifecycle-statuses",
+      }),
+      impl: {
+        getArchiveLifecycleStatuses: async (opts) =>
+          await impl.getArchiveLifecycleStatuses(opts),
       },
     }),
     createServiceHandler<Pick<InterBayAccountLocalApi, "getMembershipDetails">>(

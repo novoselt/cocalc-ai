@@ -10,6 +10,13 @@ const recordAccountRevocationMock = jest.fn();
 const recordAccountSecurityStateMock = jest.fn();
 const clearIsBannedCacheMock = jest.fn();
 const stopRunningProjectsForBannedAccountMock = jest.fn();
+const ensureAccountBanTimestampSchemaMock = jest.fn();
+
+jest.mock("./ban-timestamp", () => ({
+  __esModule: true,
+  ensureAccountBanTimestampSchema: (...args: any[]) =>
+    ensureAccountBanTimestampSchemaMock(...args),
+}));
 
 jest.mock("@cocalc/server/accounts/rehome-fence", () => ({
   __esModule: true,
@@ -64,6 +71,9 @@ describe("account ban", () => {
     stopRunningProjectsForBannedAccountMock
       .mockReset()
       .mockResolvedValue({ stopped: 0, failed: 0, total: 0 });
+    ensureAccountBanTimestampSchemaMock
+      .mockReset()
+      .mockResolvedValue(undefined);
     withAccountRehomeWriteFenceMock.mockImplementation(async ({ fn }) => {
       await fn({
         query: jest.fn(async () => ({ rows: [], rowCount: 1 })),

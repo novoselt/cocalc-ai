@@ -13,6 +13,16 @@ let publishProjectAccountFeedEventsBestEffortMock: jest.Mock;
 let routedClientCloseMock: jest.Mock;
 let getExplicitProjectRoutedClientMock: jest.Mock;
 let assertCanPerformDestructiveStorageActionMock: jest.Mock;
+let createProjectArchiveLifecycleJobMock: jest.Mock;
+let updateProjectArchiveLifecycleJobMock: jest.Mock;
+
+jest.mock("@cocalc/server/projects/archive-lifecycle-db", () => ({
+  __esModule: true,
+  createProjectArchiveLifecycleJob: (...args: any[]) =>
+    createProjectArchiveLifecycleJobMock(...args),
+  updateProjectArchiveLifecycleJob: (...args: any[]) =>
+    updateProjectArchiveLifecycleJobMock(...args),
+}));
 
 jest.mock("@cocalc/server/projects/create", () => ({
   __esModule: true,
@@ -200,6 +210,10 @@ describe("projects.archiveProject", () => {
     assertCanPerformDestructiveStorageActionMock = jest.fn(
       async () => undefined,
     );
+    createProjectArchiveLifecycleJobMock = jest.fn(async () => ({
+      id: "77777777-7777-4777-8777-777777777777",
+    }));
+    updateProjectArchiveLifecycleJobMock = jest.fn(async () => undefined);
   });
 
   it("archives a provisioned project with durable backup metadata", async () => {
@@ -345,5 +359,76 @@ describe("projects.archiveProject", () => {
       expect.stringContaining("UPDATE projects"),
       expect.anything(),
     );
+  });
+
+  it("automatic archive never stops and requires its current claim", async () => {
+    const jobId = "77777777-7777-4777-8777-777777777777";
+    poolQueryMock.mockResolvedValueOnce({
+      rows: [
+        {
+          project_id: "11111111-1111-4111-8111-111111111111",
+          owning_bay_id: "bay-1",
+          host_id: "22222222-2222-4222-8222-222222222222",
+          backup_repo_id: "33333333-3333-4333-8333-333333333333",
+          provisioned: true,
+          state: { state: "archiving" },
+          host_status: "active",
+          last_changed: new Date("2026-06-15T04:00:00.000Z"),
+          last_changed_generation: 10,
+          last_backup: new Date("2026-06-15T05:00:00.000Z"),
+          last_backup_generation: 10,
+          archive_lifecycle_job_id: jobId,
+        },
+      ],
+    });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: "11111111-1111-4111-8111-111111111111",
+        mode: "automatic",
+        job_id: jobId,
+        reason: "free-inactive",
+        expected_host_id: "22222222-2222-4222-8222-222222222222",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(interBayStopMock).not.toHaveBeenCalled();
+    expect(deleteProjectDataOnHostMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("automatic archive rejects a busy project without stopping or deleting it", async () => {
+    const jobId = "77777777-7777-4777-8777-777777777777";
+    poolQueryMock.mockResolvedValueOnce({
+      rows: [
+        {
+          project_id: "11111111-1111-4111-8111-111111111111",
+          owning_bay_id: "bay-1",
+          host_id: "22222222-2222-4222-8222-222222222222",
+          backup_repo_id: "33333333-3333-4333-8333-333333333333",
+          provisioned: true,
+          state: { state: "running" },
+          host_status: "active",
+          last_backup: new Date("2026-06-15T05:00:00.000Z"),
+          archive_lifecycle_job_id: jobId,
+        },
+      ],
+    });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: "11111111-1111-4111-8111-111111111111",
+        mode: "automatic",
+        job_id: jobId,
+        reason: "free-inactive",
+        expected_host_id: "22222222-2222-4222-8222-222222222222",
+      }),
+    ).rejects.toThrow("automatic archive project claim is no longer current");
+
+    expect(interBayStopMock).not.toHaveBeenCalled();
+    expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
   });
 });

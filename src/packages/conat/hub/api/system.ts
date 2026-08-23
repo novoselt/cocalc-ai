@@ -1364,11 +1364,43 @@ export interface BayLoadProjectionStatus {
   last_success_at: string | null;
 }
 
+export interface BayLoadProjectArchiveLifecycleStatus {
+  running: boolean;
+  started: boolean;
+  last_started_at: string | null;
+  last_completed_at: string | null;
+  last_error: string | null;
+  last_result: {
+    checked_at: string;
+    enabled: boolean;
+    report_only: boolean;
+    selected: number;
+    eligible: number;
+    recorded: number;
+    completed: number;
+    stale: number;
+    failed: number;
+    rate_limited: number;
+    exclusions: Record<string, number | undefined>;
+    job_ids: string[];
+  } | null;
+  queue: {
+    oldest_queued_age_ms: number | null;
+    cleanup_debt: number;
+    by_reason_status: Array<{
+      reason: string;
+      status: string;
+      count: number;
+    }>;
+  };
+}
+
 export interface BayLoadInfo extends BayInfo {
   checked_at: string;
   browser_control: BayLoadBrowserControlStatus;
   hosts: BayLoadHostsStatus;
   parallel_ops: BayLoadParallelOpsStatus;
+  project_archive_lifecycle: BayLoadProjectArchiveLifecycleStatus;
   projections: {
     account_project_index: BayLoadProjectionStatus;
     account_collaborator_index: BayLoadProjectionStatus;
