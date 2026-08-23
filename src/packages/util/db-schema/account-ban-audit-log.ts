@@ -55,7 +55,6 @@ Table({
     },
     created: {
       type: "timestamp",
-      pg_type: "TIMESTAMPTZ NOT NULL DEFAULT NOW()",
       desc: "Creation time.",
     },
   },
