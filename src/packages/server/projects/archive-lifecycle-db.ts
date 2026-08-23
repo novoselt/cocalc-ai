@@ -184,9 +184,9 @@ export async function updateProjectArchiveLifecycleJob({
   await ensureProjectArchiveLifecycleSchema();
   await getPool().query(
     `UPDATE ${PROJECT_ARCHIVE_LIFECYCLE_TABLE}
-        SET status = $2,
-            completed_at = CASE WHEN $2 IN ('completed', 'stale', 'canceled', 'failed') THEN NOW() ELSE completed_at END,
-            next_attempt_at = CASE WHEN $2 = 'failed' THEN NOW() + INTERVAL '1 hour' ELSE NULL END,
+        SET status = $2::VARCHAR(32),
+            completed_at = CASE WHEN $2::VARCHAR(32) IN ('completed', 'stale', 'canceled', 'failed') THEN NOW() ELSE completed_at END,
+            next_attempt_at = CASE WHEN $2::VARCHAR(32) = 'failed' THEN NOW() + INTERVAL '1 hour' ELSE NULL END,
             failure_category = $3,
             error = $4,
             updated_at = NOW()

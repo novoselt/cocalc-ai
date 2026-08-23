@@ -15,7 +15,10 @@ jest.mock("./archive-lifecycle-schema", () => ({
   PROJECT_ARCHIVE_LIFECYCLE_TABLE: "project_archive_lifecycle_jobs",
 }));
 
-import { createProjectArchiveLifecycleJob } from "./archive-lifecycle-db";
+import {
+  createProjectArchiveLifecycleJob,
+  updateProjectArchiveLifecycleJob,
+} from "./archive-lifecycle-db";
 import type { ArchiveLifecycleProjectSnapshot } from "./archive-lifecycle-types";
 
 const project: ArchiveLifecycleProjectSnapshot = {
@@ -58,5 +61,18 @@ describe("project archive lifecycle job persistence", () => {
     expect(sql.match(/\$7::VARCHAR\(32\)/g)).toHaveLength(2);
     expect(sql).not.toMatch(/\$7(?!::VARCHAR\(32\))/);
     expect(parameters[6]).toBe("report-only");
+  });
+
+  it("casts every terminal status parameter reference consistently", async () => {
+    await updateProjectArchiveLifecycleJob({
+      job_id: "66666666-6666-4666-8666-666666666666",
+      status: "completed",
+    });
+
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, parameters] = query.mock.calls[0];
+    expect(sql.match(/\$2::VARCHAR\(32\)/g)).toHaveLength(3);
+    expect(sql).not.toMatch(/\$2(?!::VARCHAR\(32\))/);
+    expect(parameters[1]).toBe("completed");
   });
 });
