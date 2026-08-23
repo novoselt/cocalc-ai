@@ -62,7 +62,7 @@ export function Blit({ is_current, project_id, reload }: Props) {
         throw new Error(
           `The project host is missing CoCalc graphical application tools: ${prerequisites.missingTools.join(
             ", ",
-          )}. Upgrade the project host tools bundle and retry.`,
+          )}. Restart the project and retry.`,
         );
       }
       if (prerequisites.missingPackages.length) {

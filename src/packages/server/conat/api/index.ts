@@ -55,6 +55,7 @@ import * as legacyMigration from "./legacy-migration";
 import * as compute from "./compute";
 import * as publicDirectoryShares from "./public-directory-shares";
 import * as growthAnalytics from "./growth-analytics";
+import * as commercialOrders from "./commercial-orders";
 
 import getLogger from "@cocalc/backend/logger";
 import { type HubApi, getUserId, transformArgs } from "@cocalc/conat/hub/api";
@@ -100,6 +101,7 @@ export const hubApi: HubApi = {
   compute,
   publicDirectoryShares,
   growthAnalytics,
+  commercialOrders,
   ssh,
   reflect,
 };

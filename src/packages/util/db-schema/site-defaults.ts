@@ -120,6 +120,13 @@ export type SiteSettingsKeys =
   | "public_signup_without_registration_token"
   | "legacy_migration_enabled"
   | "legacy_migration_page_message"
+  | "commercial_receivables_visible"
+  | "commercial_receivables_mutations_enabled"
+  | "commercial_receivables_stripe_drafts_enabled"
+  | "commercial_receivables_stripe_send_enabled"
+  | "commercial_receivables_manual_settlement_enabled"
+  | "commercial_receivables_reconciliation_enabled"
+  | "commercial_receivables_fulfillment_enabled"
   | "project_hosts_google-cloud_enabled"
   | "project_hosts_hyperstack_enabled"
   | "project_hosts_lambda_enabled"
@@ -979,6 +986,76 @@ export const site_settings_conf: SiteSettings = {
     tags: ["Migration"],
     group: "Access & Identity",
     subgroup: "Migration",
+  },
+  commercial_receivables_visible: {
+    name: "Show commercial receivables",
+    desc: "Allow admins and authorized agents to read the shared commercial order queue and audit history. Disable mutations separately so rollback does not hide operational records.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
+  commercial_receivables_mutations_enabled: {
+    name: "Enable commercial order mutations",
+    desc: "Allow reviewed creation, assignment, notes, approval, updates, cancellation, and backfill of commercial orders.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
+  commercial_receivables_stripe_drafts_enabled: {
+    name: "Enable commercial Stripe invoice drafts",
+    desc: "Allow fresh-auth admins to create draft Stripe invoices from approved commercial orders. Drafts are not sent automatically.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization", "Stripe"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
+  commercial_receivables_stripe_send_enabled: {
+    name: "Enable commercial Stripe invoice send",
+    desc: "Allow fresh-auth admins to finalize, send, and void Stripe invoices for commercial orders.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization", "Stripe"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
+  commercial_receivables_manual_settlement_enabled: {
+    name: "Enable commercial manual settlements",
+    desc: "Allow fresh-auth admins to record externally verified checks, wires, and other manual commercial payments.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
+  commercial_receivables_reconciliation_enabled: {
+    name: "Enable commercial invoice reconciliation",
+    desc: "Process the durable commercial Stripe webhook inbox and periodically reconcile stale nonterminal invoices.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization", "Stripe"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
+  commercial_receivables_fulfillment_enabled: {
+    name: "Enable commercial fulfillment",
+    desc: "Allow fresh-auth admins to provision, link, or end site-license fulfillment from approved commercial orders.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization", "Licensing"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
   },
   openai_enabled: {
     name: "Enable OpenAI Integration",

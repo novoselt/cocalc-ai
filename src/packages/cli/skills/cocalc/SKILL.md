@@ -1,6 +1,6 @@
 ---
 name: cocalc
-description: Use when working with CoCalc-native documents and workflows, especially `.tasks`, `.chat`, `.board`, and `.slides` files. Prefer this skill when an agent should operate on live collaborative documents through `cocalc exec`, inspect document history through `api.timetravel`, or use CoCalc export/import for structured local transformations and archives.
+description: Use when working with CoCalc-native documents and workflows, including complete project-side builds of `.tex`, `.Rnw`, `.Rtex`, `.Rmd`, and `.qmd` documents; live `.tasks`, `.chat`, `.board`, and `.slides` files; notebook operations; document history; and CoCalc export/import workflows.
 ---
 
 # CoCalc
@@ -17,10 +17,11 @@ Prefer these paths in this order:
 
 1. `cocalc docs ...` when the user asks a CoCalc usage question or explicitly asks to use docs
 2. `cocalc rootfs recipe ls` / `cocalc rootfs recipe explain ...` / `cocalc rootfs recipe run ... --here` when asked to install software, language stacks, Jupyter kernels, app launchers, IDEs, or project-wide tooling
-3. `cocalc exec-api` + `cocalc exec`
-4. `cocalc project jupyter ...` for notebook cell listing, mutation, execution, and live-run inspection
-5. `cocalc export ...` / `cocalc import ...`
-6. `cocalc browser exec-api` + `cocalc browser exec`
+3. `cocalc project build ...` when compiling or verifying supported LaTeX-based, R Markdown, or Quarto documents
+4. `cocalc exec-api` + `cocalc exec`
+5. `cocalc project jupyter ...` for notebook cell listing, mutation, execution, and live-run inspection
+6. `cocalc export ...` / `cocalc import ...`
+7. `cocalc browser exec-api` + `cocalc browser exec`
 
 ## Software Installs: Check RootFS Recipes First
 
@@ -59,9 +60,55 @@ This is the key rule:
 
 - Use `cocalc docs search/show/actions` for version-matched product documentation.
 - Use backend exec for live collaborative document operations.
+- Use `cocalc project build` for complete supported document pipelines, not one compiler stage in isolation.
 - Use `cocalc project jupyter` for durable notebook operations that must keep working even if the browser refreshes or disconnects.
 - Use export/import for archive, bulk transformation, or document types that do not yet have a live backend API.
 - Use browser exec only when the task is inherently about the browser UI or when notebook work needs ephemeral UI context such as the active cell, selection, or viewport.
+
+## Document Builds: Use The Complete Project Pipeline
+
+When creating, editing, or verifying a supported document, inspect the installed
+command first and then run the complete project-side build:
+
+```bash
+cocalc project build -h
+cocalc project build path/to/paper.tex
+```
+
+Supported source extensions are:
+
+- `.tex` for LaTeX, including required SageTeX and PythonTeX stages
+- `.Rnw` and `.Rtex` for Knitr followed by the complete LaTeX pipeline
+- `.Rmd` for R Markdown rendering
+- `.qmd` for Quarto rendering
+
+This is the same authoritative pipeline used by CoCalc editors. It runs on the
+project, does not require an open browser, waits for completion by default, and
+returns a nonzero process status when compilation or verification fails. Do not
+substitute `pdflatex`, `latexmk`, `Rscript`, or `quarto` alone when the goal is to
+verify the full CoCalc build pipeline.
+
+The command builds saved project files. If a source is open with unsaved
+collaborative changes, save it before starting the CLI build. A successful
+process status means the complete selected pipeline succeeded; missing tools,
+unsupported inputs, compiler failures, cancellation, stale-source rejection,
+and timeouts are failures. Inspect human output or use the CLI's JSON mode for
+the build ID, stages, diagnostics, artifacts, and final state.
+
+Timeouts have separate meanings:
+
+```bash
+# Limit how long this CLI invocation waits. This does not cancel the build.
+cocalc --timeout 20m project build path/to/paper.tex
+
+# Set the project-side whole-build deadline. Expiry terminates the active stage.
+cocalc project build path/to/paper.tex --build-timeout 15m
+```
+
+Use `--detach` when submission without waiting is intentional. Keep the returned
+build ID so status can be inspected later. Treat `cocalc project build -h` and
+the project service capability response as authoritative if available options
+or supported formats differ from this bundled guidance.
 
 ## CoCalc Docs First
 
@@ -396,6 +443,8 @@ Do not use browser exec for document operations that already have a backend API.
 
 Use this skill for requests like:
 
+- "Build this LaTeX paper with the same pipeline CoCalc uses and fix every error."
+- "Render this R Markdown or Quarto document without opening a browser."
 - "Mark this task done and add a note explaining the fix."
 - "Find the version of this document from last week that mentioned elliptic curves."
 - "Export this chat so another agent can analyze it."

@@ -44,6 +44,11 @@ import { useProjectState } from "../project/page/project-state-hook";
 import { useProjectHasInternetAccess } from "../project/settings/has-internet-access-hook";
 import { shouldOpenProjectsNavShortcut } from "./projects-nav-shortcut";
 import {
+  getStoredProjectsNavMode,
+  storeProjectsNavMode,
+  type ProjectsNavMode,
+} from "./projects-nav-mode";
+import {
   ProjectThemeAvatar,
   projectThemeColor,
   projectThemeFromProject,
@@ -77,22 +82,9 @@ const PROJECT_TITLE_FADE_STYLE: CSS = {
   overflow: "hidden",
   whiteSpace: "nowrap",
   WebkitMaskImage:
-    "linear-gradient(90deg, #000 calc(100% - 18px), transparent)",
-  maskImage: "linear-gradient(90deg, #000 calc(100% - 18px), transparent)",
+    "linear-gradient(90deg, #000 calc(100% - 10px), transparent)",
+  maskImage: "linear-gradient(90deg, #000 calc(100% - 10px), transparent)",
 } as const;
-
-type ProjectsNavMode = "tabs" | "dropdown";
-
-const PROJECT_NAV_MODE_KEY = "cocalc:projects-nav-mode";
-const DEFAULT_PROJECT_NAV_MODE: ProjectsNavMode = "dropdown";
-
-function getStoredProjectsNavMode(): ProjectsNavMode {
-  if (typeof window === "undefined") return DEFAULT_PROJECT_NAV_MODE;
-  const stored = window.localStorage.getItem(PROJECT_NAV_MODE_KEY);
-  return stored === "tabs" || stored === "dropdown"
-    ? stored
-    : DEFAULT_PROJECT_NAV_MODE;
-}
 
 interface ProjectTabProps {
   project_id: string;
@@ -328,10 +320,11 @@ function ProjectTab({ project_id }: ProjectTabProps) {
 interface ProjectsNavProps {
   style?: CSSProperties;
   height: number; // px
+  onModeChange?: (mode: ProjectsNavMode) => void;
 }
 
 export function ProjectsNav(props: ProjectsNavProps) {
-  const { style, height } = props;
+  const { style, height, onModeChange } = props;
   const actions = useActions("page");
   const projectActions = useActions("projects");
   const activeTopTab = useTypedRedux("page", "active_top_tab");
@@ -352,9 +345,9 @@ export function ProjectsNav(props: ProjectsNavProps) {
   const selectRef = useRef<any>(null);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(PROJECT_NAV_MODE_KEY, mode);
-  }, [mode]);
+    storeProjectsNavMode(mode);
+    onModeChange?.(mode);
+  }, [mode, onModeChange]);
 
   useEffect(() => {
     function handleKeydown(e: KeyboardEvent) {
@@ -782,11 +775,17 @@ export function ProjectsNav(props: ProjectsNavProps) {
             alignItems: "center",
             gap: "8px",
             height: `${height}px`,
-            paddingTop: "2px",
-            paddingBottom: "2px",
           }}
         >
-          <div style={{ padding: "0 8px", flex: "0 0 auto" }}>
+          <div
+            style={{
+              alignItems: "center",
+              display: "flex",
+              flex: "0 0 auto",
+              height: "100%",
+              padding: "0 8px",
+            }}
+          >
             <Tooltip
               title={
                 mode === "tabs" ? "Switch to project list" : "Switch to tabs"
@@ -807,7 +806,7 @@ export function ProjectsNav(props: ProjectsNavProps) {
                 onDragEnd={onDragEnd}
                 items={project_ids}
                 maxItemWidth={360}
-                itemChromeWidth={30}
+                itemChromeWidth={14}
                 overflowWidth={36}
               >
                 <div onKeyDownCapture={onTabKeyDown}>

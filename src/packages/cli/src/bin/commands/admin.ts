@@ -51,6 +51,7 @@ import type {
   LaunchSmokeResult,
   LaunchSmokeStepResult,
 } from "@cocalc/conat/hub/api/system";
+import { registerReceivablesCommand } from "./admin/receivables";
 
 export type AdminCommandDeps = {
   withContext: any;
@@ -1142,6 +1143,12 @@ Merge comments are private unless their corresponding --*-comment-public flag is
   const adminSettings = admin
     .command("settings")
     .description("admin site settings inspection");
+
+  registerReceivablesCommand(admin, {
+    withContext,
+    resolveAccountByIdentifier,
+    isValidUUID,
+  });
 
   async function resolveTargetAccountId(
     ctx: any,

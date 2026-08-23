@@ -60,6 +60,7 @@ import { startActiveUserMapHistoryMaintenance } from "@cocalc/server/active-user
 import { startGrowthAnalyticsMaintenance } from "@cocalc/server/growth-analytics/maintenance";
 import { startFrontendAssetHealthMaintenance } from "@cocalc/server/monitoring/frontend-assets";
 import { startProjectArchiveLifecycleMaintenance } from "@cocalc/server/projects/archive-lifecycle-maintenance";
+import { startCommercialReceivablesMaintenance } from "@cocalc/server/commercial-orders/maintenance";
 
 export { loadConatConfiguration };
 
@@ -167,6 +168,7 @@ export function startConatApiBackgroundWorkers(): void {
   if (isPrimaryBayWorker()) {
     startSiteFundedCodexMaintenance();
     startFrontendAssetHealthMaintenance();
+    startCommercialReceivablesMaintenance();
   }
   if (isPrimaryBayWorker()) {
     startPurchasesMaintenanceLoop();

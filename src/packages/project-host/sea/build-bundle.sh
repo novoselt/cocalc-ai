@@ -149,6 +149,20 @@ else
   echo "  (skipping dist; not found)"
 fi
 
+echo "- Verify canonical CoCalc skill"
+CANONICAL_SKILL="packages/cli/skills/cocalc/SKILL.md"
+mkdir -p "$OUT/skills"
+cp -r packages/project-host/dist/skills/. "$OUT/skills/"
+PACKAGED_SKILL="$OUT/skills/cocalc/SKILL.md"
+if [ ! -f "$PACKAGED_SKILL" ]; then
+  echo "ERROR: canonical CoCalc skill is missing from project-host bundle" >&2
+  exit 1
+fi
+if ! cmp -s "$CANONICAL_SKILL" "$PACKAGED_SKILL"; then
+  echo "ERROR: bundled CoCalc skill differs from $CANONICAL_SKILL" >&2
+  exit 1
+fi
+
 echo "- Copy static frontend and browser assets"
 if [ ! -f "packages/static/dist/app.html" ]; then
   echo "ERROR: packages/static/dist/app.html is required for exam mode" >&2

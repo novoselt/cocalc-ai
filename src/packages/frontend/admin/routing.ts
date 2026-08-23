@@ -14,6 +14,7 @@ export type AdminSection =
   | "revenue-analytics"
   | "membership-tiers"
   | "project-backup-shards"
+  | "receivables"
   | "retention"
   | "registration-tokens"
   | "rootfs"
@@ -37,6 +38,7 @@ const ADMIN_SECTIONS = new Set<AdminSection>([
   "revenue-analytics",
   "membership-tiers",
   "project-backup-shards",
+  "receivables",
   "retention",
   "registration-tokens",
   "rootfs",
@@ -52,6 +54,8 @@ const ADMIN_SECTIONS = new Set<AdminSection>([
 
 export type AdminRoute =
   | { kind: "index"; section?: AdminSection }
+  | { kind: "receivables-create" }
+  | { kind: "receivables-detail"; id: string }
   | { kind: "news-list" }
   | { kind: "news-editor"; id: string };
 
@@ -84,6 +88,14 @@ export function parseAdminRoute(
         return { kind: "news-list" };
       }
       return { kind: "news-editor", id };
+    case "receivables":
+      if (!id) {
+        return { kind: "index", section: "receivables" };
+      }
+      if (id === "new") {
+        return { kind: "receivables-create" };
+      }
+      return { kind: "receivables-detail", id };
     default:
       if (ADMIN_SECTIONS.has(section as AdminSection) && id == null) {
         return { kind: "index", section: section as AdminSection };
@@ -120,6 +132,15 @@ export function normalizeAdminRoute(route: AdminRouteLike): AdminRoute {
       }
       return { kind: "news-list" };
     }
+    case "receivables-detail": {
+      const id = normalized?.["id"];
+      if (typeof id === "string" && id) {
+        return { kind: "receivables-detail", id };
+      }
+      return { kind: "index", section: "receivables" };
+    }
+    case "receivables-create":
+      return { kind: "receivables-create" };
     case "index":
       return normalizeAdminSection(normalized?.["section"]);
     default:
@@ -148,6 +169,10 @@ export function getAdminTargetPath(route: AdminRouteLike): string {
       return "admin/news";
     case "news-editor":
       return `admin/news/${normalized.id}`;
+    case "receivables-detail":
+      return `admin/receivables/${encodeURIComponent(normalized.id)}`;
+    case "receivables-create":
+      return "admin/receivables/new";
   }
 }
 

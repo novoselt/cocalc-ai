@@ -2065,6 +2065,12 @@ export interface BayOpsSiteFundedCodexStatusRequest {
   reconcile?: boolean;
 }
 
+export interface BayOpsCommercialOrdersRequest {
+  action: string;
+  actor_account_id: string;
+  payload: Record<string, unknown>;
+}
+
 export interface AuthTokenRequiresRequest {}
 
 export interface AuthTokenRedeemRequest {
@@ -2754,7 +2760,8 @@ export type BayOpsMethod =
   | "heartbeat-site-funded-codex-turn"
   | "record-site-funded-codex-usage"
   | "finish-site-funded-codex-turn"
-  | "get-site-funded-codex-status";
+  | "get-site-funded-codex-status"
+  | "commercial-orders";
 export type ProjectCollabInviteMethod =
   | "upsert-inbox"
   | "delete-inbox"
@@ -4451,6 +4458,7 @@ export interface InterBayBayOpsApi {
   getSiteFundedCodexStatus: (
     opts: BayOpsSiteFundedCodexStatusRequest,
   ) => Promise<SiteFundedCodexStatus>;
+  commercialOrders: (opts: BayOpsCommercialOrdersRequest) => Promise<unknown>;
 }
 
 export interface InterBayAuthTokenApi {
@@ -10037,6 +10045,12 @@ export function createInterBayBayOpsClient({
       method: "set-webapp-crash-resolution",
     }),
   });
+  const commercialOrdersClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "commercialOrders">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({ dest_bay, method: "commercial-orders" }),
+  });
   return {
     getLoad: async (opts) => await loadClient.getLoad(opts),
     getBackups: async (opts) => await backupsClient.getBackups(opts),
@@ -10114,6 +10128,8 @@ export function createInterBayBayOpsClient({
       await finishSiteFundedCodexTurnClient.finishSiteFundedCodexTurn(opts),
     getSiteFundedCodexStatus: async (opts) =>
       await siteFundedCodexStatusClient.getSiteFundedCodexStatus(opts),
+    commercialOrders: async (opts) =>
+      await commercialOrdersClient.commercialOrders(opts),
   };
 }
 
@@ -10523,6 +10539,14 @@ export function createInterBayBayOpsHandlers({
       impl: {
         getProjectRuntimeSlotReport: async (opts) =>
           await impl.getProjectRuntimeSlotReport(opts),
+      },
+    }),
+    createServiceHandler<Pick<InterBayBayOpsApi, "commercialOrders">>({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({ dest_bay: bay_id, method: "commercial-orders" }),
+      impl: {
+        commercialOrders: async (opts) => await impl.commercialOrders(opts),
       },
     }),
   ];

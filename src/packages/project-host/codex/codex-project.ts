@@ -743,17 +743,54 @@ async function getOptionalCertMounts(): Promise<{
   return { mounts: [], env: {} };
 }
 
+async function resolvePackagedSkillsRoot(
+  explicitRoot?: string,
+): Promise<string> {
+  const runtimeEntryDir = require.main?.filename
+    ? dirname(require.main.filename)
+    : undefined;
+  const candidates = explicitRoot
+    ? [explicitRoot]
+    : [
+        // Compiled package and NCC: skills are beside codex/ or bundle/.
+        join(__dirname, "..", "skills"),
+        ...(runtimeEntryDir
+          ? [
+              join(runtimeEntryDir, "..", "skills"),
+              join(runtimeEntryDir, "..", "dist", "skills"),
+            ]
+          : []),
+        // Flat package/bundle fallback.
+        join(__dirname, "skills"),
+        // NCC bundle: bundle or main -> sibling dist/skills.
+        join(__dirname, "..", "dist", "skills"),
+        // Source execution and tests: project-host/codex -> cli/skills.
+        join(__dirname, "..", "..", "cli", "skills"),
+      ];
+  for (const candidate of candidates) {
+    try {
+      const manifests = await Promise.all(
+        BUILTIN_LAUNCHPAD_SKILLS.map((skillName) =>
+          fs.stat(join(candidate, skillName, "SKILL.md")),
+        ),
+      );
+      if (manifests.every((stat) => stat.isFile())) {
+        return candidate;
+      }
+    } catch {
+      // Try the next layout used by source, package, or NCC execution.
+    }
+  }
+  throw new Error(
+    `CoCalc project-host artifact is missing canonical skills (${candidates.join(", ")})`,
+  );
+}
+
 export async function getBuiltinLaunchpadSkillMounts(
   projectHome: string,
+  packagedSkillsRoot?: string,
 ): Promise<OptionalBindMount[]> {
-  const codexHome = `${process.env.COCALC_CODEX_HOME ?? ""}`.trim();
-  const home = `${process.env.HOME ?? ""}`.trim();
-  const hostSkillsRoot = codexHome
-    ? join(codexHome, "skills")
-    : home
-      ? join(home, ".codex", "skills")
-      : "";
-  if (!hostSkillsRoot) return [];
+  const skillsRoot = await resolvePackagedSkillsRoot(packagedSkillsRoot);
 
   const projectSkillsRoot = join(projectHome, ".codex", "skills");
   try {
@@ -764,14 +801,8 @@ export async function getBuiltinLaunchpadSkillMounts(
 
   const mounts: OptionalBindMount[] = [];
   for (const skillName of BUILTIN_LAUNCHPAD_SKILLS) {
-    const source = join(hostSkillsRoot, skillName);
+    const source = join(skillsRoot, skillName);
     const projectSkill = join(projectSkillsRoot, skillName);
-    try {
-      const sourceStat = await fs.stat(source);
-      if (!sourceStat.isDirectory()) continue;
-    } catch {
-      continue;
-    }
     try {
       const projectStat = await fs.stat(projectSkill);
       if (projectStat.isDirectory()) continue;

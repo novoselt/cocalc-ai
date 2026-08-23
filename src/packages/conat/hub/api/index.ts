@@ -27,6 +27,10 @@ import {
   publicDirectoryShares,
 } from "./public-directory-shares";
 import { type GrowthAnalyticsApi, growthAnalytics } from "./growth-analytics";
+import {
+  type CommercialOrdersApi,
+  commercialOrders,
+} from "./commercial-orders";
 
 export interface HubApi {
   system: System;
@@ -53,6 +57,7 @@ export interface HubApi {
   compute: ComputeApi;
   publicDirectoryShares: PublicDirectoryShares;
   growthAnalytics: GrowthAnalyticsApi;
+  commercialOrders: CommercialOrdersApi;
 }
 
 const HubApiStructure = {
@@ -80,6 +85,7 @@ const HubApiStructure = {
   compute,
   publicDirectoryShares,
   growthAnalytics,
+  commercialOrders,
 } as const;
 
 export function transformArgs({

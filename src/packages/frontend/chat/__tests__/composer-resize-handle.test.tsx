@@ -32,8 +32,7 @@ jest.mock("@cocalc/frontend/components", () => ({
 }));
 
 jest.mock("react-intl", () => ({
-  defineMessage: (value) => value,
-  defineMessages: (value) => value,
+  ...jest.requireActual("react-intl"),
   FormattedMessage: ({ defaultMessage }) => defaultMessage ?? null,
 }));
 
