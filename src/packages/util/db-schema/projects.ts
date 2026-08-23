@@ -82,7 +82,7 @@ Table({
       {
         name: "projects_archive_lifecycle_candidates_idx",
         query:
-          "(COALESCE(last_edited, created, to_timestamp(0)), project_id) " +
+          "(COALESCE(last_edited, created, make_timestamp(1970, 1, 1, 0, 0, 0)), project_id) " +
           "WHERE deleted IS NULL AND provisioned IS TRUE " +
           "AND COALESCE(deletion_protection, FALSE) IS FALSE " +
           "AND state ->> 'state' = 'opened'",
