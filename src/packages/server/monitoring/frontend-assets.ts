@@ -181,6 +181,24 @@ export async function probeFrontendAssets({
 
 let maintenanceStarted = false;
 
+export function frontendAssetMonitoringEnabled({
+  configured = process.env.COCALC_FRONTEND_ASSET_MONITORING,
+  nodeEnv = process.env.NODE_ENV,
+}: {
+  configured?: string;
+  nodeEnv?: string;
+} = {}): boolean {
+  const value = `${configured ?? ""}`.trim().toLowerCase();
+  if (value === "true") return true;
+  if (value === "false") return false;
+  // Dev upgrades do not create the retained-release history manifest. Keep
+  // their missing manifest from paging admins. Packaged bay workers currently
+  // leave NODE_ENV unset, so unknown/unset environments retain monitoring.
+  return !["development", "test"].includes(
+    `${nodeEnv ?? ""}`.trim().toLowerCase(),
+  );
+}
+
 export async function runFrontendAssetHealthCheck(): Promise<
   FrontendAssetProbeResult | undefined
 > {
@@ -215,8 +233,11 @@ export function startFrontendAssetHealthMaintenance({
   initialDelayMs?: number;
 } = {}): void {
   if (maintenanceStarted) return;
-  if (`${process.env.COCALC_FRONTEND_ASSET_MONITORING ?? "true"}` === "false") {
-    logger.info("frontend asset health maintenance disabled");
+  if (!frontendAssetMonitoringEnabled()) {
+    logger.info("frontend asset health maintenance disabled", {
+      node_env: process.env.NODE_ENV,
+      configured: process.env.COCALC_FRONTEND_ASSET_MONITORING,
+    });
     return;
   }
   maintenanceStarted = true;

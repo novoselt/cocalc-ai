@@ -1,7 +1,29 @@
 import {
+  frontendAssetMonitoringEnabled,
   parseFrontendAssetHistory,
   probeFrontendAssets,
 } from "./frontend-assets";
+
+test("disables frontend asset paging in development and test by default", () => {
+  expect(frontendAssetMonitoringEnabled({ nodeEnv: "production" })).toBe(true);
+  expect(frontendAssetMonitoringEnabled({ nodeEnv: "" })).toBe(true);
+  expect(frontendAssetMonitoringEnabled({ nodeEnv: "development" })).toBe(
+    false,
+  );
+  expect(frontendAssetMonitoringEnabled({ nodeEnv: "test" })).toBe(false);
+  expect(
+    frontendAssetMonitoringEnabled({
+      nodeEnv: "development",
+      configured: "true",
+    }),
+  ).toBe(true);
+  expect(
+    frontendAssetMonitoringEnabled({
+      nodeEnv: "production",
+      configured: "false",
+    }),
+  ).toBe(false);
+});
 
 test("parses current and previous safe content-addressed assets", () => {
   expect(
