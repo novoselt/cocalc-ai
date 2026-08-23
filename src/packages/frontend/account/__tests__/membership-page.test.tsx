@@ -80,6 +80,10 @@ jest.mock("../membership-tier-details", () => ({
   ),
 }));
 
+jest.mock("../navbar-membership-setting", () => ({
+  NavbarMembershipSetting: () => <div>membership navigation setting</div>,
+}));
+
 jest.mock("../balance-toward-subs", () => ({
   UseBalance: () => <div>balance-renewal-control</div>,
 }));
@@ -184,6 +188,16 @@ describe("MembershipPage", () => {
       seats: [],
     });
     refreshSiteLicenseAffiliationVerification.mockResolvedValue([]);
+  });
+
+  it("offers the navigation visibility setting", () => {
+    useMembershipSettingsData.mockReturnValue(
+      baseData({ membership: { class: "free", source: "free" } }),
+    );
+
+    render(<MembershipPage />);
+
+    expect(screen.getByText("membership navigation setting")).toBeVisible();
   });
 
   it("opens the personal plan chooser from a pending navigation intent", async () => {

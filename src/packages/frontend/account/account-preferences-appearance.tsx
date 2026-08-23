@@ -30,6 +30,7 @@ import {
 } from "./dark-mode";
 import { EditorSettingsColorScheme } from "./editor-settings/color-schemes";
 import { I18NSelector, I18N_MESSAGE, I18N_TITLE } from "./i18n-selector";
+import { NavbarMembershipSetting } from "./navbar-membership-setting";
 import { OtherSettings } from "./other-settings";
 import type { SettingsPageDefinition } from "./settings-page";
 import { TerminalSettings } from "./terminal-settings";
@@ -301,6 +302,7 @@ export function AccountPreferencesAppearance() {
             defaultMessage={`<strong>Hide Account Balance</strong> in navigation bar`}
           />
         </Switch>
+        <NavbarMembershipSetting />
         <LabeledRow
           label={
             <FormattedMessage
