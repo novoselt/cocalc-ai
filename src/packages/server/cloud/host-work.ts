@@ -1144,8 +1144,10 @@ async function refreshRuntimeNetworkInfo(row: any) {
     public_ip: instance?.public_ip ?? undefined,
     private_ip: instance?.private_ip ?? undefined,
     internal_hostname: instance?.internal_hostname ?? undefined,
-    provider_status: instance?.status ?? undefined,
+    provider_status:
+      instance?.status ?? (instance == null ? "missing" : undefined),
     mapped_status: mappedStatus,
+    instance_missing: instance == null,
   };
   logger.debug("refreshRuntimeNetworkInfo: result", {
     host_id: row.id,
@@ -1168,11 +1170,17 @@ async function scheduleRuntimeRefresh(row: any, opts?: { force?: boolean }) {
     });
     return;
   }
-  if (runtime.public_ip && !force) {
-    logger.debug("scheduleRuntimeRefresh: skip (already has public_ip)", {
+  const hasResolvedNetwork =
+    !!runtime.public_ip ||
+    (providerId === "nebius" &&
+      (!!runtime.private_ip || !!runtime.internal_hostname));
+  if (hasResolvedNetwork && !force) {
+    logger.debug("scheduleRuntimeRefresh: skip (network already resolved)", {
       host_id: row.id,
       provider: providerId ?? row.metadata?.machine?.cloud,
       public_ip: runtime.public_ip,
+      private_ip: runtime.private_ip,
+      internal_hostname: runtime.internal_hostname,
       force,
     });
     return;
@@ -2702,6 +2710,32 @@ async function handleRefreshRuntime(row: any) {
     force,
   });
   const network = await refreshRuntimeNetworkInfo(host);
+  if (network?.instance_missing) {
+    const observedAt = new Date().toISOString();
+    await updateHostRow(host.id, {
+      metadata: {
+        ...(host.metadata ?? {}),
+        runtime: {
+          ...runtime,
+          public_ip: undefined,
+          private_ip: undefined,
+          internal_hostname: undefined,
+          provider_status: "missing",
+          observed_at: observedAt,
+        },
+      },
+      last_seen: null,
+    });
+    logger.warn("handleRefreshRuntime: provider instance is missing", {
+      host_id: host.id,
+      provider: providerId ?? host.metadata?.machine?.cloud,
+      instance_id: runtime.instance_id,
+    });
+    if (providerId) {
+      await bumpReconcile(providerId, 1_000);
+    }
+    return;
+  }
   if (
     !network?.public_ip &&
     !network?.private_ip &&

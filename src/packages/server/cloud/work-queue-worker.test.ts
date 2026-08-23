@@ -2,6 +2,8 @@ import {
   enqueueCloudVmWork,
   processCloudVmWorkOnce,
 } from "@cocalc/server/cloud";
+import { upsertProjectHost } from "@cocalc/database/postgres/project-hosts";
+import { enqueueMissingRuntimeRefresh } from "./worker";
 import { before, after, getPool } from "@cocalc/server/test";
 import { delay } from "awaiting";
 
@@ -16,6 +18,98 @@ beforeEach(async () => {
 });
 
 describe("cloud vm worker loop", () => {
+  it("only refreshes active hosts whose provider network is unresolved", async () => {
+    const hostIds = {
+      healthyNebius: "5e0bab29-d8f2-44de-b9c1-e3cbc8f35c74",
+      missingNebius: "5514231d-0494-4186-b14f-29861184e9aa",
+      erroredNebius: "9a5e2209-bafc-44f2-a632-d217903a64a0",
+      startingNebius: "77fb4c70-b05c-43b2-8319-aec3822fc13a",
+      gcpWithoutPublicIp: "07ca7741-7be2-41ac-85f2-f410481166b6",
+    };
+    const insertHost = async ({
+      id,
+      cloud,
+      status,
+      runtime,
+    }: {
+      id: string;
+      cloud: string;
+      status: string;
+      runtime: Record<string, unknown>;
+    }) => {
+      await upsertProjectHost({
+        id,
+        name: `Refresh scan ${id}`,
+        region: "test-region",
+        status,
+        metadata: {
+          machine: { cloud },
+          runtime: {
+            provider: cloud,
+            instance_id: `instance-${id}`,
+            ...runtime,
+          },
+        },
+      });
+    };
+
+    try {
+      await insertHost({
+        id: hostIds.healthyNebius,
+        cloud: "nebius",
+        status: "running",
+        runtime: {
+          private_ip: "10.0.0.10",
+          internal_hostname: "healthy.internal",
+        },
+      });
+      await insertHost({
+        id: hostIds.missingNebius,
+        cloud: "nebius",
+        status: "running",
+        runtime: { provider_status: "missing" },
+      });
+      await insertHost({
+        id: hostIds.erroredNebius,
+        cloud: "nebius",
+        status: "error",
+        runtime: {},
+      });
+      await insertHost({
+        id: hostIds.startingNebius,
+        cloud: "nebius",
+        status: "starting",
+        runtime: {},
+      });
+      await insertHost({
+        id: hostIds.gcpWithoutPublicIp,
+        cloud: "gcp",
+        status: "running",
+        runtime: { private_ip: "10.0.0.11" },
+      });
+
+      expect(await enqueueMissingRuntimeRefresh({ limit: 50 })).toBe(2);
+      const { rows } = await getPool().query(
+        `SELECT vm_id FROM cloud_vm_work
+         WHERE vm_id = ANY($1::text[])
+         ORDER BY vm_id`,
+        [Object.values(hostIds)],
+      );
+      expect(rows.map(({ vm_id }) => vm_id).sort()).toEqual(
+        [hostIds.startingNebius, hostIds.gcpWithoutPublicIp].sort(),
+      );
+    } finally {
+      await getPool().query(
+        "DELETE FROM cloud_vm_work WHERE vm_id=ANY($1::text[])",
+        [Object.values(hostIds)],
+      );
+      await getPool().query(
+        "DELETE FROM project_hosts WHERE id=ANY($1::uuid[])",
+        [Object.values(hostIds)],
+      );
+    }
+  });
+
   it("processes queued items with handlers", async () => {
     const handled: string[] = [];
     await enqueueCloudVmWork({ vm_id: "vm-1", action: "start" });
