@@ -78,6 +78,21 @@ Table({
       "usage_account_id", // membership usage, storage, and egress attribution
       "runtime_sponsor_account_id", // runtime admission, priority, and RAM-limit attribution
     ],
+    pg_custom_indexes: [
+      {
+        name: "projects_archive_lifecycle_candidates_idx",
+        query:
+          "(COALESCE(last_edited, created, to_timestamp(0)), project_id) " +
+          "WHERE deleted IS NULL AND provisioned IS TRUE " +
+          "AND COALESCE(deletion_protection, FALSE) IS FALSE " +
+          "AND state ->> 'state' = 'opened'",
+      },
+      {
+        name: "projects_archive_lifecycle_job_idx",
+        query:
+          "(archive_lifecycle_job_id) WHERE archive_lifecycle_job_id IS NOT NULL",
+      },
+    ],
 
     crm_indexes: ["last_edited"],
 

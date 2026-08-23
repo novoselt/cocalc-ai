@@ -18,6 +18,27 @@ Table({
       "next_attempt_at",
       "created_at",
     ],
+    pg_custom_indexes: [
+      {
+        name: "project_archive_lifecycle_dedupe_idx",
+        query: "(dedupe_key)",
+        unique: true,
+      },
+      {
+        name: "project_archive_lifecycle_active_project_idx",
+        query: "(project_id) WHERE status IN ('queued', 'running')",
+        unique: true,
+      },
+      {
+        name: "project_archive_lifecycle_due_idx",
+        query:
+          "(next_attempt_at, created_at) WHERE status IN ('queued', 'failed')",
+      },
+      {
+        name: "project_archive_lifecycle_host_status_idx",
+        query: "(host_id, status) WHERE status IN ('queued', 'running')",
+      },
+    ],
     user_query: {
       get: {
         admin: true,
@@ -70,8 +91,16 @@ Table({
       pg_type: "VARCHAR(32)",
       desc: "Durable attempt status.",
     },
-    report_only: { type: "boolean", desc: "Whether mutation was suppressed." },
-    selector_at: { type: "timestamp", desc: "Candidate selection time." },
+    report_only: {
+      type: "boolean",
+      pg_default: "FALSE",
+      desc: "Whether mutation was suppressed.",
+    },
+    selector_at: {
+      type: "timestamp",
+      pg_default: "now()",
+      desc: "Candidate selection time.",
+    },
     claimed_at: { type: "timestamp", desc: "Execution claim time." },
     completed_at: { type: "timestamp", desc: "Terminal completion time." },
     next_attempt_at: { type: "timestamp", desc: "Retry eligibility time." },
@@ -80,9 +109,21 @@ Table({
       desc: "Manual actor; null represents the system.",
       render: { type: "account" },
     },
-    attempts: { type: "integer", desc: "Execution attempt count." },
-    thresholds: { type: "map", desc: "Effective policy settings." },
-    evidence: { type: "map", desc: "Eligibility and safety evidence." },
+    attempts: {
+      type: "integer",
+      pg_default: "0",
+      desc: "Execution attempt count.",
+    },
+    thresholds: {
+      type: "map",
+      pg_default: "'{}'::jsonb",
+      desc: "Effective policy settings.",
+    },
+    evidence: {
+      type: "map",
+      pg_default: "'{}'::jsonb",
+      desc: "Eligibility and safety evidence.",
+    },
     backup_repo_id: { type: "uuid", desc: "Rustic repository used." },
     backup_generation: {
       type: "integer",
@@ -100,7 +141,15 @@ Table({
       desc: "Measured local bytes after cleanup.",
     },
     dedupe_key: { type: "string", desc: "Idempotent selector key." },
-    created_at: { type: "timestamp", desc: "Creation time." },
-    updated_at: { type: "timestamp", desc: "Last update time." },
+    created_at: {
+      type: "timestamp",
+      pg_default: "now()",
+      desc: "Creation time.",
+    },
+    updated_at: {
+      type: "timestamp",
+      pg_default: "now()",
+      desc: "Last update time.",
+    },
   },
 });

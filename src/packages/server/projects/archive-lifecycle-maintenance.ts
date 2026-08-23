@@ -149,7 +149,7 @@ const SNAPSHOT_SELECT = `
               AND share.disabled IS FALSE
               AND share.visibility <> 'disabled'
          ) AS active_published_path,
-         COALESCE(p.last_edited, p.created, 'epoch'::timestamptz)
+         COALESCE(p.last_edited, p.created, to_timestamp(0))
            AS candidate_order_at
     FROM projects p
     LEFT JOIN project_hosts h ON h.id = p.host_id`;
@@ -185,11 +185,11 @@ async function listCandidateSnapshots({
        AND (
          $4::timestamptz IS NULL
          OR (
-           COALESCE(p.last_edited, p.created, 'epoch'::timestamptz),
+           COALESCE(p.last_edited, p.created, to_timestamp(0)),
            p.project_id
          ) > ($4::timestamptz, $5::uuid)
        )
-     ORDER BY COALESCE(p.last_edited, p.created, 'epoch'::timestamptz) ASC,
+     ORDER BY COALESCE(p.last_edited, p.created, to_timestamp(0)) ASC,
               p.project_id ASC
      LIMIT $1`,
     [
