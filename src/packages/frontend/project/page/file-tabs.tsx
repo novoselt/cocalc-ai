@@ -465,6 +465,7 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
       <Tooltip title={title}>
         <Button
           size="small"
+          style={mode === "tabs" ? { marginTop: "-16px" } : undefined}
           onClick={() => setTabsMode(mode === "tabs" ? "dropdown" : "tabs")}
         >
           {mode === "tabs" ? "Tabs" : "List"}
@@ -592,7 +593,6 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
           display: "flex",
           alignItems: "center",
           gap: "8px",
-          height: "40px",
           width: "100%",
         }}
       >

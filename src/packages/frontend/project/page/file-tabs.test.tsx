@@ -258,7 +258,7 @@ describe("FileTabs keyboard navigation", () => {
     });
   });
 
-  it("centers the tabs/list toggle in both navigation modes", () => {
+  it("preserves tab-strip geometry while centering list mode", () => {
     render(
       <FileTabs
         activeTab="editor-a.ts"
@@ -268,11 +268,8 @@ describe("FileTabs keyboard navigation", () => {
     );
 
     const tabsButton = screen.getByRole("button", { name: "Tabs" });
-    expect(tabsButton).not.toHaveStyle({ marginTop: "-16px" });
-    expect(tabsButton.parentElement).toHaveStyle({
-      alignItems: "center",
-      height: "40px",
-    });
+    expect(tabsButton).toHaveStyle({ marginTop: "-16px" });
+    expect(tabsButton.parentElement).not.toHaveStyle({ height: "40px" });
 
     fireEvent.click(tabsButton);
 
