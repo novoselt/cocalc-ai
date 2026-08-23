@@ -50,7 +50,9 @@ describe("formatDocumentBuildError", () => {
       formatDocumentBuildError(
         Error("no responders for project.document-build.start"),
       ),
-    ).toContain("This project must be restarted");
+    ).toContain(
+      "Click settings on the left rail, restart the project, then try again",
+    );
   });
 
   it("recognizes the legacy dispatcher error for a missing API namespace", () => {

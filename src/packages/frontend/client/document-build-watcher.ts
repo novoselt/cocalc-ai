@@ -27,7 +27,7 @@ export function formatDocumentBuildError(err: unknown): string {
   if (!DOCUMENT_BUILD_SERVICE_UNAVAILABLE.test(message)) return message;
   return (
     "This project must be restarted before document builds can run. " +
-    "Restart the project, then try again.\n\n" +
+    "Click settings on the left rail, restart the project, then try again.\n\n" +
     message
   );
 }
