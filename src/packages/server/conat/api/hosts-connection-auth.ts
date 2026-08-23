@@ -194,9 +194,9 @@ async function hasPublicShareProjectHostTokenAccess({
     }
   }
 
-  const { rowCount } = await pool().query(
+  const { rows } = await pool().query<{ id: string }>(
     `
-      SELECT 1
+      SELECT p.id
       FROM public_project_paths p
       JOIN projects ON projects.project_id=p.project_id
       WHERE p.project_id=$1
@@ -206,11 +206,22 @@ async function hasPublicShareProjectHostTokenAccess({
         AND p.requires_auth IS TRUE
         AND p.visibility IN ('listed', 'unlisted')
         AND p.availability_status = 'available'
-      LIMIT 1
     `,
     [project_id, host_id],
   );
-  return !!rowCount;
+  for (const { id } of rows) {
+    try {
+      await publicDirectoryShares.authorizeRead({
+        account_id,
+        project_id,
+        share_id: id,
+      });
+      return true;
+    } catch {
+      // Try another active share. Authorization also rejects banned publishers.
+    }
+  }
+  return false;
 }
 
 async function assertAccountCanIssueProjectHostToken({

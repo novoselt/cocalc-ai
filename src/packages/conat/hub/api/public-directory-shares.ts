@@ -127,6 +127,16 @@ export interface DisableMyPublicDirectorySharesByActorResponse {
   share_ids: string[];
 }
 
+export interface DisablePublicDirectorySharesForBannedActorOptions {
+  actor_account_id: string;
+  reason?: string | null;
+}
+
+export interface DisablePublicDirectorySharesForBannedActorResponse {
+  disabled_count: number;
+  share_ids: string[];
+}
+
 export interface UpsertPublicDirectoryShareOptions {
   account_id?: string;
   id?: string;

@@ -1723,6 +1723,8 @@ async function startAccountLocalService(): Promise<void> {
       await publicDirectoryShares.update(opts),
     publicDirectoryShareUpsert: async (opts) =>
       await publicDirectoryShares.upsert(opts),
+    publicDirectoryShareDisableForBannedActor: async (opts) =>
+      await publicDirectoryShares.disableForBannedActor(opts),
     publicDirectoryShareAuthorizeRead: async (opts) =>
       await publicDirectoryShares.authorizeRead(opts),
     publicDirectoryShareListDirectory: async (opts) =>

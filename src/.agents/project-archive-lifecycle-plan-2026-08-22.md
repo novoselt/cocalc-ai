@@ -88,6 +88,16 @@ This lane overrides paid-entitlement and published-path protection, but it
 retains all storage-safety and non-running requirements. An unban or
 collaborator change immediately invalidates a queued archive operation.
 
+Account banning must independently and immediately make public content
+attributable to the banned account unavailable. Ban containment should disable
+every active share created or updated by the account and every active share in
+a project owned by that account, including aliases and temporary viewer grants.
+Public-share authorization must also reject banned creators, updaters, and
+project owners so a failed or delayed cleanup cannot leave content reachable.
+Unbanning never republishes content automatically. The seven-day archive lane
+therefore normally sees no active shares, but it still overrides publication
+protection as a fail-safe.
+
 The current `accounts.banned` boolean does not provide a reliable timestamp,
 and historical `account_ban_audit_log.created` values are null in production.
 Before enabling this lane:
@@ -459,6 +469,8 @@ savings and restore reliability before changing the 30-day threshold.
 
 - No project with an active published path is automatically archived unless
   every collaborator is banned and the ban grace period has elapsed.
+- Banning an account immediately makes its published content unavailable;
+  unbanning does not restore publication.
 - No project with a non-banned paid collaborator is automatically archived.
 - Free inactivity is computed from that project's `last_edited`, not account
   activity or another project.

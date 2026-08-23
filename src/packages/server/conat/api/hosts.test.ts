@@ -6358,7 +6358,7 @@ describe("hosts.issueProjectHostAuthToken", () => {
     });
     queryMock = jest.fn(async () => ({
       rowCount: 1,
-      rows: [{ "?column?": 1 }],
+      rows: [{ id: SHARE_UUID }],
     }));
     const { issueProjectHostAuthToken } = await import("./hosts");
     await expect(
@@ -6376,6 +6376,11 @@ describe("hosts.issueProjectHostAuthToken", () => {
       expect.stringContaining("FROM public_project_paths"),
       [PROJECT_UUID, HOST_UUID],
     );
+    expect(publicDirectorySharesAuthorizeReadMock).toHaveBeenCalledWith({
+      account_id: ACCOUNT_UUID,
+      project_id: PROJECT_UUID,
+      share_id: SHARE_UUID,
+    });
     expect(syncProjectUsersOnHostMock).not.toHaveBeenCalled();
     expect(issueProjectHostAuthTokenJwtMock).toHaveBeenCalledWith(
       expect.objectContaining({

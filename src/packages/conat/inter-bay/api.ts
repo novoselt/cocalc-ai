@@ -77,6 +77,8 @@ import type {
   CopyPublicDirectoryShareToProjectOptions,
   CopyPublicDirectoryShareToProjectResponse,
   CreatePublicDirectoryShareOptions,
+  DisablePublicDirectorySharesForBannedActorOptions,
+  DisablePublicDirectorySharesForBannedActorResponse,
   GetTemporaryViewerReadPolicyOptions,
   GetTemporaryViewerReadPolicyResponse,
   GrantTemporaryViewerAccessOptions,
@@ -2695,6 +2697,7 @@ export type AccountLocalMethod =
   | "public-directory-share-create"
   | "public-directory-share-update"
   | "public-directory-share-upsert"
+  | "public-directory-share-disable-for-banned-actor"
   | "public-directory-share-authorize-read"
   | "public-directory-share-list-directory"
   | "public-directory-share-copy-to-project"
@@ -4308,6 +4311,9 @@ export interface InterBayAccountLocalApi {
   publicDirectoryShareUpsert: (
     opts: UpsertPublicDirectoryShareOptions,
   ) => Promise<PublicDirectoryShareSummary>;
+  publicDirectoryShareDisableForBannedActor: (
+    opts: DisablePublicDirectorySharesForBannedActorOptions,
+  ) => Promise<DisablePublicDirectorySharesForBannedActorResponse>;
   publicDirectoryShareAuthorizeRead: (
     opts: AuthorizePublicDirectoryShareReadOptions,
   ) => Promise<AuthorizePublicDirectoryShareReadResponse>;
@@ -7458,6 +7464,15 @@ export function createInterBayAccountLocalClient({
       method: "public-directory-share-upsert",
     }),
   });
+  const publicDirectoryShareDisableForBannedActorClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "publicDirectoryShareDisableForBannedActor">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "public-directory-share-disable-for-banned-actor",
+    }),
+  });
   const publicDirectoryShareAuthorizeReadClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "publicDirectoryShareAuthorizeRead">
   >({
@@ -7868,6 +7883,10 @@ export function createInterBayAccountLocalClient({
       await publicDirectoryShareUpdateClient.publicDirectoryShareUpdate(opts),
     publicDirectoryShareUpsert: async (opts) =>
       await publicDirectoryShareUpsertClient.publicDirectoryShareUpsert(opts),
+    publicDirectoryShareDisableForBannedActor: async (opts) =>
+      await publicDirectoryShareDisableForBannedActorClient.publicDirectoryShareDisableForBannedActor(
+        opts,
+      ),
     publicDirectoryShareAuthorizeRead: async (opts) =>
       await publicDirectoryShareAuthorizeReadClient.publicDirectoryShareAuthorizeRead(
         opts,
