@@ -258,6 +258,31 @@ describe("FileTabs keyboard navigation", () => {
     });
   });
 
+  it("centers the tabs/list toggle in both navigation modes", () => {
+    render(
+      <FileTabs
+        activeTab="editor-a.ts"
+        openFiles={List(["a.ts", "b.ts"])}
+        project_id="project-1"
+      />,
+    );
+
+    const tabsButton = screen.getByRole("button", { name: "Tabs" });
+    expect(tabsButton).not.toHaveStyle({ marginTop: "-16px" });
+    expect(tabsButton.parentElement).toHaveStyle({
+      alignItems: "center",
+      height: "40px",
+    });
+
+    fireEvent.click(tabsButton);
+
+    const listButton = screen.getByRole("button", { name: "List" });
+    expect(listButton.parentElement).toHaveStyle({
+      alignItems: "center",
+      height: "40px",
+    });
+  });
+
   it("closes open files from dropdown mode without activating the row", () => {
     storedMode = "dropdown";
 

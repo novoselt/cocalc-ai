@@ -31,6 +31,7 @@ import {
 } from "./membership-settings-data";
 import MembershipPurchaseModal from "./membership-purchase-modal";
 import { MembershipTierDetails } from "./membership-tier-details";
+import { NavbarMembershipSetting } from "./navbar-membership-setting";
 import { SettingsCard } from "./settings-card";
 import type { SettingsPageDefinition } from "./settings-page";
 import { openAccountSettings } from "./settings-routing";
@@ -69,6 +70,9 @@ export function MembershipPage() {
           Check current usage and limits.
         </a>
       </Paragraph>
+      <SettingsCard title="Navigation">
+        <NavbarMembershipSetting />
+      </SettingsCard>
       <MembershipSettingsContent />
     </>
   );

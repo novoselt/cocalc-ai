@@ -567,6 +567,7 @@ Table({
             [USE_BALANCE_TOWARD_SUBSCRIPTIONS]:
               USE_BALANCE_TOWARD_SUBSCRIPTIONS_DEFAULT,
             hide_navbar_balance: false,
+            hide_navbar_membership: false,
             cookie_consent: null,
           },
           display_name: "",

@@ -198,6 +198,17 @@ describe("ProjectsNav", () => {
     ).toBeInTheDocument();
   });
 
+  it("reports mode changes to the app navigation", async () => {
+    const onModeChange = jest.fn();
+    render(<ProjectsNav height={42} onModeChange={onModeChange} />);
+
+    await waitFor(() => expect(onModeChange).toHaveBeenCalledWith("tabs"));
+    fireEvent.click(screen.getByRole("button", { name: "Tabs" }));
+    await waitFor(() =>
+      expect(onModeChange).toHaveBeenLastCalledWith("dropdown"),
+    );
+  });
+
   it("closes project tabs with the pointer control or Delete key", () => {
     const { rerender } = render(<ProjectsNav height={42} />);
 
