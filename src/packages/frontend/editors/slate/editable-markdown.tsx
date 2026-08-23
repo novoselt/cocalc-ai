@@ -2540,6 +2540,11 @@ const FullEditableMarkdown: React.FC<Props> = React.memo((props: Props) => {
         hasSyncstring: actions._syncstring != null,
       })
     ) {
+      // IMPORTANT: Do not broaden this to editable or syncstring-backed
+      // editors. Those paths depend on Slate operations, selection remapping,
+      // and remote merge publication for collaborative Markdown. This explicit
+      // revision is only safe for non-collaborative read-only views such as
+      // streaming chat activity.
       // External Slate operations may mutate the current value identity and
       // defer onChange. Publish an explicit revision so read-only streaming
       // views cannot retain an older leaf until an unrelated parent render.
