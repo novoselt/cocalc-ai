@@ -50,7 +50,11 @@ describe("LaTeX persisted source change builds", () => {
     await (actions as any).maybeBuildAfterPersistedSourceChange();
     await (actions as any).maybeBuildAfterPersistedSourceChange();
     expect(build).toHaveBeenCalledTimes(1);
-    expect(build).toHaveBeenCalledWith("", false);
+    expect(build).toHaveBeenCalledWith(
+      "",
+      false,
+      expect.stringMatching(/^save:paper\.tex:-?\d+$/),
+    );
   });
 
   it("builds the parent master file for included documents", async () => {
@@ -58,8 +62,33 @@ describe("LaTeX persisted source change builds", () => {
     actions.parent_file = "master.tex";
     await (actions as any).maybeBuildAfterPersistedSourceChange();
     expect(parentBuild).toHaveBeenCalledTimes(1);
-    expect(parentBuild).toHaveBeenCalledWith("", false);
+    expect(parentBuild).toHaveBeenCalledWith(
+      "",
+      false,
+      expect.stringMatching(/^save:paper\.tex:-?\d+$/),
+    );
     expect(build).not.toHaveBeenCalled();
+  });
+
+  it("coalesces a newer persisted change instead of dropping it", async () => {
+    const { actions, build } = createActions();
+    let value = "first";
+    actions._syncstring.to_str = () => value;
+    let release!: () => void;
+    build.mockImplementationOnce(
+      async () => await new Promise<void>((resolve) => (release = resolve)),
+    );
+
+    const first = (Actions.prototype as any).handlePersistedSourceChange.call(
+      actions,
+    );
+    await Promise.resolve();
+    value = "second";
+    await (Actions.prototype as any).handlePersistedSourceChange.call(actions);
+    release();
+    await first;
+
+    expect(build).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -417,7 +446,7 @@ describe("LaTeX included-file table of contents", () => {
 });
 
 describe("LaTeX initial build", () => {
-  it("saves explicit build command changes to the aux syncdb file", () => {
+  it("saves explicit build command changes to the aux syncdb file", async () => {
     const syncdb = {
       set: jest.fn(),
       commit: jest.fn(),
@@ -432,7 +461,7 @@ describe("LaTeX initial build", () => {
     actions.setState = jest.fn();
     actions.set_error = jest.fn();
 
-    actions.set_build_command("pdflatex a.tex");
+    await actions.set_build_command("pdflatex a.tex");
 
     expect(syncdb.set).toHaveBeenCalledWith({
       key: "build_command",

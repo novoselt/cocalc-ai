@@ -10,23 +10,23 @@ R Markdown Editor Actions
 // cSpell:ignore rnorm
 
 import { debounce } from "lodash";
+import type { DocumentBuildSnapshot } from "@cocalc/app-document-build";
+import type { DocumentBuildWatcher } from "@cocalc/frontend/client/document-build-watcher";
+import {
+  documentBuildApi,
+  documentBuildSnapshotToEditorState,
+  isDocumentBuildActive,
+} from "@cocalc/frontend/client/document-build-watcher";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
-import type { ExecJobGroupWatcher } from "@cocalc/frontend/client/exec-job-watcher";
 import { markdown_to_html_frontmatter } from "@cocalc/frontend/markdown";
+import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 import {
   Actions as BaseActions,
   type CodeEditorState,
 } from "../base-editor/actions-text";
 import type { FrameTree } from "../frame-tree/types";
-import { cancel_exec_job, type ExecOutput } from "../generic/client";
-import {
-  jobAggregateValue,
-  watchProjectBuilds,
-} from "../generic/project-builds";
-import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 import { Actions as MarkdownActions } from "../markdown-editor/actions";
-import { convert, rmdRenderCommand } from "./rmd-converter";
 import { checkProducedFiles } from "./utils";
 const HELP_SLUG = "editors/r-markdown";
 
@@ -68,8 +68,11 @@ output: html_document
 
 export class Actions extends MarkdownActions {
   private _last_rmd_hash: number | undefined = undefined;
-  private is_building: boolean = false;
-  private build_job_watcher?: ExecJobGroupWatcher;
+  private active_build_id?: string;
+  private build_watcher?: DocumentBuildWatcher;
+  private explicit_build = false;
+  private last_snapshot_seq = new Map<string, number>();
+  private starting_build = false;
   public run_rmd_converter: Function;
 
   _init2(): void {
@@ -77,8 +80,8 @@ export class Actions extends MarkdownActions {
     this.build = this.build.bind(this);
     // one extra thing after markdown.
     this._syncstring.once("ready", () => {
+      this._init_build_watcher();
       this._init_rmd_converter();
-      this._init_build_job_watcher();
     });
     this._check_produced_files();
     this.setState({ custom_pdf_error_message });
@@ -105,6 +108,7 @@ export class Actions extends MarkdownActions {
     );
 
     const do_build = reuseInFlight(async () => {
+      if (this.explicit_build) return;
       if (!this.do_build_on_save()) return;
       if (this._syncstring == null) return;
       const hash = this._syncstring.hash_of_saved_version();
@@ -116,37 +120,35 @@ export class Actions extends MarkdownActions {
 
     this._syncstring.on("save-to-disk", do_build);
     this._syncstring.on("after-change", do_build);
-    // Initial run with current hash if available
-    const initial_hash = this._syncstring.hash_of_saved_version();
-    this.run_rmd_converter(initial_hash);
+    // Opening a browser is not itself a build request. The watcher hydrates any
+    // active build, and a later persisted source change advances this hash.
+    this._last_rmd_hash = this._syncstring.hash_of_saved_version();
   }
 
-  private _init_build_job_watcher(): void {
-    this.build_job_watcher = watchProjectBuilds({
-      onBuild: (job) => void this.follow_project_build(job),
+  private _init_build_watcher(): void {
+    this.build_watcher = webapp_client.project_client.watchDocumentBuild({
       path: this.path,
       project_id: this.project_id,
     });
-  }
-
-  private async follow_project_build(
-    job: ExecuteCodeOutputAsync,
-  ): Promise<void> {
-    const aggregate = jobAggregateValue(job);
-    if (this.is_building || this.store.get("building") || aggregate == null) {
-      return;
-    }
-    this.is_building = true;
-    try {
-      await this._run_rmd_converter(aggregate);
-    } finally {
-      this.is_building = false;
-    }
+    this.build_watcher.on("snapshot", (snapshot: DocumentBuildSnapshot) => {
+      void this.apply_build_snapshot(snapshot);
+    });
+    this.build_watcher.on(
+      "active-change",
+      (snapshot: DocumentBuildSnapshot | undefined) => {
+        this.active_build_id = snapshot?.build_id;
+        this.setState({ building: snapshot != null });
+        if (snapshot == null) this.set_status("");
+      },
+    );
+    this.build_watcher.on("watch-error", (err) => {
+      this.set_error(err, "monospace");
+    });
   }
 
   close(): void {
-    this.build_job_watcher?.close();
-    this.build_job_watcher = undefined;
+    this.build_watcher?.close();
+    this.build_watcher = undefined;
     super.close();
   }
 
@@ -157,31 +159,25 @@ export class Actions extends MarkdownActions {
         cm.focus();
       }
     }
-    // initiating a build. if one is running & forced, we stop the build
-    if (this.is_building) {
+    // Initiating a build. If one is running and forced, cancel it first.
+    if (this.store.get("building") || this.starting_build) {
       if (force) {
         await this.stop_build("");
       } else {
         return;
       }
     }
-    this.is_building = true;
+    const actions = this.redux.getEditorActions(this.project_id, this.path);
+    if (actions == null) {
+      // Opening/closing a newly created file can trigger build before actions exist.
+      return;
+    }
+    this.explicit_build = true;
     try {
-      const actions = this.redux.getEditorActions(this.project_id, this.path);
-      if (actions == null) {
-        // opening/close a newly created file can trigger build when actions aren't
-        // ready yet.  https://github.com/sagemathinc/cocalc/issues/7249
-        return;
-      }
       await (actions as BaseActions<CodeEditorState>).save(false);
-      // For force builds, bypass the debounced function to ensure immediate execution
-      if (force) {
-        await this._run_rmd_converter(Date.now());
-      } else {
-        await this.run_rmd_converter(Date.now());
-      }
+      await this._run_rmd_converter(undefined, force);
     } finally {
-      this.is_building = false;
+      this.explicit_build = false;
     }
   }
 
@@ -190,55 +186,33 @@ export class Actions extends MarkdownActions {
     await this.build(id, true);
   }
 
-  // This stops the current RMD build process and resets the state.
+  // This cancels the project-owned R Markdown build.
   async stop_build(_id: string): Promise<void> {
-    const job_info = this.store.get("job_info")?.toJS() as
-      | ExecuteCodeOutputAsync
-      | undefined;
-
-    if (
-      job_info &&
-      job_info.type === "async" &&
-      job_info.status === "running" &&
-      typeof job_info.job_id === "string"
-    ) {
-      const output = await cancel_exec_job({
-        project_id: this.project_id,
-        job: job_info,
-      });
-      if (output.type === "async") {
-        this.setState({ job_info: output });
+    if (this.active_build_id != null) {
+      const snapshot = await documentBuildApi(
+        webapp_client.project_client.conatApi(this.project_id),
+      ).cancel(this.active_build_id);
+      if (this.build_watcher != null) {
+        this.build_watcher.track(snapshot);
+      } else {
+        await this.apply_build_snapshot(snapshot);
       }
     }
-    this.set_status("");
-    this.setState({ building: false });
+    this.active_build_id = this.build_watcher?.latestActiveBuildId();
+    const building = this.active_build_id != null;
+    this.set_status(building ? "Running RMarkdown..." : "");
+    this.setState({ building });
   }
 
   async _check_produced_files(): Promise<void> {
     await checkProducedFiles(this);
   }
 
-  private set_log(output?: ExecOutput | undefined): void {
-    this.setState({
-      build_err: output?.stderr?.trim(),
-      build_log: output?.stdout?.trim(),
-      build_exit: output?.exit_code,
-      job_info: output?.type === "async" ? output : undefined,
-    });
-  }
-
-  private set_job_info(job_info: ExecuteCodeOutputAsync): void {
-    if (!job_info) return;
-    this.setState({
-      build_log: job_info.stdout?.trim() ?? "",
-      build_err: job_info.stderr?.trim() ?? "",
-      build_exit: job_info.exit_code,
-      job_info,
-    });
-  }
-
   // use this.run_rmd_converter
-  private async _run_rmd_converter(hash?): Promise<void> {
+  private async _run_rmd_converter(
+    generation?: string | number,
+    force = false,
+  ): Promise<void> {
     // TODO: should only run knitr if at least one frame is visible showing preview?
     // maybe not, since might want to show error.
     if (this._syncstring == null || this._syncstring.get_state() != "ready") {
@@ -246,49 +220,79 @@ export class Actions extends MarkdownActions {
       // fire this at any time.
       return;
     }
-    if (this._last_rmd_hash == null) {
-      this._last_rmd_hash = this._syncstring.hash_of_saved_version();
-    }
+    if (this.starting_build) return;
+    this.starting_build = true;
+    this._last_rmd_hash ??= this._syncstring.hash_of_saved_version();
     const md = this._syncstring.to_str();
-    if (md == null) return;
+    if (md == null) {
+      this.starting_build = false;
+      return;
+    }
     this.set_status("Running RMarkdown...");
     this.setState({ building: true });
     this.set_error("");
     this.setState({ build_log: "", build_err: "" });
-    let markdown = "";
-    let output: ExecOutput | undefined = undefined;
     try {
-      const { frontmatter, html } = markdown_to_html_frontmatter(md);
-      markdown = html;
-      // remembered so the build log can tell the agent exactly what ran
-      this.setState({
-        build_command: rmdRenderCommand(this.path, frontmatter),
+      const { html } = markdown_to_html_frontmatter(md);
+      this.setState({ value: html });
+      const snapshot = await documentBuildApi(
+        webapp_client.project_client.conatApi(this.project_id),
+      ).start({
+        path: this.path,
+        ...(generation == null ? undefined : { generation: `${generation}` }),
+        expected_source_hash: this._syncstring.hash_of_saved_version(),
+        force,
       });
-      output = await convert(
-        this.project_id,
-        this.path,
-        frontmatter,
-        hash || this._last_rmd_hash || Date.now(),
-        this.set_job_info.bind(this),
-      );
-      this.set_log(output);
-      if (output == null || output.exit_code != 0) {
-        this.set_error(
-          "Error compiling RMarkdown. Please check the Build Log!",
-        );
+      if (this.build_watcher != null) {
+        this.build_watcher.track(snapshot);
       } else {
-        this.reload();
-        await this._check_produced_files();
+        await this.apply_build_snapshot(snapshot);
       }
     } catch (err) {
       this.set_error(err, "monospace");
-      this.set_log(output);
-      return;
-    } finally {
       this.set_status("");
-      this.setState({ building: false });
+      this.setState({ building: false, build_exit: 1 });
+    } finally {
+      this.starting_build = false;
     }
-    this.setState({ value: markdown });
+  }
+
+  private async apply_build_snapshot(
+    snapshot: DocumentBuildSnapshot,
+  ): Promise<void> {
+    if (snapshot.seq <= (this.last_snapshot_seq.get(snapshot.build_id) ?? -1)) {
+      return;
+    }
+    this.last_snapshot_seq.set(snapshot.build_id, snapshot.seq);
+    const snapshotIsActive = isDocumentBuildActive(snapshot);
+    this.active_build_id =
+      this.build_watcher?.latestActiveBuildId() ??
+      (snapshotIsActive ? snapshot.build_id : undefined);
+    if (
+      this.active_build_id == null ||
+      this.active_build_id === snapshot.build_id
+    ) {
+      this.setState({
+        ...documentBuildSnapshotToEditorState(snapshot),
+        building: this.active_build_id != null,
+      } as any);
+    } else {
+      this.setState({ building: true });
+    }
+    if (snapshotIsActive) {
+      this.set_status("Running RMarkdown...");
+      return;
+    }
+    this.set_status(this.active_build_id == null ? "" : "Running RMarkdown...");
+    if (snapshot.state === "succeeded") {
+      this.set_error("");
+      this.reload();
+      await this._check_produced_files();
+    } else if (this.active_build_id == null && snapshot.state === "failed") {
+      this.set_error("Error compiling RMarkdown. Please check the Build Log!");
+    } else if (this.active_build_id == null && snapshot.state === "timed_out") {
+      this.set_error("R Markdown build timed out. Please check the Build Log!");
+    }
   }
 
   _raw_default_frame_tree(): FrameTree {

@@ -167,6 +167,25 @@ importers:
         specifier: ^22.10.10
         version: 22.20.1
 
+  apps/document-build:
+    dependencies:
+      '@cocalc/util':
+        specifier: workspace:*
+        version: link:../../util
+    devDependencies:
+      '@types/jest':
+        specifier: ^30.0.0
+        version: 30.0.0
+      jest:
+        specifier: ^30.0.5
+        version: 30.4.2(@types/node@26.2.0)(ts-node@10.9.2(@types/node@26.2.0)(typescript@6.0.3))
+      ts-jest:
+        specifier: 29.4.9
+        version: 29.4.9(@babel/core@7.29.7)(@jest/transform@30.4.1)(@jest/types@30.4.1)(babel-jest@30.4.1(@babel/core@7.29.7))(jest-util@30.4.1)(jest@30.4.2(@types/node@26.2.0)(ts-node@10.9.2(@types/node@26.2.0)(typescript@6.0.3)))(typescript@6.0.3)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   apps/notebook:
     devDependencies:
       '@types/jest':
@@ -335,6 +354,9 @@ importers:
 
   cli:
     dependencies:
+      '@cocalc/app-document-build':
+        specifier: workspace:*
+        version: link:../apps/document-build
       '@cocalc/app-notebook':
         specifier: workspace:*
         version: link:../apps/notebook
@@ -437,6 +459,9 @@ importers:
 
   conat:
     dependencies:
+      '@cocalc/app-document-build':
+        specifier: workspace:*
+        version: link:../apps/document-build
       '@cocalc/comm':
         specifier: workspace:*
         version: link:../comm
@@ -756,6 +781,9 @@ importers:
 
   frontend:
     dependencies:
+      '@cocalc/app-document-build':
+        specifier: workspace:*
+        version: link:../apps/document-build
       '@cocalc/app-tasks':
         specifier: workspace:*
         version: link:../apps/tasks
@@ -1625,6 +1653,9 @@ importers:
 
   project:
     dependencies:
+      '@cocalc/app-document-build':
+        specifier: workspace:*
+        version: link:../apps/document-build
       '@cocalc/backend':
         specifier: workspace:*
         version: link:../backend
@@ -1676,6 +1707,9 @@ importers:
       lodash:
         specifier: ^4.18.1
         version: 4.18.1
+      lru-cache:
+        specifier: ^7.18.3
+        version: 7.18.3
       node-pty:
         specifier: 1.2.0-beta.11
         version: 1.2.0-beta.11

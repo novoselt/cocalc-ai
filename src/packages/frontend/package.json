@@ -212,6 +212,7 @@
     "url": "https://github.com/sagemathinc/cocalc/issues"
   },
   "dependencies": {
+    "@cocalc/app-document-build": "workspace:*",
     "@cocalc/app-tasks": "workspace:*",
     "@jitl/quickjs-wasmfile-release-asyncify": "0.32.0",
     "immer": "^11.1.0",

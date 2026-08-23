@@ -299,18 +299,16 @@ function normalizeActivityPathKey(
   return path.normalize(trimmed);
 }
 
-function getCoCalcRuntimeGuidanceHeader(cliCommand: string): string {
+function getCoCalcProjectRuntimeGuidance(cliCommand: string): string[] {
   return [
-    "[CoCalc runtime capabilities]",
-    "This turn may run with CoCalc CLI/browser automation context.",
+    "This turn may run with CoCalc CLI/project runtime context.",
     `When you need the CoCalc CLI, use this exact command: \`${cliCommand}\`. Do not assume bare \`cocalc\` resolves to the right binary.`,
-    `If relevant, you can use \`${cliCommand}\` to inspect browser state and run browser exec scripts.`,
     "Prefer scoped variables already provided in environment, e.g.:",
     "- COCALC_PROJECT_ID",
-    "- COCALC_BROWSER_ID",
     "- COCALC_API_URL",
     "- COCALC_BEARER_TOKEN",
     "Prefer high-signal commands over raw browser scripts when available.",
+    `For supported document builds, use \`${cliCommand} project build -h\` and \`${cliCommand} project build <path>\` so the complete editor pipeline runs without requiring a browser.`,
     "For notebook edits/execution that must survive browser refresh or disconnect, prefer `cocalc project jupyter -h` over `browser exec`.",
     "For multi-step notebook work, prefer `cocalc project jupyter exec --path ... --stdin` for ad hoc snippets or `--file <script.js>` for saved scripts instead of shelling multiple notebook commands.",
     "Use `cocalc project jupyter exec-api` to inspect the ambient notebook script API before writing a multi-step script. `api.notebook.run(...)` returns `run.run_id`.",
@@ -320,12 +318,30 @@ function getCoCalcRuntimeGuidanceHeader(cliCommand: string): string {
     `Example read: ${cliCommand} exec 'const doc = api.text.open({ path: "/home/user/file.md", projectIdentifier: process.env.COCALC_PROJECT_ID }); return await doc.read();'`,
     `Example append: ${cliCommand} exec 'const doc = api.text.open({ path: "/home/user/file.md", projectIdentifier: process.env.COCALC_PROJECT_ID }); const before = await doc.read(); return await doc.append("\\nAgent note", { expectedHash: before.hash });'`,
     "The `api.text` write/append/replace methods save to disk by default; pass `{ saveToDisk: false }` only for intentional live-only collaborative edits.",
+  ];
+}
+
+function getCoCalcBrowserRuntimeGuidance(cliCommand: string): string[] {
+  return [
+    `If relevant, you can use \`${cliCommand}\` to inspect browser state and run browser exec scripts.`,
+    "The browser-scoped environment includes COCALC_BROWSER_ID.",
     "Use `browser exec` only for UI-only context such as selection or viewport state.",
     "For questions like 'what browser tabs/files do I have open?', start with:",
     `1) List open files/tabs: ${cliCommand} browser files --project-id \"$COCALC_PROJECT_ID\" --browser \"$COCALC_BROWSER_ID\"`,
     "Use `browser workspace-state` for workspace selection/records, not as the first command for simple tab listing.",
     `For visible UI-only state that typed commands cannot answer, use screenshot or browser exec with exact targets: ${cliCommand} browser exec --project-id \"$COCALC_PROJECT_ID\" --browser \"$COCALC_BROWSER_ID\" --file <script.js>`,
     "Under agent auth, pass exact browser/project targets to avoid blocked session discovery.",
+  ];
+}
+
+function getCoCalcRuntimeGuidanceHeader(
+  cliCommand: string,
+  { hasBrowser }: { hasBrowser: boolean },
+): string {
+  return [
+    "[CoCalc runtime capabilities]",
+    ...getCoCalcProjectRuntimeGuidance(cliCommand),
+    ...(hasBrowser ? getCoCalcBrowserRuntimeGuidance(cliCommand) : []),
     "[/CoCalc runtime capabilities]",
   ].join("\n");
 }
@@ -1471,10 +1487,12 @@ function addRuntimeGuidance(
 ): string {
   const hasProject = `${runtimeEnv?.COCALC_PROJECT_ID ?? ""}`.trim();
   const hasBrowser = `${runtimeEnv?.COCALC_BROWSER_ID ?? ""}`.trim();
-  if (!hasProject || !hasBrowser) {
+  if (!hasProject) {
     return prompt;
   }
-  return `${getCoCalcRuntimeGuidanceHeader(getCoCalcCliCommand(runtimeEnv))}\n\n${prompt}`;
+  return `${getCoCalcRuntimeGuidanceHeader(getCoCalcCliCommand(runtimeEnv), {
+    hasBrowser: !!hasBrowser,
+  })}\n\n${prompt}`;
 }
 
 function buildTurnInput({

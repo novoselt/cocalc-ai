@@ -20,6 +20,8 @@ import { registerProjectTerminalCommands } from "./project/terminal";
 import { registerProjectEnvSecretCommands } from "./project/env-secrets";
 import { registerProjectPublishCommands } from "./project/publish";
 import { registerProjectRootfsCommands } from "./project/rootfs";
+import { registerProjectDocumentBuildCommands } from "./project/document-build";
+import { registerProjectBuildSmokeCommand } from "./project/build-smoke";
 
 export type ProjectCommandDeps = {
   withContext: any;
@@ -155,6 +157,8 @@ export function registerProjectCommand(
   registerProjectLifecycleCommands(project, deps);
   registerProjectAppCommands(project, deps);
   registerProjectTerminalCommands(project, deps);
+  registerProjectDocumentBuildCommands(project, deps);
+  registerProjectBuildSmokeCommand(project, deps);
 
   return project;
 }

@@ -5,8 +5,5 @@
 
 export const KNITR_EXTS: ReadonlyArray<string> = ["rnw", "rtex"];
 
-// The maximum we let a job run
-export const TIMEOUT_LATEX_JOB_S = 15 * 60;
-
 // Icon for word count functionality
 export const WORD_COUNT_ICON = "file-alt";

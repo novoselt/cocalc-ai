@@ -67,6 +67,10 @@ import { resolveExplicitStreamStart } from "./stream-start";
 const TOUCH_THROTTLE = 30_000;
 import { ExecStream } from "./types";
 import { ExecJobGroupWatcher } from "./exec-job-watcher";
+import {
+  DocumentBuildWatcher,
+  documentBuildApi,
+} from "./document-build-watcher";
 
 const COPY_ADMISSION_TIMEOUT_MS = 2 * 60 * 1000;
 
@@ -97,6 +101,21 @@ export class ProjectClient {
         await this.client.conat_client.projectConat({
           project_id: opts.project_id,
           caller: "ProjectClient.watchExecJobGroup",
+        }),
+    });
+  };
+
+  watchDocumentBuild = (opts: {
+    path: string;
+    project_id: string;
+  }): DocumentBuildWatcher => {
+    return new DocumentBuildWatcher({
+      ...opts,
+      getApi: () => documentBuildApi(this.conatApi(opts.project_id)),
+      getClient: async () =>
+        await this.client.conat_client.projectConat({
+          project_id: opts.project_id,
+          caller: "ProjectClient.watchDocumentBuild",
         }),
     });
   };
