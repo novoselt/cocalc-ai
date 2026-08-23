@@ -21,6 +21,7 @@ import type {
   AcpAgent,
   AcpEvaluateRequest,
   AcpStreamEvent,
+  AcpStreamPayload,
   AcpSteerRequest,
   AcpSteerResult,
   AcpStreamUsage,
@@ -335,6 +336,8 @@ type CodexAppServerOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   model?: string;
+  // Overridable so the invisible-notification watchdog can be tested quickly.
+  visibleActivityWarningMs?: number;
   uploadGeneratedImage?: (opts: {
     savedPath: string;
     hostPath: string;
@@ -2240,7 +2243,7 @@ export class CodexAppServerAgent implements AcpAgent {
   private async evaluateOnce(
     request: AcpEvaluateRequest,
   ): Promise<"completed" | "interrupted"> {
-    const { prompt, stream, session_id, config } = request;
+    const { prompt, stream: outputStream, session_id, config } = request;
     const requestedSessionKey = normalizeCodexSessionId(session_id);
     const persistedSessionId = normalizeCodexSessionId(config?.sessionId);
     const hasEstablishedSession =
@@ -2313,12 +2316,96 @@ export class CodexAppServerAgent implements AcpAgent {
       !!(request.chat?.project_id ?? request.project_id);
     let quotaPollTimer: NodeJS.Timeout | undefined;
     let maxTurnTimer: NodeJS.Timeout | undefined;
+    let visibleActivityTimer: NodeJS.Timeout | undefined;
+    let visibleActivityWatchdogStarted = false;
+    let visibleActivityWarningEmitted = false;
+    let visibleActivityWarningInFlight = false;
+    let lastVisibleActivityAt = Date.now();
+    const turnNotificationCounts = new Map<string, number>();
+    const visibleActivityWarningMs = Math.max(
+      10,
+      this.opts.visibleActivityWarningMs ?? TURN_NOTIFICATION_IDLE_TIMEOUT_MS,
+    );
     let quotaCheckInFlight = false;
     let quotaStopReason: string | undefined;
     const attemptStartedAt = Date.now();
     let fundedFinishStatus: "committed" | "interrupted" | "failed" = "failed";
     let fundedFinishOutcome = "turn failed";
     let runtimeHealthy = false;
+
+    const clearVisibleActivityTimer = () => {
+      if (!visibleActivityTimer) return;
+      clearTimeout(visibleActivityTimer);
+      visibleActivityTimer = undefined;
+    };
+
+    const scheduleVisibleActivityWarning = () => {
+      clearVisibleActivityTimer();
+      if (
+        !visibleActivityWatchdogStarted ||
+        visibleActivityWarningEmitted ||
+        visibleActivityWarningInFlight
+      ) {
+        return;
+      }
+      const remainingMs = Math.max(
+        0,
+        visibleActivityWarningMs - (Date.now() - lastVisibleActivityAt),
+      );
+      visibleActivityTimer = setTimeout(() => {
+        visibleActivityTimer = undefined;
+        if (
+          !visibleActivityWatchdogStarted ||
+          visibleActivityWarningEmitted ||
+          visibleActivityWarningInFlight
+        ) {
+          return;
+        }
+        const silentForMs = Date.now() - lastVisibleActivityAt;
+        if (silentForMs < visibleActivityWarningMs) {
+          scheduleVisibleActivityWarning();
+          return;
+        }
+        visibleActivityWarningInFlight = true;
+        visibleActivityWarningEmitted = true;
+        logger.warn("codex app-server: no visible turn activity", {
+          threadId: currentThreadId,
+          turnId,
+          silentForMs,
+          notificationMethods: Object.fromEntries(turnNotificationCounts),
+        });
+        void outputStream({
+          type: "event",
+          event: {
+            type: "thinking",
+            text: "Codex is still marked as running but has produced no visible activity for an extended period. It may be doing silent work; if it remains stuck, stop this turn and start a new chat.",
+          },
+        })
+          .catch((err) => {
+            logger.warn(
+              "codex app-server: failed to report silent running turn",
+              {
+                threadId: currentThreadId,
+                turnId,
+                err: `${err}`,
+              },
+            );
+          })
+          .finally(() => {
+            visibleActivityWarningInFlight = false;
+          });
+      }, remainingMs);
+      visibleActivityTimer.unref?.();
+    };
+
+    const stream = async (payload?: AcpStreamPayload | null): Promise<void> => {
+      if (payload?.type === "event" && visibleActivityWatchdogStarted) {
+        lastVisibleActivityAt = Date.now();
+        visibleActivityWarningEmitted = false;
+        scheduleVisibleActivityWarning();
+      }
+      await outputStream(payload);
+    };
 
     const setRunningKey = (nextThreadId: string) => {
       if (!nextThreadId || currentThreadId === nextThreadId) {
@@ -2543,6 +2630,9 @@ export class CodexAppServerAgent implements AcpAgent {
       if (runningEntry) {
         runningEntry.turnId = turnId;
       }
+      visibleActivityWatchdogStarted = true;
+      lastVisibleActivityAt = Date.now();
+      scheduleVisibleActivityWarning();
       if (siteKeyEnforced && siteKeyGovernor) {
         const pollMs = Math.max(
           30_000,
@@ -3137,7 +3227,6 @@ export class CodexAppServerAgent implements AcpAgent {
 
       const pendingNotificationLoop = (async () => {
         let reconciliationFailures = 0;
-        let lastReconciliationNoticeAt = 0;
         while (true) {
           let notification: RpcNotification;
           try {
@@ -3166,16 +3255,6 @@ export class CodexAppServerAgent implements AcpAgent {
               const status = `${reconciledTurn?.status ?? ""}`;
               if (status === "inProgress") {
                 reconciliationFailures = 0;
-                if (Date.now() - lastReconciliationNoticeAt >= 5 * 60_000) {
-                  lastReconciliationNoticeAt = Date.now();
-                  await stream({
-                    type: "event",
-                    event: {
-                      type: "thinking",
-                      text: "Codex is still working; CoCalc reconciled the live turn after a quiet period.",
-                    },
-                  });
-                }
                 continue;
               }
               if (status) {
@@ -3203,6 +3282,10 @@ export class CodexAppServerAgent implements AcpAgent {
               );
             }
           }
+          turnNotificationCounts.set(
+            notification.method,
+            (turnNotificationCounts.get(notification.method) ?? 0) + 1,
+          );
           if (notification.method === "turn/completed") {
             const status =
               `${notification.params?.turn?.status ?? ""}`.toLowerCase();
@@ -3231,6 +3314,7 @@ export class CodexAppServerAgent implements AcpAgent {
       if (maxTurnTimer) {
         clearTimeout(maxTurnTimer);
       }
+      clearVisibleActivityTimer();
       persistedTurnInfo = await readPersistedTurnInfo({
         spawned,
         cwd,
@@ -3310,6 +3394,7 @@ export class CodexAppServerAgent implements AcpAgent {
       if (maxTurnTimer) {
         clearTimeout(maxTurnTimer);
       }
+      clearVisibleActivityTimer();
       if (runningEntry?.interrupted && !quotaStopReason) {
         runtime.managerState = "interrupted";
         runtimeHealthy = true;
@@ -3390,6 +3475,8 @@ export class CodexAppServerAgent implements AcpAgent {
       }
       throw new Error(userFacingPrimaryError);
     } finally {
+      visibleActivityWatchdogStarted = false;
+      clearVisibleActivityTimer();
       this.running.delete(currentThreadId);
       if (fundedTurn) {
         try {
