@@ -81,6 +81,7 @@ import {
 } from "@cocalc/frontend/projects/host-info";
 import {
   evaluateHostOperational,
+  expectsProjectHostConnection,
   getHostRecoveryDisplay,
   getProjectLifecycleView,
   hostUnavailableBannerDelay,
@@ -323,6 +324,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   });
   const moveStatusVisible = shouldRenderMoveStatus(moveLro, moveReopenRequired);
   const hostUnavailableCandidate =
+    expectsProjectHostConnection({ projectState, runtimePreparing }) &&
     !!host_id &&
     (hostOperational.state === "unavailable" ||
       (projectHostConnection.observed && !projectHostConnected)) &&

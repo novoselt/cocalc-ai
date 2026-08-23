@@ -4,6 +4,7 @@
  */
 
 import {
+  expectsProjectHostConnection,
   getHostRecoveryDisplay,
   getProjectLifecycleView,
   hostUnavailableBannerDelay,
@@ -12,6 +13,27 @@ import {
 } from "./host-operational";
 
 describe("projects host operational display state", () => {
+  it("only expects a host connection while a runtime is active or preparing", () => {
+    expect(
+      expectsProjectHostConnection({
+        projectState: "opened",
+        runtimePreparing: false,
+      }),
+    ).toBe(false);
+    expect(
+      expectsProjectHostConnection({
+        projectState: "running",
+        runtimePreparing: false,
+      }),
+    ).toBe(true);
+    expect(
+      expectsProjectHostConnection({
+        projectState: "opened",
+        runtimePreparing: true,
+      }),
+    ).toBe(true);
+  });
+
   it("suppresses brief unconfirmed project-host disconnects", () => {
     const now = new Date("2026-08-12T19:00:05.000Z").getTime();
     expect(

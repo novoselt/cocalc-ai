@@ -230,7 +230,7 @@ describe("managed egress history", () => {
     ).rejects.toThrow("history query is too granular");
   });
 
-  it("computes membership quota usage without interactive or control traffic", async () => {
+  it("computes membership quota usage without system-managed traffic", async () => {
     const starts5h = new Date("2026-04-28T07:00:00.000Z");
     const resets5h = new Date("2026-04-28T12:00:00.000Z");
     const starts7d = new Date("2026-04-21T12:00:00.000Z");
@@ -248,8 +248,16 @@ describe("managed egress history", () => {
       },
     });
     getAccountUsageCounterValuesMock.mockResolvedValue({
-      "5h": { "raw-network": 200 },
-      "7d": { "raw-network": 500 },
+      "5h": {
+        "raw-network": 200,
+        "backup-upload": 1_900,
+        "control-plane-conat": 50,
+      },
+      "7d": {
+        "raw-network": 500,
+        "backup-upload": 2_500,
+        "interactive-conat": 75,
+      },
     });
 
     const { getManagedEgressUsageForAccount } =
@@ -301,7 +309,7 @@ describe("managed egress history", () => {
     });
   });
 
-  it("opens quota windows for backups but not control-plane traffic", async () => {
+  it("records backups without opening quota windows", async () => {
     const { recordManagedProjectEgress } = await import("./managed-egress");
 
     await recordManagedProjectEgress({
@@ -310,11 +318,19 @@ describe("managed egress history", () => {
       category: "backup-upload",
       bytes: 100,
     });
-    expect(ensureAccountUsageWindowsForEventMock).toHaveBeenCalledTimes(1);
+    expect(ensureAccountUsageWindowsForEventMock).not.toHaveBeenCalled();
 
     await recordManagedProjectEgress({
       account_id: "account-1",
       category: "control-plane-conat",
+      bytes: 100,
+    });
+    expect(ensureAccountUsageWindowsForEventMock).not.toHaveBeenCalled();
+
+    await recordManagedProjectEgress({
+      account_id: "account-1",
+      project_id: "project-1",
+      category: "raw-network",
       bytes: 100,
     });
     expect(ensureAccountUsageWindowsForEventMock).toHaveBeenCalledTimes(1);
