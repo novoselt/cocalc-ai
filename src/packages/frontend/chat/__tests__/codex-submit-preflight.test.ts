@@ -1,4 +1,5 @@
 import {
+  codexConnectionNeedsAttentionAfterSubmit,
   ensureProjectRunningForCodex,
   isCodexPaymentSourceDefinitelyUnconfigured,
   isCodexPaymentSourceNeedsUserConfiguration,
@@ -78,6 +79,36 @@ describe("Codex submit preflight", () => {
     expect(
       isCodexSubmitTarget({ existingThreadAgentModel: "gpt-5.4-codex" }),
     ).toBe(true);
+  });
+
+  it("checks subscription authentication without blocking the send path", async () => {
+    const fetchPaymentSource = jest.fn(async () => ({
+      source: "subscription" as const,
+    }));
+    const fetchUsageStatus = jest.fn(async () => ({
+      success: true,
+      authentication: { status: "connected" as const },
+    }));
+
+    await expect(
+      codexConnectionNeedsAttentionAfterSubmit({
+        fetchPaymentSource,
+        fetchUsageStatus,
+      }),
+    ).resolves.toBe(false);
+    expect(fetchUsageStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens credential recovery for an expired subscription", async () => {
+    await expect(
+      codexConnectionNeedsAttentionAfterSubmit({
+        fetchPaymentSource: async () => ({ source: "subscription" }),
+        fetchUsageStatus: async () => ({
+          success: false,
+          authentication: { status: "needs-sign-in" },
+        }),
+      }),
+    ).resolves.toBe(true);
   });
 
   it("starts and waits for a stopped project", async () => {
