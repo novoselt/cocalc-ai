@@ -53,7 +53,10 @@ import {
   resolveCodexAuthRuntime,
   resolveSharedCodexHome,
 } from "./codex-auth";
-import { syncSubscriptionAuthToRegistryIfChanged } from "./codex-auth-registry";
+import {
+  refreshSubscriptionAuthFromRegistry,
+  syncSubscriptionAuthToRegistryIfChanged,
+} from "./codex-auth-registry";
 import { beginSiteFundedCodexTurn } from "./codex-site-metering";
 import type {
   CodexSiteFundedTurnRequest,
@@ -88,6 +91,7 @@ const PROJECT_START_POLL_MS = Math.max(
 const PROJECT_CLI_TOKEN_REFRESH_MS = 4 * 60_000;
 const PROJECT_CLI_TOKEN_RETRY_MS = 15_000;
 const PROJECT_CLI_TOKEN_DEFAULT_TTL_MS = 10 * 60_000;
+const PROJECT_CLI_TOKEN_ROTATION_RETRY_DELAYS_MS = [100, 500] as const;
 
 type ContainerInfo = {
   name: string;
@@ -437,7 +441,7 @@ type ProjectCliBearer = {
   expiresAt: number;
 };
 
-async function issueProjectCliBearer({
+async function requestProjectCliBearer({
   projectId,
   accountId,
   sessionId,
@@ -445,32 +449,86 @@ async function issueProjectCliBearer({
   projectId: string;
   accountId: string;
   sessionId?: string;
-}): Promise<ProjectCliBearer | undefined> {
+}): Promise<ProjectCliBearer> {
   const issueAgentToken = hubApi.hosts?.issueProjectHostAgentAuthToken;
-  if (typeof issueAgentToken !== "function") return;
+  if (typeof issueAgentToken !== "function") {
+    throw new Error("project-host agent token API is unavailable");
+  }
+  const issued = await issueAgentToken({
+    account_id: accountId,
+    project_id: projectId,
+    ...(sessionId ? { session_id: sessionId } : {}),
+  });
+  const token = `${issued?.token ?? ""}`.trim();
+  if (!token) {
+    throw new Error("project-host agent token API returned an empty token");
+  }
+  const expiresAt = Number(issued?.expires_at);
+  return {
+    token,
+    expiresAt:
+      Number.isFinite(expiresAt) && expiresAt > Date.now()
+        ? expiresAt
+        : Date.now() + PROJECT_CLI_TOKEN_DEFAULT_TTL_MS,
+  };
+}
+
+async function issueProjectCliBearer(
+  opts: Parameters<typeof requestProjectCliBearer>[0],
+): Promise<ProjectCliBearer | undefined> {
   try {
-    const issued = await issueAgentToken({
-      account_id: accountId,
-      project_id: projectId,
-      ...(sessionId ? { session_id: sessionId } : {}),
-    });
-    const token = `${issued?.token ?? ""}`.trim();
-    if (!token) return;
-    const expiresAt = Number(issued?.expires_at);
-    return {
-      token,
-      expiresAt:
-        Number.isFinite(expiresAt) && expiresAt > Date.now()
-          ? expiresAt
-          : Date.now() + PROJECT_CLI_TOKEN_DEFAULT_TTL_MS,
-    };
+    return await requestProjectCliBearer(opts);
   } catch (err) {
     logger.debug("codex project: failed to issue project-host agent token", {
-      projectId,
-      accountId,
+      projectId: opts.projectId,
+      accountId: opts.accountId,
       err: `${err}`,
     });
     return;
+  }
+}
+
+function isTransientProjectCliTokenError(err: unknown): boolean {
+  const code = `${(err as { code?: unknown } | null)?.code ?? ""}`
+    .trim()
+    .toLowerCase();
+  if (["408", "429", "500", "502", "503", "504"].includes(code)) {
+    return true;
+  }
+  const message = `${(err as { message?: unknown } | null)?.message ?? err}`
+    .trim()
+    .toLowerCase();
+  return [
+    "timeout",
+    "timed out",
+    "connection closed",
+    "connection unavailable",
+    "disconnected",
+    "no responders",
+    "temporarily unavailable",
+    "transporterror",
+  ].some((needle) => message.includes(needle));
+}
+
+async function rotateProjectCliBearerWithRetry(
+  opts: Parameters<typeof requestProjectCliBearer>[0],
+): Promise<ProjectCliBearer | undefined> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await requestProjectCliBearer(opts);
+    } catch (err) {
+      const retryDelay = PROJECT_CLI_TOKEN_ROTATION_RETRY_DELAYS_MS[attempt];
+      const retry = retryDelay != null && isTransientProjectCliTokenError(err);
+      logger.debug("codex project: failed to rotate project-host agent token", {
+        projectId: opts.projectId,
+        accountId: opts.accountId,
+        attempt: attempt + 1,
+        retry,
+        err: `${err}`,
+      });
+      if (!retry) return;
+      await delay(retryDelay);
+    }
   }
 }
 
@@ -619,7 +677,7 @@ export async function createProjectCliTokenLease({
       }
       await refreshPromise?.catch(() => undefined);
       if (closed || setGeneration !== generation) return;
-      const next = await issueProjectCliBearer({
+      const next = await rotateProjectCliBearerWithRetry({
         projectId,
         accountId: resolvedAccountId,
         sessionId: nextSessionId,
@@ -796,39 +854,57 @@ async function resolveAppServerLoginHint(
   }
 }
 
-async function resolveLatestAppServerLoginHint({
-  projectId,
-  accountId,
-}: {
-  projectId: string;
-  accountId?: string;
-}): Promise<CodexAppServerLoginHint | undefined> {
-  const authRuntime = await resolveCodexAuthRuntime({
-    projectId,
-    accountId,
-  });
-  return await resolveAppServerLoginHint(authRuntime);
-}
-
 function createAppServerRequestHandler({
   projectId,
   accountId,
   authRuntime,
+  appServerLogin,
 }: {
   projectId: string;
   accountId?: string;
   authRuntime: CodexAuthRuntime;
+  appServerLogin?: CodexAppServerLoginHint;
 }): CodexAppServerRequestHandler {
+  let lastAccessToken =
+    appServerLogin?.type === "chatgptAuthTokens"
+      ? appServerLogin.accessToken
+      : undefined;
   return async (request: CodexAppServerRequest) => {
     switch (request.method) {
       case "account/chatgptAuthTokens/refresh": {
-        const refreshed = await resolveLatestAppServerLoginHint({
-          projectId,
-          accountId,
-        });
-        if (refreshed?.type !== "chatgptAuthTokens") {
+        if (
+          authRuntime.source !== "subscription" ||
+          !accountId ||
+          !authRuntime.codexHome ||
+          !lastAccessToken
+        ) {
           throw new Error(
             `chatgptAuthTokens refresh is not available for auth source ${authRuntime.source}`,
+          );
+        }
+        let refreshed = await resolveAppServerLoginHint(authRuntime);
+        if (
+          refreshed?.type !== "chatgptAuthTokens" ||
+          refreshed.accessToken === lastAccessToken
+        ) {
+          await refreshSubscriptionAuthFromRegistry({
+            projectId,
+            accountId,
+            codexHome: authRuntime.codexHome,
+            previousAccessTokenHash: createHash("sha256")
+              .update(lastAccessToken)
+              .digest("hex"),
+          });
+          refreshed = await resolveAppServerLoginHint(authRuntime);
+        }
+        if (refreshed?.type !== "chatgptAuthTokens") {
+          throw new Error(
+            "ChatGPT sign-in refresh returned no usable credential. Sign in again with ChatGPT in CoCalc.",
+          );
+        }
+        if (refreshed.accessToken === lastAccessToken) {
+          throw new Error(
+            "ChatGPT sign-in refresh returned an unchanged access token. Sign in again with ChatGPT in CoCalc.",
           );
         }
         const previousAccountId =
@@ -849,6 +925,7 @@ function createAppServerRequestHandler({
             },
           );
         }
+        lastAccessToken = refreshed.accessToken;
         return {
           accessToken: refreshed.accessToken,
           chatgptAccountId: refreshed.chatgptAccountId,
@@ -1646,11 +1723,6 @@ async function spawnCodexAppServerInProjectRuntime({
     preference: paymentSource,
   });
   logResolvedCodexAuthRuntime(projectId, accountId, authRuntime);
-  const handleAppServerRequest = createAppServerRequestHandler({
-    projectId,
-    accountId,
-    authRuntime,
-  });
   await ensureProjectContainerRunning({ projectId, accountId });
   const { home, scratch } = await localPath({ project_id: projectId });
   await scrubBrokenProjectCodexAuthArtifacts(home, authRuntime);
@@ -1673,6 +1745,12 @@ async function spawnCodexAppServerInProjectRuntime({
   const appServerLogin = siteFundedTurn
     ? undefined
     : await resolveAppServerLoginHint(authRuntime);
+  const handleAppServerRequest = createAppServerRequestHandler({
+    projectId,
+    accountId,
+    authRuntime,
+    appServerLogin,
+  });
   const name = projectContainerName(projectId);
   const cliTokenLease = await createProjectCliTokenLease({
     projectId,

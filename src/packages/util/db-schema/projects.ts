@@ -78,6 +78,21 @@ Table({
       "usage_account_id", // membership usage, storage, and egress attribution
       "runtime_sponsor_account_id", // runtime admission, priority, and RAM-limit attribution
     ],
+    pg_custom_indexes: [
+      {
+        name: "projects_archive_lifecycle_candidates_idx",
+        query:
+          "(COALESCE(last_edited, created, make_timestamp(1970, 1, 1, 0, 0, 0)), project_id) " +
+          "WHERE deleted IS NULL AND provisioned IS TRUE " +
+          "AND COALESCE(deletion_protection, FALSE) IS FALSE " +
+          "AND state ->> 'state' = 'opened'",
+      },
+      {
+        name: "projects_archive_lifecycle_job_idx",
+        query:
+          "(archive_lifecycle_job_id) WHERE archive_lifecycle_job_id IS NOT NULL",
+      },
+    ],
 
     crm_indexes: ["last_edited"],
 
@@ -104,6 +119,8 @@ Table({
           autostart_enabled: null,
           deletion_protection: null,
           state: null,
+          archive_reason: null,
+          archived_at: null,
           last_edited: null,
           last_changed: null,
           last_active: null,
@@ -414,6 +431,19 @@ Table({
       type: "map",
       desc: 'Lightweight state info for the project runner: {state:"running|stopped|starting|stopping|error", time:"ISO timestamp", started_at?: "ISO timestamp", runtime_generation?: number, project_bundle_version?: string, tools_version?: string, error?:string, ip?:string, ...}. The JSON is stored in the "state" column as jsonb. The "state" field inside the JSON is the compute state; the "time" field is when this state was recorded. See COMPUTE_STATES and the ProjectState interface below.',
       date: ["time", "started_at"],
+    },
+    archive_reason: {
+      type: "string",
+      pg_type: "VARCHAR(64)",
+      desc: "Reason for the latest archive operation: manual, free-inactive, or all-collaborators-banned.",
+    },
+    archived_at: {
+      type: "timestamp",
+      desc: "Completion time of the latest archive operation.",
+    },
+    archive_lifecycle_job_id: {
+      type: "uuid",
+      desc: "Current or latest durable archive lifecycle job associated with this project.",
     },
     last_edited: {
       type: "timestamp",

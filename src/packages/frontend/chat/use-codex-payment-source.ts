@@ -149,6 +149,27 @@ async function fetchPaymentSourceCached({
   return promise;
 }
 
+export async function fetchCodexPaymentSourceForSubmit({
+  projectId,
+  preference = "auto",
+}: {
+  projectId?: string;
+  preference?: CodexPaymentSourcePreference;
+}): Promise<CodexPaymentSourceInfo> {
+  const entry = await fetchPaymentSourceCached({
+    projectId,
+    preference,
+    force: true,
+  });
+  if (entry.error) {
+    throw new Error(entry.error);
+  }
+  if (!entry.paymentSource) {
+    throw new Error("CoCalc could not determine the Codex payment source.");
+  }
+  return entry.paymentSource;
+}
+
 export function getCodexPaymentSourceShortLabel(
   source: CodexPaymentSourceInfo["source"] | undefined,
 ): string {

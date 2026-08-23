@@ -41,6 +41,11 @@ export type ExternalCredentialSummary = ExternalCredentialSelector & {
   last_used: Date | null;
 };
 
+export type ExternalCredentialPayloadUpdate = {
+  payload: string;
+  metadata?: Record<string, any>;
+};
+
 function pool() {
   return getPool();
 }
@@ -296,6 +301,135 @@ LIMIT 1
     revoked: row.revoked,
     last_used: row.last_used,
   };
+}
+
+export async function updateExternalCredentialPayloadLocked({
+  selector,
+  update,
+}: {
+  selector: ExternalCredentialSelector;
+  update: (
+    credential: ExternalCredentialRecord,
+  ) => Promise<ExternalCredentialPayloadUpdate | undefined>;
+}): Promise<ExternalCredentialRecord | undefined> {
+  const normalized = normalizeSelector(selector);
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query<{
+      id: string;
+      provider: string;
+      kind: string;
+      scope: ExternalCredentialScope;
+      owner_account_id: string | null;
+      project_id: string | null;
+      organization_id: string | null;
+      encrypted_payload: string;
+      metadata: Record<string, any> | null;
+      created: Date;
+      updated: Date;
+      revoked: Date | null;
+      last_used: Date | null;
+    }>(
+      `
+SELECT
+  id,
+  provider,
+  kind,
+  scope,
+  owner_account_id,
+  project_id,
+  organization_id,
+  encrypted_payload,
+  metadata,
+  created,
+  updated,
+  revoked,
+  last_used
+FROM external_credentials
+WHERE provider=$1
+  AND kind=$2
+  AND scope=$3
+  AND owner_account_id IS NOT DISTINCT FROM $4
+  AND project_id IS NOT DISTINCT FROM $5
+  AND organization_id IS NOT DISTINCT FROM $6
+  AND revoked IS NULL
+ORDER BY updated DESC NULLS LAST, created DESC NULLS LAST
+LIMIT 1
+FOR UPDATE
+      `,
+      [
+        normalized.provider,
+        normalized.kind,
+        normalized.scope,
+        normalized.owner_account_id ?? null,
+        normalized.project_id ?? null,
+        normalized.organization_id ?? null,
+      ],
+    );
+    const row = rows[0];
+    if (!row) {
+      await client.query("COMMIT");
+      return undefined;
+    }
+
+    let credential: ExternalCredentialRecord = {
+      id: row.id,
+      provider: row.provider,
+      kind: row.kind,
+      scope: row.scope,
+      owner_account_id: row.owner_account_id ?? undefined,
+      project_id: row.project_id ?? undefined,
+      organization_id: row.organization_id ?? undefined,
+      payload: await decryptPayload(
+        {
+          provider: row.provider,
+          kind: row.kind,
+          scope: row.scope,
+        },
+        row.encrypted_payload,
+      ),
+      metadata: row.metadata ?? {},
+      created: row.created,
+      updated: row.updated,
+      revoked: row.revoked,
+      last_used: row.last_used,
+    };
+    const next = await update(credential);
+    if (next) {
+      validatePayload(next.payload);
+      const encryptedPayload = await encryptPayload(normalized, next.payload);
+      const metadata = next.metadata ?? credential.metadata;
+      const { rows: updatedRows } = await client.query<{
+        updated: Date;
+        last_used: Date;
+      }>(
+        `
+UPDATE external_credentials
+SET encrypted_payload=$2, metadata=$3, updated=NOW(), last_used=NOW()
+WHERE id=$1
+RETURNING updated, last_used
+        `,
+        [row.id, encryptedPayload, metadata],
+      );
+      credential = {
+        ...credential,
+        payload: next.payload,
+        metadata,
+        updated: updatedRows[0]?.updated ?? new Date(),
+        last_used: updatedRows[0]?.last_used ?? new Date(),
+      };
+    }
+    await client.query("COMMIT");
+    return credential;
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function hasExternalCredential({

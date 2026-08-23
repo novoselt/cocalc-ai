@@ -2968,6 +2968,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         checkedAt,
         paymentSource,
         project_id,
+        authentication: status.authentication,
         account: status.account,
         rateLimits: status.rateLimits,
         tokenUsage: status.tokenUsage,

@@ -6708,7 +6708,7 @@ export async function runDetachedAcpQueueWorker(
     };
   };
   try {
-    recordAcpWorkerHeartbeat({ pid: process.pid });
+    await recordAcpWorkerHeartbeat({ pid: process.pid });
     if (workerContext) {
       upsertAcpWorker({
         worker_id: workerContext.worker_id,
@@ -6741,7 +6741,10 @@ export async function runDetachedAcpQueueWorker(
         requestDrain: ({ reason } = {}) =>
           requestDetachedWorkerDrain({ reason }),
       });
-      workerHeartbeatTimer = setInterval(() => {
+    }
+    workerHeartbeatTimer = setInterval(() => {
+      void recordAcpWorkerHeartbeat({ pid: process.pid });
+      if (workerContext) {
         try {
           syncDetachedWorkerState();
         } catch (err) {
@@ -6784,9 +6787,9 @@ export async function runDetachedAcpQueueWorker(
             );
           }
         }
-      }, ACP_WORKER_HEARTBEAT_MS);
-      workerHeartbeatTimer.unref?.();
-    }
+      }
+    }, ACP_WORKER_HEARTBEAT_MS);
+    workerHeartbeatTimer.unref?.();
     logger.warn("starting ACP queue worker", {
       instance: ACP_INSTANCE_ID,
       pid: process.pid,
@@ -6797,7 +6800,6 @@ export async function runDetachedAcpQueueWorker(
     let lastRecoveryAt = Date.now();
     while (true) {
       throwIfWorkerFatalError();
-      syncDetachedWorkerState();
       // Draining workers must keep polling so they can finish continuations
       // pinned to an app-server runtime that they still own. The claim guard
       // prevents them from accepting any unpinned or foreign work.
@@ -6862,15 +6864,14 @@ export async function runDetachedAcpQueueWorker(
         workerStopReason = "idle_timeout";
         return;
       }
-      recordAcpWorkerHeartbeat({ pid: process.pid });
       await sleep(ACP_WORKER_POLL_MS);
       throwIfWorkerFatalError();
     }
   } finally {
-    clearAcpWorkerHeartbeat();
     if (workerHeartbeatTimer != null) {
       clearInterval(workerHeartbeatTimer);
     }
+    await clearAcpWorkerHeartbeat({ pid: process.pid });
     workerControlService?.close();
     if (workerContext) {
       try {

@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { ChatLog } from "../chat-log";
 
 let renderedMessages: any[] = [];
@@ -438,6 +438,60 @@ describe("ChatLog immediate steer rendering", () => {
     ).not.toBe(firstKey);
   });
 
+  it("propagates live activity updates through a mounted virtual row", () => {
+    freezeVirtuosoRows = true;
+    const messages = new Map([
+      [
+        "1000",
+        {
+          date: 1000,
+          message_id: "user-1",
+          thread_id: "thread-1",
+          sender_id: "acct-1",
+          history: [{ content: "inspect the stream" }],
+        },
+      ],
+      [
+        "2000",
+        {
+          date: 2000,
+          message_id: "assistant-1",
+          thread_id: "thread-1",
+          parent_message_id: "user-1",
+          sender_id: "acct-codex",
+          acp_account_id: "acct-codex",
+          generating: true,
+          history: [{ content: ":robot: Thinking..." }],
+        },
+      ],
+    ]) as any;
+
+    render(
+      <ChatLog
+        project_id="project-1"
+        path="thread.chat"
+        mode="standalone"
+        actions={{ clearScrollRequest: jest.fn() } as any}
+        selectedThread="thread-1"
+        acpState={new Map() as any}
+        messages={messages}
+      />,
+    );
+
+    const mountedProps = lastRenderedMessageProps("assistant-1");
+    expect(mountedProps?.cachedCodexActivityBlocks).toBeUndefined();
+
+    act(() => {
+      mountedProps?.onCachedCodexActivityBlocksChange?.([
+        { kind: "agent", text: "The final word is visible." },
+      ]);
+    });
+
+    expect(
+      lastRenderedMessageProps("assistant-1")?.cachedCodexActivityBlocks,
+    ).toEqual([{ kind: "agent", text: "The final word is visible." }]);
+  });
+
   it("keeps unresolved immediate guidance visible as a durable chat row", () => {
     render(
       <ChatLog
@@ -638,7 +692,7 @@ describe("ChatLog immediate steer rendering", () => {
     ]);
   });
 
-  it("attaches steer messages back to the original prompt once the Codex turn is done", () => {
+  it("keeps completed steer messages on the assistant turn", () => {
     render(
       <ChatLog
         project_id="project-1"
@@ -708,11 +762,26 @@ describe("ChatLog immediate steer rendering", () => {
       />,
     );
 
-    expect(screen.queryByText("Guidance sent")).toBeNull();
     expect(lastRenderedMessageProps("steer-1")).toBeUndefined();
     expect(lastRenderedMessageProps("steer-2")).toBeUndefined();
     const userProps = lastRenderedMessageProps("user-1");
-    expect(userProps?.attachedSteers).toEqual([
+    expect(userProps?.attachedSteers).toBeUndefined();
+    const assistantProps = lastRenderedMessageProps("assistant-1");
+    expect(assistantProps?.activitySteers).toEqual([
+      expect.objectContaining({
+        messageId: "steer-1",
+        date: 3000,
+        text: "actually say hello",
+        state: "sent",
+      }),
+      expect.objectContaining({
+        messageId: "steer-2",
+        date: 4000,
+        text: "also add punctuation",
+        state: "sent",
+      }),
+    ]);
+    expect(assistantProps?.attachedSteers).toEqual([
       expect.objectContaining({
         messageId: "steer-1",
         date: 3000,
@@ -801,9 +870,10 @@ describe("ChatLog immediate steer rendering", () => {
     );
 
     const userProps = lastRenderedMessageProps("user-1");
-    expect(userProps?.attachedSteers).toEqual([]);
+    expect(userProps?.attachedSteers).toBeUndefined();
     const assistantProps = lastRenderedMessageProps("assistant-1");
     expect(assistantProps?.expandedCodexActivity).toBe(true);
+    expect(assistantProps?.attachedSteers).toEqual([]);
     expect(assistantProps?.activitySteers).toEqual([
       expect.objectContaining({
         messageId: "steer-1",

@@ -93,6 +93,7 @@ import "./project-host-access";
 import "./project-host-bootstrap-tokens";
 import "./project-backup-repos";
 import "./project-backup-indexes";
+import "./project-archive-lifecycle-jobs";
 import "./project-collab-invites";
 import "./project-entitlement-overrides";
 import "./project-events-outbox";

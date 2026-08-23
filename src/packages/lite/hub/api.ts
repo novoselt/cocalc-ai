@@ -702,6 +702,7 @@ async function getCodexUsageStatus(opts?: {
       checkedAt,
       paymentSource,
       project_id: paymentSource.project_id,
+      authentication: status.authentication,
       account: status.account,
       rateLimits: status.rateLimits,
       tokenUsage: status.tokenUsage,

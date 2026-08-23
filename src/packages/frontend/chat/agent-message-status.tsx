@@ -25,6 +25,7 @@ import {
 } from "./codex-activity";
 import type { ActivityLogContext } from "./actions/activity-logs";
 import type { CodexLiveLogStatus } from "./use-codex-log";
+import "./agent-message-status.css";
 
 const activityScrollPositions = new Map<string, number>();
 const SCROLL_BOTTOM_SENTINEL = Number.POSITIVE_INFINITY;
@@ -117,6 +118,7 @@ export function SteerGuidanceCard({ steer }: { steer: AttachedSteerMessage }) {
   return (
     <section
       aria-label={status.label}
+      className="cocalc-steer-guidance-card"
       style={{
         padding: "8px 10px 10px",
         borderRadius: 10,
@@ -146,6 +148,7 @@ export function SteerGuidanceCard({ steer }: { steer: AttachedSteerMessage }) {
         </span>
       </div>
       <div
+        className="cocalc-steer-guidance-content"
         style={{
           fontSize: 13,
           color: COLORS.GRAY_D,
@@ -175,6 +178,7 @@ export function AttachedSteerStatusList({
   if (steerItems.length === 0) return null;
   return (
     <div
+      className="cocalc-steer-guidance-list"
       style={{
         display: "flex",
         flexDirection: "column",

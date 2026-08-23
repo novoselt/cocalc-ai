@@ -59,6 +59,7 @@ import { startUsageRetentionMaintenance } from "@cocalc/server/membership/usage-
 import { startActiveUserMapHistoryMaintenance } from "@cocalc/server/active-user-map-history";
 import { startGrowthAnalyticsMaintenance } from "@cocalc/server/growth-analytics/maintenance";
 import { startFrontendAssetHealthMaintenance } from "@cocalc/server/monitoring/frontend-assets";
+import { startProjectArchiveLifecycleMaintenance } from "@cocalc/server/projects/archive-lifecycle-maintenance";
 
 export { loadConatConfiguration };
 
@@ -137,6 +138,7 @@ export function startConatApiBackgroundWorkers(): void {
   }
   startHostLroWorker();
   if (isPrimaryBayWorker()) {
+    startProjectArchiveLifecycleMaintenance();
     startComputeVmWorker();
     startLroExpirationMaintenance();
     startUsageRetentionMaintenance();

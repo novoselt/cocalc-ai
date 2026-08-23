@@ -10,6 +10,7 @@ const spawnMock = jest.fn();
 const execFileMock = jest.fn();
 const execMock = jest.fn();
 const mockStartProjectWithAdmission = jest.fn();
+const refreshSubscriptionAuthFromRegistryMock = jest.fn();
 const podmanEnvMock = jest.fn(() => ({
   XDG_RUNTIME_DIR: "/tmp/cocalc-podman-runtime",
   CONTAINERS_CGROUP_MANAGER: "cgroupfs",
@@ -86,6 +87,8 @@ jest.mock("./codex/codex-auth", () => ({
 }));
 
 jest.mock("./codex/codex-auth-registry", () => ({
+  refreshSubscriptionAuthFromRegistry: (...args: any[]) =>
+    refreshSubscriptionAuthFromRegistryMock(...args),
   syncSubscriptionAuthToRegistryIfChanged: jest.fn(),
 }));
 
@@ -173,6 +176,10 @@ describe("initCodexProjectRunner", () => {
     hubApi.projects.start.mockResolvedValue({});
     mockStartProjectWithAdmission.mockReset();
     mockStartProjectWithAdmission.mockResolvedValue({});
+    refreshSubscriptionAuthFromRegistryMock.mockReset();
+    refreshSubscriptionAuthFromRegistryMock.mockResolvedValue({
+      refreshed: true,
+    });
     hubApi.hosts.issueProjectHostAgentAuthToken.mockReset();
     hubApi.hosts.issueProjectHostAgentAuthToken.mockResolvedValue({
       token: "issued-project-host-token",
@@ -514,6 +521,81 @@ describe("initCodexProjectRunner", () => {
     await restarted!.close();
   });
 
+  it("retries transient failures while rotating a turn token", async () => {
+    const scratch = await mkTempDir("codex-project-turn-token-retry-");
+    hubApi.hosts.issueProjectHostAgentAuthToken
+      .mockResolvedValueOnce({
+        token: "turn-one-token",
+        expires_at: Date.now() + 60_000,
+      })
+      .mockRejectedValueOnce(Object.assign(new Error("timeout"), { code: 408 }))
+      .mockResolvedValueOnce({
+        token: "turn-two-token",
+        expires_at: Date.now() + 60_000,
+      });
+    const { createProjectCliTokenLease } =
+      await import("./codex/codex-project");
+    const lease = await createProjectCliTokenLease({
+      projectId: "6bc2c387-4c80-4a79-aa68-65d8e68a6a52",
+      accountId: "00000000-0000-4000-8000-000000000001",
+      agentSessionKey: "thread-1\0turn-1",
+      currentEnv: {},
+      home: scratch,
+      scratch,
+      refreshMs: 60_000,
+    });
+
+    try {
+      await lease!.setAgentSessionKey("thread-1\0turn-2");
+      expect(await fs.readFile(lease!.hostPath, "utf8")).toBe(
+        "turn-two-token\n",
+      );
+      expect(hubApi.hosts.issueProjectHostAgentAuthToken).toHaveBeenCalledTimes(
+        3,
+      );
+      const calls = hubApi.hosts.issueProjectHostAgentAuthToken.mock.calls;
+      expect(calls[1][0].session_id).toBe(calls[2][0].session_id);
+      expect(calls[1][0].session_id).not.toBe(calls[0][0].session_id);
+    } finally {
+      await lease!.close();
+    }
+  });
+
+  it("does not retry authorization failures while rotating a turn token", async () => {
+    const scratch = await mkTempDir("codex-project-turn-token-denied-");
+    hubApi.hosts.issueProjectHostAgentAuthToken
+      .mockResolvedValueOnce({
+        token: "turn-one-token",
+        expires_at: Date.now() + 60_000,
+      })
+      .mockRejectedValueOnce(new Error("not authorized"));
+    const { createProjectCliTokenLease } =
+      await import("./codex/codex-project");
+    const lease = await createProjectCliTokenLease({
+      projectId: "6bc2c387-4c80-4a79-aa68-65d8e68a6a52",
+      accountId: "00000000-0000-4000-8000-000000000001",
+      agentSessionKey: "thread-1\0turn-1",
+      currentEnv: {},
+      home: scratch,
+      scratch,
+      refreshMs: 60_000,
+    });
+
+    try {
+      await expect(
+        lease!.setAgentSessionKey("thread-1\0turn-2"),
+      ).rejects.toThrow("unable to rotate the project-scoped agent token");
+      expect(hubApi.hosts.issueProjectHostAgentAuthToken).toHaveBeenCalledTimes(
+        2,
+      );
+      expect(await fs.readFile(lease!.hostPath, "utf8")).toBe(
+        "turn-one-token\n",
+      );
+    } finally {
+      await lease!.close();
+    }
+  });
+
   it("falls back to the bundled project runtime cocalc command when no host cli is resolvable", async () => {
     spawnMock.mockReturnValue(new FakeProc());
     execFileMock.mockImplementation((_cmd, args, _opts, cb) => {
@@ -680,7 +762,7 @@ describe("initCodexProjectRunner", () => {
     expect(pathEnv).toContain("/bin");
   });
 
-  it("seeds app-server ChatGPT auth from host auth.json without mounting it", async () => {
+  it("accepts only a newer app-server ChatGPT token refresh", async () => {
     spawnMock.mockReturnValue(new FakeProc());
     execFileMock.mockImplementation((_cmd, args, _opts, cb) => {
       if (args[0] === "inspect" && args[1] === "-f") {
@@ -700,6 +782,13 @@ describe("initCodexProjectRunner", () => {
         chatgpt_plan_type: "pro",
       },
     });
+    const refreshedAccessToken = jwt({
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: "workspace-123",
+        chatgpt_plan_type: "pro",
+      },
+      token_version: "refreshed",
+    });
     await fs.writeFile(
       path.join(codexHome, "auth.json"),
       JSON.stringify({
@@ -715,6 +804,18 @@ describe("initCodexProjectRunner", () => {
       contextId: "subscription-1234",
       codexHome,
       env: {},
+    });
+    refreshSubscriptionAuthFromRegistryMock.mockImplementation(async () => {
+      await fs.writeFile(
+        path.join(codexHome, "auth.json"),
+        JSON.stringify({
+          tokens: {
+            access_token: refreshedAccessToken,
+            account_id: "workspace-123",
+          },
+        }),
+      );
+      return { refreshed: true };
     });
 
     const { initCodexProjectRunner } = await import("./codex/codex-project");
@@ -746,10 +847,29 @@ describe("initCodexProjectRunner", () => {
         },
       }),
     ).resolves.toEqual({
-      accessToken,
+      accessToken: refreshedAccessToken,
       chatgptAccountId: "workspace-123",
       chatgptPlanType: "pro",
     });
+    expect(refreshSubscriptionAuthFromRegistryMock).toHaveBeenCalledWith({
+      projectId: "6bc2c387-4c80-4a79-aa68-65d8e68a6a52",
+      accountId: "00000000-0000-4000-8000-000000000001",
+      codexHome,
+      previousAccessTokenHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    refreshSubscriptionAuthFromRegistryMock.mockResolvedValue({
+      refreshed: false,
+    });
+    await expect(
+      spawned.handleAppServerRequest?.({
+        id: 18,
+        method: "account/chatgptAuthTokens/refresh",
+        params: {
+          reason: "unauthorized",
+          previousAccountId: "workspace-123",
+        },
+      }),
+    ).rejects.toThrow("unchanged access token");
     expect(spawnMock.mock.calls[0][1]).not.toContain(
       "OPENAI_API_KEY=secret-key",
     );
@@ -933,6 +1053,7 @@ describe("initCodexProjectRunner", () => {
       chatgptAccountId: "workspace-123",
       chatgptPlanType: "pro",
     });
+    expect(refreshSubscriptionAuthFromRegistryMock).not.toHaveBeenCalled();
   });
 
   it("starts the project container before launching app-server when needed", async () => {

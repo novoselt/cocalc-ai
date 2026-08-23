@@ -9,6 +9,10 @@ import { resolveAccountHomeBay } from "@cocalc/server/bay-directory";
 import { resolveProjectBay } from "@cocalc/server/inter-bay/directory";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import {
+  refreshCodexSubscriptionAuth,
+  type CodexSubscriptionAuthRefreshResult,
+} from "./codex-subscription-refresh";
+import {
   getExternalCredential,
   hasExternalCredential,
   listExternalCredentials,
@@ -149,6 +153,34 @@ export async function touchExternalCredentialRouted({
     local: async () => await touchExternalCredential({ selector }),
     remote: async (dest_bay) =>
       await remoteCredentialsClient(dest_bay).touch({ selector }),
+  });
+}
+
+export async function refreshCodexSubscriptionAuthRouted({
+  owner_account_id,
+  previous_access_token_hash,
+}: {
+  owner_account_id: string;
+  previous_access_token_hash: string;
+}): Promise<CodexSubscriptionAuthRefreshResult> {
+  const selector: ExternalCredentialSelector = {
+    provider: "openai",
+    kind: "codex-subscription-auth-json",
+    scope: "account",
+    owner_account_id,
+  };
+  return await withExternalCredentialAuthority({
+    selector,
+    local: async () =>
+      await refreshCodexSubscriptionAuth({
+        ownerAccountId: owner_account_id,
+        previousAccessTokenHash: previous_access_token_hash,
+      }),
+    remote: async (dest_bay) =>
+      await remoteCredentialsClient(dest_bay).refreshCodexSubscription({
+        owner_account_id,
+        previous_access_token_hash,
+      }),
   });
 }
 

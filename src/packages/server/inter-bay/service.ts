@@ -88,6 +88,7 @@ import {
   resendEmailAuthChallengeDirect,
   startEmailAuthChallengeDirect,
 } from "@cocalc/server/auth/email/challenge-store";
+import { getArchiveLifecycleAccountStatusesLocal } from "@cocalc/server/accounts/archive-lifecycle-status";
 import adminVerifyEmailAddressLocal from "@cocalc/server/accounts/admin-verify-email-address";
 import sendEmailVerificationLocal from "@cocalc/server/accounts/send-email-verification";
 import {
@@ -276,6 +277,7 @@ import {
   touchExternalCredential,
   upsertExternalCredential,
 } from "@cocalc/server/external-credentials/store";
+import { refreshCodexSubscriptionAuth } from "@cocalc/server/external-credentials/codex-subscription-refresh";
 import { getDedicatedHostPolicySnapshotLocal } from "@cocalc/server/project-host/admission";
 import {
   closeDedicatedHostPurchaseSessionLocal,
@@ -1071,6 +1073,8 @@ async function startAccountLocalService(): Promise<void> {
     },
     getMembership: async ({ account_id }) =>
       await resolveMembershipForAccount(account_id),
+    getArchiveLifecycleStatuses: async ({ account_ids }) =>
+      await getArchiveLifecycleAccountStatusesLocal({ account_ids }),
     getMembershipDetails: async ({ account_id, refresh_usage_status }) =>
       await resolveMembershipDetailsForAccount(account_id, {
         refresh_usage_status,
@@ -1723,6 +1727,8 @@ async function startAccountLocalService(): Promise<void> {
       await publicDirectoryShares.update(opts),
     publicDirectoryShareUpsert: async (opts) =>
       await publicDirectoryShares.upsert(opts),
+    publicDirectoryShareDisableForBannedActor: async (opts) =>
+      await publicDirectoryShares.disableForBannedActor(opts),
     publicDirectoryShareAuthorizeRead: async (opts) =>
       await publicDirectoryShares.authorizeRead(opts),
     publicDirectoryShareListDirectory: async (opts) =>
@@ -2035,6 +2041,14 @@ async function startExternalCredentialsService(): Promise<void> {
       }),
     revoke: async ({ id, owner_account_id }) =>
       await revokeExternalCredential({ id, owner_account_id }),
+    refreshCodexSubscription: async ({
+      owner_account_id,
+      previous_access_token_hash,
+    }) =>
+      await refreshCodexSubscriptionAuth({
+        ownerAccountId: owner_account_id,
+        previousAccessTokenHash: previous_access_token_hash,
+      }),
   };
   services.push(
     ...createInterBayExternalCredentialsHandlers({

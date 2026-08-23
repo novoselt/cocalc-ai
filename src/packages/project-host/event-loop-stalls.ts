@@ -128,6 +128,61 @@ function snapshotForLag(lagMs: number, gcSnapshot: Record<string, any>) {
   };
 }
 
+type ProcessActivitySnapshot = {
+  at_ms: number;
+  cpu: NodeJS.CpuUsage;
+  resources: NodeJS.ResourceUsage;
+};
+
+function processActivitySnapshot(
+  atMs = performance.now(),
+): ProcessActivitySnapshot {
+  return {
+    at_ms: atMs,
+    cpu: process.cpuUsage(),
+    resources: process.resourceUsage(),
+  };
+}
+
+function summarizeProcessActivity(
+  previous: ProcessActivitySnapshot,
+  current: ProcessActivitySnapshot,
+) {
+  const elapsedMs = Math.max(0, current.at_ms - previous.at_ms);
+  const cpuMs = Math.max(
+    0,
+    (current.cpu.user -
+      previous.cpu.user +
+      current.cpu.system -
+      previous.cpu.system) /
+      1000,
+  );
+  return {
+    sample_elapsed_ms: Math.round(elapsedMs),
+    process_cpu_ms: Math.round(cpuMs),
+    process_cpu_percent:
+      elapsedMs > 0 ? Math.round((cpuMs / elapsedMs) * 100) : 0,
+    voluntary_context_switches: Math.max(
+      0,
+      current.resources.voluntaryContextSwitches -
+        previous.resources.voluntaryContextSwitches,
+    ),
+    involuntary_context_switches: Math.max(
+      0,
+      current.resources.involuntaryContextSwitches -
+        previous.resources.involuntaryContextSwitches,
+    ),
+    fs_read_ops: Math.max(
+      0,
+      current.resources.fsRead - previous.resources.fsRead,
+    ),
+    fs_write_ops: Math.max(
+      0,
+      current.resources.fsWrite - previous.resources.fsWrite,
+    ),
+  };
+}
+
 export function startProjectHostEventLoopStallMonitor(): () => void {
   projectHostStatus = {
     started_at: new Date().toISOString(),
@@ -185,10 +240,17 @@ export function startEventLoopStallMonitor({
   const thresholds = [...warnThresholdsMs].sort((a, b) => a - b);
   const gcTracker = createGcTracker();
   let expected = performance.now() + sampleIntervalMs;
+  let previousActivity = processActivitySnapshot();
   const timer = setInterval(() => {
     const now = performance.now();
     const lagMs = Math.max(0, now - expected);
     expected = now + sampleIntervalMs;
+    const currentActivity = processActivitySnapshot(now);
+    const processActivity = summarizeProcessActivity(
+      previousActivity,
+      currentActivity,
+    );
+    previousActivity = currentActivity;
     const threshold = thresholds.find((value) => lagMs >= value);
     if (threshold == null) {
       return;
@@ -197,6 +259,7 @@ export function startEventLoopStallMonitor({
       component: label,
       threshold_ms: threshold,
       ...snapshotForLag(lagMs, gcTracker.snapshot(now)),
+      ...processActivity,
     };
     onStall?.(snapshot);
     logger.warn(`${label} event loop stall detected`, snapshot);
@@ -212,4 +275,5 @@ export const __test__ = {
   gcKindName,
   summarizeGcEvents,
   pruneGcEvents,
+  summarizeProcessActivity,
 };

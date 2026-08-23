@@ -77,6 +77,7 @@ import {
 import { isHostRoutingUnavailableError } from "@cocalc/frontend/projects/host-routing-error";
 import { shouldSuppressTransientRoutingError } from "@cocalc/frontend/projects/host-routing-error";
 import type { MoveLroState } from "@cocalc/frontend/project/move-ops";
+import { projectArchiveReasonText } from "@cocalc/frontend/projects/archive-lifecycle";
 import {
   navigateBrowsingPath,
   normalizeBrowsingPath,
@@ -263,6 +264,15 @@ export function Explorer({ isVisible = true }: { isVisible?: boolean }) {
     .trim()
     .toLowerCase();
   const lastBackup = useProjectMapField(project_id, "last_backup");
+  const archiveReason = useProjectMapField<string>(
+    project_id,
+    "archive_reason",
+  );
+  const archivedAt = useProjectMapField(project_id, "archived_at");
+  const archiveReasonText = projectArchiveReasonText({
+    reason: archiveReason,
+    archivedAt,
+  });
   const hostInfo = useHostInfo(host_id, { enabled: !publicDirectoryShare });
   const hostOperational = useMemo(
     () => evaluateHostOperational(hostInfo),
@@ -1248,26 +1258,33 @@ Wait for this host to become available again, then refresh.`}
                 style={{ margin: "16px auto", maxWidth: "760px" }}
                 title={`This ${projectLabelLower} is archived.`}
                 description={
-                  <FormattedMessage
-                    id="project.explorer.archived_project.warning"
-                    defaultMessage={
-                      "Archived projects do not count toward active storage. <a>Start this project</a> to restore it from backup and make the filesystem available again. Once restored, it will count toward your global storage quota."
-                    }
-                    values={{
-                      a: (chunks) => (
-                        <a
-                          onClick={(e) => {
-                            e.preventDefault();
-                            redux
-                              .getActions("projects")
-                              .start_project(project_id);
-                          }}
-                        >
-                          {chunks}
-                        </a>
-                      ),
-                    }}
-                  />
+                  <>
+                    {archiveReasonText && (
+                      <div style={{ marginBottom: "4px" }}>
+                        <strong>{archiveReasonText}</strong>
+                      </div>
+                    )}
+                    <FormattedMessage
+                      id="project.explorer.archived_project.warning"
+                      defaultMessage={
+                        "Archived projects do not count toward active storage. <a>Start this project</a> to restore it from backup and make the filesystem available again. Once restored, it will count toward your global storage quota."
+                      }
+                      values={{
+                        a: (chunks) => (
+                          <a
+                            onClick={(e) => {
+                              e.preventDefault();
+                              redux
+                                .getActions("projects")
+                                .start_project(project_id);
+                            }}
+                          >
+                            {chunks}
+                          </a>
+                        ),
+                      }}
+                    />
+                  </>
                 }
               />
             )}

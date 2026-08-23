@@ -30,6 +30,11 @@ export async function ensureAccountBanAuditLogSchema(): Promise<void> {
       created TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  // Repair older installations where the declarative schema created this
+  // column without its intended default. Historical nulls remain unknown.
+  await pool.query(
+    `ALTER TABLE ${TABLE} ALTER COLUMN created SET DEFAULT CURRENT_TIMESTAMP`,
+  );
   await pool.query(
     `CREATE INDEX IF NOT EXISTS ${TABLE}_account_id_idx ON ${TABLE} (account_id)`,
   );

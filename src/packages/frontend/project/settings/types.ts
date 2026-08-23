@@ -38,6 +38,8 @@ export type Project = TypedMap<{
   allow_collaborator_destructive_storage_actions?: boolean;
   autostart_enabled?: boolean;
   deletion_protection?: boolean;
+  archive_reason?: string;
+  archived_at?: Date;
   rootfs_image?: string;
   rootfs_image_id?: string;
 }>;

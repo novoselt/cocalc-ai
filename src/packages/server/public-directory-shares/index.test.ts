@@ -6,6 +6,7 @@
 import {
   copySourceDestinationPaths,
   create,
+  disableForBannedActor,
   disableMineByActor,
   ensurePublicDirectorySharesSchema,
   getTemporaryViewerReadPolicy,
@@ -31,6 +32,12 @@ import { viewerReadPolicyAllowsPath } from "@cocalc/util/project-access";
 
 let mockGetProjectFsClient: jest.Mock;
 let mockGetProjectShareFsClient: jest.Mock;
+let mockGetClusterAccountsByIds: jest.Mock;
+
+jest.mock("@cocalc/server/inter-bay/accounts", () => ({
+  getClusterAccountsByIds: (...args: any[]) =>
+    mockGetClusterAccountsByIds(...args),
+}));
 
 jest.mock("@cocalc/server/conat/file-server-client", () => ({
   getProjectFsClient: (...args: any[]) => mockGetProjectFsClient(...args),
@@ -265,6 +272,7 @@ describe("public directory temporary viewer grants", () => {
   }, 15000);
 
   beforeEach(async () => {
+    mockGetClusterAccountsByIds = jest.fn(async () => []);
     mockGetProjectFsClient = jest.fn(async () => ({
       getListing: jest.fn(async () => ({ files: {}, truncated: false })),
       lstat: jest.fn(async () => ({
@@ -737,6 +745,104 @@ describe("public directory temporary viewer grants", () => {
         actor_account_id: OWNER_ID,
       }),
     ).rejects.toMatchObject({ code: "fresh_auth_required" });
+  });
+
+  it("disables shares in projects owned by a banned actor", async () => {
+    const shareId = await insertShare();
+    await getPool().query(
+      `
+        UPDATE projects
+        SET users=jsonb_build_object(
+          $2::text,
+          jsonb_build_object('group', 'owner')
+        )
+        WHERE project_id=$1
+      `,
+      [PROJECT_ID, OWNER_ID],
+    );
+    await getPool().query(
+      `
+        UPDATE public_project_paths
+        SET created_by=NULL, updated_by=NULL
+        WHERE id=$1
+      `,
+      [shareId],
+    );
+
+    await expect(
+      disableForBannedActor({
+        actor_account_id: OWNER_ID,
+        reason: "spam account",
+      }),
+    ).resolves.toEqual({ disabled_count: 1, share_ids: [shareId] });
+
+    const { rows } = await getPool().query<{
+      disabled: boolean;
+      visibility: string;
+      metadata: Record<string, unknown>;
+    }>(
+      `SELECT disabled, visibility, metadata FROM public_project_paths WHERE id=$1`,
+      [shareId],
+    );
+    expect(rows[0]).toMatchObject({
+      disabled: true,
+      visibility: "disabled",
+      metadata: {
+        public_share_disabled_for_banned_actor: OWNER_ID,
+        public_share_disabled_for_banned_actor_reason: "spam account",
+      },
+    });
+    await expect(
+      getPool().query(
+        `SELECT 1 FROM public_project_path_slugs WHERE public_project_path_id=$1 AND disabled IS FALSE`,
+        [shareId],
+      ),
+    ).resolves.toMatchObject({ rowCount: 0 });
+  });
+
+  it("denies and revokes viewer access when the publisher becomes banned", async () => {
+    const shareId = await insertShare();
+    await grantTemporaryViewerAccess({
+      account_id: ACCOUNT_ID,
+      slug: "test2",
+    });
+    await getPool().query(
+      `
+        UPDATE projects
+        SET users=jsonb_build_object(
+          $2::text,
+          jsonb_build_object('group', 'owner')
+        )
+        WHERE project_id=$1
+      `,
+      [PROJECT_ID, OWNER_ID],
+    );
+    await getPool().query(
+      `UPDATE public_project_paths SET created_by=NULL, updated_by=NULL WHERE id=$1`,
+      [shareId],
+    );
+    mockGetClusterAccountsByIds.mockResolvedValue([
+      { account_id: OWNER_ID, banned: true },
+    ]);
+
+    await expect(
+      grantTemporaryViewerAccess({
+        account_id: ACCOUNT_ID,
+        slug: "test2",
+      }),
+    ).rejects.toThrow("public directory share not found");
+    await expect(
+      getTemporaryViewerReadPolicy({
+        account_id: ACCOUNT_ID,
+        project_id: PROJECT_ID,
+      }),
+    ).resolves.toEqual({
+      project_id: PROJECT_ID,
+      account_id: ACCOUNT_ID,
+      read_policy: undefined,
+    });
+
+    expect(shareId).toBe(SHARE_ID);
   });
 
   it("clears tracked site-license grants when a share is disabled", async () => {

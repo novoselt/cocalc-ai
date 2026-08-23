@@ -1808,6 +1808,7 @@ export const hosts = {
   getExternalCredential: authFirstRequireHost,
   touchExternalCredential: authFirstRequireHost,
   upsertExternalCredential: authFirstRequireHost,
+  refreshCodexSubscriptionAuth: authFirstRequireHost,
   getSiteOpenAiApiKey: authFirstRequireHost,
   checkCodexSiteUsageAllowance: authFirstRequireHost,
   recordCodexSiteUsage: authFirstRequireHost,
@@ -2235,6 +2236,16 @@ export interface Hosts {
     payload: string;
     metadata?: Record<string, any>;
   }) => Promise<{ id: string; created: boolean }>;
+  refreshCodexSubscriptionAuth: (opts: {
+    host_id?: string;
+    project_id: string;
+    owner_account_id: string;
+    previous_access_token_hash: string;
+  }) => Promise<{
+    payload: string;
+    updated: Date;
+    refreshed: boolean;
+  }>;
   getSiteOpenAiApiKey: (opts: { host_id?: string }) => Promise<{
     enabled: boolean;
     has_api_key: boolean;

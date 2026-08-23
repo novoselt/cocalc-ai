@@ -301,7 +301,7 @@ describe("CodexCredentialsPanel", () => {
       expect(screen.getByText("Sign in again with ChatGPT")).toBeTruthy();
       expect(
         screen.getByText((text) =>
-          text.includes("live rate-limit details are not available"),
+          text.includes("could not authenticate the stored ChatGPT sign-in"),
         ),
       ).toBeTruthy();
       expect(
@@ -318,6 +318,26 @@ describe("CodexCredentialsPanel", () => {
     });
     await waitFor(() => {
       expect(screen.getByText("ABCD-EFGH")).toBeTruthy();
+    });
+  });
+
+  it("does not call an unverified stored credential connected", async () => {
+    getCodexPaymentSource.mockResolvedValue({ source: "subscription" });
+    getCodexUsageStatus.mockResolvedValue({
+      available: false,
+      checkedAt: "2026-06-10T00:00:00.000Z",
+      paymentSource: { source: "subscription" },
+      reason: "Live usage check timed out",
+    });
+
+    render(<CodexCredentialsPanel embedded defaultProjectId="project-1" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Connection not verified")).toBeTruthy();
+      expect(
+        screen.getByText("Could not verify your ChatGPT sign-in"),
+      ).toBeTruthy();
+      expect(screen.queryByText("ChatGPT is connected")).toBeNull();
     });
   });
 

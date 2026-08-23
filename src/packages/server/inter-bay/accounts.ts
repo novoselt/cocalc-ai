@@ -4,6 +4,7 @@
  */
 
 import { v4 as uuid } from "uuid";
+import getLogger from "@cocalc/backend/logger";
 import {
   type AccountApiKeyDirectoryEntry,
   createInterBayAccountDirectoryClient,
@@ -80,6 +81,7 @@ import {
   isMultiBayCluster,
 } from "@cocalc/server/cluster-config";
 import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
+import { disablePublicDirectorySharesForBannedAccountAcrossCluster } from "@cocalc/server/public-directory-shares/ban-containment";
 import { isValidUUID } from "@cocalc/util/misc";
 import {
   displayNameFromParts,
@@ -89,6 +91,8 @@ import {
 function currentBayId(): string {
   return getConfiguredBayId();
 }
+
+const logger = getLogger("server:inter-bay:accounts");
 
 export async function getClusterAccountById(
   account_id: string,
@@ -670,6 +674,19 @@ export async function setClusterAccountBan({
     account_id: normalizedAccountId,
     banned,
   });
+  if (banned) {
+    await disablePublicDirectorySharesForBannedAccountAcrossCluster({
+      actor_account_id: normalizedAccountId,
+      reason: reason ?? "account ban",
+    }).catch((err) => {
+      // Public-share authorization independently denies banned publishers, so
+      // a transient cleanup failure must not roll back or obscure the ban.
+      logger.error("failed to disable public shares after account ban", {
+        account_id: normalizedAccountId,
+        err: `${err}`,
+      });
+    });
+  }
   return {
     ...result,
     home_bay_id: homeBayId,

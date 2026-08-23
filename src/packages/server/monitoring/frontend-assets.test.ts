@@ -53,3 +53,62 @@ test("retries and reports unavailable retained assets", async () => {
   });
   expect(requests.map(({ method }) => method)).toEqual(["GET", "HEAD", "HEAD"]);
 });
+
+test("retries a transient missing frontend history", async () => {
+  const requests: string[] = [];
+  let historyRequests = 0;
+  const fetchImpl = jest.fn(async (input, init) => {
+    requests.push(`${init?.method} ${input}`);
+    if (`${input}`.includes("frontend-build-history.json")) {
+      historyRequests += 1;
+      if (historyRequests === 1) {
+        return { ok: false, status: 404 } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          schema: 1,
+          builds: [{ assets: ["app-0123456789abcdef.js"] }],
+        }),
+      } as Response;
+    }
+    return { ok: true, status: 200 } as Response;
+  }) as typeof fetch;
+
+  await expect(
+    probeFrontendAssets({
+      origin: "https://example.test",
+      fetchImpl,
+      historyRetryDelayMs: 0,
+    }),
+  ).resolves.toEqual({
+    origin: "https://example.test",
+    builds: 1,
+    assets: 1,
+    failures: [],
+  });
+  expect(requests.map((request) => request.split(" ")[0])).toEqual([
+    "GET",
+    "GET",
+    "HEAD",
+  ]);
+  expect(new URL(requests[0].slice(4)).search).not.toBe(
+    new URL(requests[1].slice(4)).search,
+  );
+});
+
+test("reports a frontend history that remains missing", async () => {
+  const fetchImpl = jest.fn(
+    async () => ({ ok: false, status: 404 }) as Response,
+  ) as typeof fetch;
+
+  await expect(
+    probeFrontendAssets({
+      origin: "https://example.test",
+      fetchImpl,
+      historyRetryDelayMs: 0,
+    }),
+  ).rejects.toThrow("frontend asset history returned HTTP 404");
+  expect(fetchImpl).toHaveBeenCalledTimes(3);
+});
