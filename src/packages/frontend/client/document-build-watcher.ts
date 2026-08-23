@@ -19,6 +19,19 @@ export function documentBuildApi(projectApi: ProjectApi): DocumentBuildApi {
   return projectApi.documentBuild;
 }
 
+const DOCUMENT_BUILD_SERVICE_UNAVAILABLE =
+  /(?:no responders|unknown (?:service|method)|documentBuild is not a function|document-build[^\n]*(?:not found|unavailable)|request timed out)/i;
+
+export function formatDocumentBuildError(err: unknown): string {
+  const message = `${err}`;
+  if (!DOCUMENT_BUILD_SERVICE_UNAVAILABLE.test(message)) return message;
+  return (
+    "Document builds are not available in this running project. " +
+    "Restart the project and try again.\n\n" +
+    message
+  );
+}
+
 export function isDocumentBuildActive(
   snapshot: DocumentBuildSnapshot,
 ): boolean {

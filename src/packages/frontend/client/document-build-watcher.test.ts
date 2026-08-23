@@ -3,6 +3,7 @@ import { EventEmitter } from "events";
 import {
   DocumentBuildWatcher,
   documentBuildSnapshotToEditorState,
+  formatDocumentBuildError,
 } from "./document-build-watcher";
 
 const tick = async () => await new Promise((resolve) => setTimeout(resolve, 0));
@@ -42,6 +43,22 @@ function subscriptionWith(
     },
   };
 }
+
+describe("formatDocumentBuildError", () => {
+  it("suggests restarting a project that lacks the document-build service", () => {
+    expect(
+      formatDocumentBuildError(
+        Error("no responders for project.document-build.start"),
+      ),
+    ).toContain("Restart the project and try again");
+  });
+
+  it("preserves ordinary document-build errors", () => {
+    expect(formatDocumentBuildError(Error("source path is invalid"))).toBe(
+      "Error: source path is invalid",
+    );
+  });
+});
 
 describe("DocumentBuildWatcher", () => {
   it("subscribes before hydrating active builds and refreshes on reconnect", async () => {

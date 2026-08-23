@@ -25,6 +25,7 @@ describe("commercial receivables action capabilities", () => {
         "issueManualInvoice",
         "linkExistingInvoice",
         "list",
+        "listAssignees",
         "provision",
         "reconcileInvoice",
         "reconcilePreview",

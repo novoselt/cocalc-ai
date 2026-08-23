@@ -1211,6 +1211,23 @@ describe("commercial Stripe invoices", () => {
       }),
     ).resolves.toBe(false);
     expect(mockEnqueueCommercialStripeEvent).not.toHaveBeenCalled();
+
+    await expect(
+      acceptCommercialStripeWebhookEvent({
+        id: "evt_4",
+        type: "invoice.paid",
+        data: {
+          object: stripeInvoiceFixture({
+            metadata: {
+              flow: "commercial_order",
+              commercial_order_id: "co_1",
+              commercial_invoice_id: "ci_1",
+            },
+          }),
+        },
+      }),
+    ).resolves.toBe(false);
+    expect(mockEnqueueCommercialStripeEvent).not.toHaveBeenCalled();
   });
 
   it("routes accepted commercial webhooks from a non-seed bay to the seed", async () => {

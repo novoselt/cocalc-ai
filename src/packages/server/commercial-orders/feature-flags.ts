@@ -21,6 +21,7 @@ export type CommercialReceivablesCapability =
 // Keep attached-bay authorization exhaustive and reviewable in one place.
 export const COMMERCIAL_ACTION_CAPABILITIES = {
   list: "visible",
+  listAssignees: "visible",
   get: "visible",
   events: "visible",
   invoicePreview: "visible",

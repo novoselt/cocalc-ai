@@ -42,6 +42,7 @@ import type {
   DocumentBuildApi,
   DocumentBuildWatcher,
 } from "@cocalc/frontend/client/document-build-watcher";
+import { formatDocumentBuildError } from "@cocalc/frontend/client/document-build-watcher";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
 import {
@@ -303,7 +304,9 @@ export class Actions extends BaseActions<LatexEditorState> {
       },
     );
     watcher.on("watch-error", (err: unknown) => {
-      if (this._state !== "closed") this.set_error(`${err}`);
+      if (this._state !== "closed") {
+        this.set_error(formatDocumentBuildError(err));
+      }
     });
     this.document_build_watcher = watcher;
   }
@@ -834,7 +837,7 @@ export class Actions extends BaseActions<LatexEditorState> {
           error_name: err instanceof Error ? err.name : "unknown",
         },
       });
-      this.set_error(`${err}`);
+      this.set_error(formatDocumentBuildError(err));
       // if there is an error, we issue a stop, but keep the build logs
       await this.stop_build();
     } finally {

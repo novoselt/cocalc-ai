@@ -15,6 +15,7 @@ import type { DocumentBuildWatcher } from "@cocalc/frontend/client/document-buil
 import {
   documentBuildApi,
   documentBuildSnapshotToEditorState,
+  formatDocumentBuildError,
   isDocumentBuildActive,
 } from "@cocalc/frontend/client/document-build-watcher";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
@@ -142,7 +143,7 @@ export class Actions extends MarkdownActions {
       },
     );
     this.build_watcher.on("watch-error", (err) => {
-      this.set_error(err, "monospace");
+      this.set_error(formatDocumentBuildError(err), "monospace");
     });
   }
 
@@ -249,7 +250,7 @@ export class Actions extends MarkdownActions {
         await this.apply_build_snapshot(snapshot);
       }
     } catch (err) {
-      this.set_error(err, "monospace");
+      this.set_error(formatDocumentBuildError(err), "monospace");
       this.set_status("");
       this.setState({ building: false, build_exit: 1 });
     } finally {

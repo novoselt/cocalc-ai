@@ -1602,7 +1602,7 @@ export async function acceptCommercialStripeWebhookEvent(
   const metadata = commercialMetadata(event?.data?.object);
   if (metadata.flow !== FLOW) return false;
   const site = await currentStripeSite();
-  if (metadata.cocalc_site && metadata.cocalc_site !== site) return false;
+  if (metadata.cocalc_site !== site) return false;
   const payload = {
     event_id: `${event.id}`,
     event_type: `${event.type}`,
