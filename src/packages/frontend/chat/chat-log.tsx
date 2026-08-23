@@ -19,6 +19,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type ComponentProps,
   type ReactNode,
@@ -89,6 +90,45 @@ function sameInlineCodexActivityBlocks(
     }
   }
   return true;
+}
+
+type CodexActivityBlocksStore = {
+  getSnapshot: (messageId: string) => InlineCodexActivityBlock[] | undefined;
+  set: (
+    messageId: string,
+    blocks: InlineCodexActivityBlock[] | undefined,
+  ) => void;
+  subscribe: (messageId: string, listener: () => void) => () => void;
+};
+
+function createCodexActivityBlocksStore(): CodexActivityBlocksStore {
+  const values = new Map<string, InlineCodexActivityBlock[]>();
+  const listeners = new Map<string, Set<() => void>>();
+  return {
+    getSnapshot: (messageId) => values.get(messageId),
+    set: (messageId, blocks) => {
+      const next =
+        Array.isArray(blocks) && blocks.length > 0 ? blocks : undefined;
+      if (sameInlineCodexActivityBlocks(values.get(messageId), next)) return;
+      if (next == null) {
+        values.delete(messageId);
+      } else {
+        values.set(messageId, next);
+      }
+      for (const listener of listeners.get(messageId) ?? []) {
+        listener();
+      }
+    },
+    subscribe: (messageId, listener) => {
+      const current = listeners.get(messageId) ?? new Set();
+      current.add(listener);
+      listeners.set(messageId, current);
+      return () => {
+        current.delete(listener);
+        if (current.size === 0) listeners.delete(messageId);
+      };
+    },
+  };
 }
 
 function toAttachedSteerState(
@@ -198,9 +238,32 @@ const ActivitySteersContext = createContext<
 function ReactiveActivitySteersMessage({
   steerMessageId,
   activitySteers,
+  cachedCodexActivityBlocks,
+  codexActivityBlocksStore,
   ...props
-}: ComponentProps<typeof Message> & { steerMessageId: string }) {
+}: ComponentProps<typeof Message> & {
+  steerMessageId: string;
+  codexActivityBlocksStore?: CodexActivityBlocksStore;
+}) {
   const currentActivitySteers = useContext(ActivitySteersContext);
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      codexActivityBlocksStore?.subscribe(steerMessageId, listener) ??
+      (() => {}),
+    [codexActivityBlocksStore, steerMessageId],
+  );
+  const getSnapshot = useCallback(
+    () =>
+      codexActivityBlocksStore == null
+        ? cachedCodexActivityBlocks
+        : codexActivityBlocksStore.getSnapshot(steerMessageId),
+    [cachedCodexActivityBlocks, codexActivityBlocksStore, steerMessageId],
+  );
+  const currentCodexActivityBlocks = useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    getSnapshot,
+  );
   return (
     <Message
       {...props}
@@ -209,6 +272,7 @@ function ReactiveActivitySteersMessage({
           ? activitySteers
           : currentActivitySteers.get(steerMessageId)
       }
+      cachedCodexActivityBlocks={currentCodexActivityBlocks}
     />
   );
 }
@@ -895,10 +959,13 @@ export function MessageList({
     explicitCodexActivityByMessageId,
     setExplicitCodexActivityByMessageId,
   ] = useState<Record<string, boolean>>({});
-  const [
-    cachedCodexActivityBlocksByMessageId,
-    setCachedCodexActivityBlocksByMessageId,
-  ] = useState<Record<string, InlineCodexActivityBlock[] | undefined>>({});
+  const codexActivityBlocksStoreRef = useRef<
+    CodexActivityBlocksStore | undefined
+  >(undefined);
+  if (codexActivityBlocksStoreRef.current == null) {
+    codexActivityBlocksStoreRef.current = createCodexActivityBlocksStore();
+  }
+  const codexActivityBlocksStore = codexActivityBlocksStoreRef.current;
   const userScrollIntentRef = useRef(false);
   const userScrollIntentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -1295,7 +1362,7 @@ export function MessageList({
       ? explicitCodexActivityByMessageId[messageId] === true
       : false;
     const cachedCodexActivityBlocks = messageId
-      ? cachedCodexActivityBlocksByMessageId[messageId]
+      ? codexActivityBlocksStore.getSnapshot(messageId)
       : undefined;
 
     const is_thread = numChildren != null && isThread(message, numChildren);
@@ -1357,27 +1424,10 @@ export function MessageList({
               !readOnly && allowAsyncCompletedCodexActivityLoad
             }
             cachedCodexActivityBlocks={cachedCodexActivityBlocks}
+            codexActivityBlocksStore={codexActivityBlocksStore}
             onCachedCodexActivityBlocksChange={
               messageId
-                ? (blocks) => {
-                    setCachedCodexActivityBlocksByMessageId((prev) => {
-                      const current = prev[messageId];
-                      if (sameInlineCodexActivityBlocks(current, blocks)) {
-                        return prev;
-                      }
-                      if (
-                        blocks == null ||
-                        !Array.isArray(blocks) ||
-                        blocks.length === 0
-                      ) {
-                        if (!(messageId in prev)) return prev;
-                        const next = { ...prev };
-                        delete next[messageId];
-                        return next;
-                      }
-                      return { ...prev, [messageId]: blocks };
-                    });
-                  }
+                ? (blocks) => codexActivityBlocksStore.set(messageId, blocks)
                 : undefined
             }
             onExpandedCodexActivityChange={
