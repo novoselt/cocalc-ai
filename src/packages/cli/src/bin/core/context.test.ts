@@ -3,6 +3,32 @@ import test from "node:test";
 
 import { createHubApiForContext, hubCallByName } from "./context";
 
+test("createHubApiForContext exposes the commercialOrders hub group", async () => {
+  const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
+  const hub = createHubApiForContext(async <T>(name, args = [], timeout) => {
+    calls.push({ name, args, timeout });
+    return { orders: [], truncated: false, result_bytes: 2 } as T;
+  });
+
+  const result = await hub.commercialOrders.list({
+    reason: "review receivables",
+    limit: 25,
+  });
+
+  assert.deepEqual(result, {
+    orders: [],
+    truncated: false,
+    result_bytes: 2,
+  });
+  assert.deepEqual(calls, [
+    {
+      name: "commercialOrders.list",
+      args: [{ reason: "review receivables", limit: 25 }],
+      timeout: undefined,
+    },
+  ]);
+});
+
 test("createHubApiForContext exposes the notifications hub group", async () => {
   const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
   const callByName = async <T>(

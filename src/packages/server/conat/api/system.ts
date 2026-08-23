@@ -3682,16 +3682,27 @@ export async function getRoutingContext({
 
 export async function backfillBayOwnership({
   account_id,
+  browser_id,
+  session_hash,
   bay_id,
   dry_run = true,
   limit_per_table,
 }: {
   account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
   bay_id?: string;
   dry_run?: boolean;
   limit_per_table?: number;
 }) {
   await assertAdmin(account_id);
+  await requireDangerousSessionAuth({
+    account_id,
+    browser_id,
+    session_hash,
+    require_second_factor: "if_enabled",
+    allow_actor_impersonation: false,
+  });
   return await backfillBayOwnership0({
     bay_id,
     dry_run,

@@ -3313,6 +3313,7 @@ export async function updateSiteLicensePool({
   seat_count,
   pool_description,
   requires_approval,
+  verification_policy,
   affiliation_reverification_days,
   affiliation_reverification_grace_days,
   expires_at,
@@ -3324,6 +3325,7 @@ export async function updateSiteLicensePool({
   seat_count?: number;
   pool_description?: string | null;
   requires_approval?: boolean;
+  verification_policy?: SiteLicenseVerificationPolicy;
   affiliation_reverification_days?: number | null;
   affiliation_reverification_grace_days?: number | null;
   expires_at?: Date | string | null;
@@ -3347,6 +3349,12 @@ export async function updateSiteLicensePool({
     }
     if (requires_approval !== undefined) {
       metadataPatch.requires_approval = requires_approval === true;
+    }
+    if (verification_policy !== undefined) {
+      if (!SITE_LICENSE_VERIFICATION_POLICIES.has(verification_policy)) {
+        throw Error(`unsupported verification policy '${verification_policy}'`);
+      }
+      metadataPatch.verification_policy = verification_policy;
     }
     if (affiliation_reverification_days !== undefined) {
       metadataPatch.affiliation_reverification_days =
@@ -3389,6 +3397,7 @@ export async function updateSiteLicensePool({
         pool_description: metadataPatch.pool_description,
         seat_count: seat_count ?? null,
         requires_approval: metadataPatch.requires_approval,
+        verification_policy: metadataPatch.verification_policy,
         affiliation_reverification_days:
           metadataPatch.affiliation_reverification_days,
         affiliation_reverification_grace_days:
@@ -3586,6 +3595,7 @@ export async function updateSiteLicense({
   overage_policy,
   starts_at,
   expires_at,
+  metadata,
 }: {
   actor_account_id: string;
   site_license_id: string;
@@ -3599,6 +3609,7 @@ export async function updateSiteLicense({
   overage_policy?: string | null;
   starts_at?: Date | string | null;
   expires_at?: Date | string | null;
+  metadata?: Record<string, unknown>;
 }): Promise<SiteLicenseOverview> {
   const actorAccountId = normalizeAccountId(actor_account_id);
   const siteLicenseId = normalizeAccountId(site_license_id, "site_license_id");
@@ -3655,6 +3666,10 @@ export async function updateSiteLicense({
               overage_policy=$9,
               starts_at=$10,
               expires_at=$11,
+              metadata=CASE
+                WHEN $12::jsonb IS NULL THEN metadata
+                ELSE metadata || $12::jsonb
+              END,
               updated=NOW()
         WHERE id=$1`,
       [
@@ -3681,6 +3696,7 @@ export async function updateSiteLicense({
           : normalizeOptionalString(overage_policy),
         nextStartsAt,
         nextExpiresAt,
+        metadata ?? null,
       ],
     );
     if (
@@ -3709,6 +3725,7 @@ export async function updateSiteLicense({
           overage_policy,
           starts_at,
           expires_at,
+          metadata,
         })
           .filter(([, value]) => value !== undefined)
           .map(([field]) => field),

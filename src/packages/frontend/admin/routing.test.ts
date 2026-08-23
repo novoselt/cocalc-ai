@@ -48,8 +48,31 @@ describe("admin routing", () => {
       kind: "index",
       section: "codex-pools",
     });
+    expect(parseAdminRoute("admin/receivables")).toEqual({
+      kind: "index",
+      section: "receivables",
+    });
+    expect(parseAdminRoute("admin/receivables/AR-2026-000123")).toEqual({
+      kind: "receivables-detail",
+      id: "AR-2026-000123",
+    });
+    expect(parseAdminRoute("admin/receivables/new")).toEqual({
+      kind: "receivables-create",
+    });
     expect(getAdminTargetPath({ kind: "index", section: "user-search" })).toBe(
       "admin/user-search",
+    );
+  });
+
+  it("serializes receivables detail routes", () => {
+    expect(
+      getAdminTargetPath({
+        kind: "receivables-detail",
+        id: "AR-2026-000123",
+      }),
+    ).toBe("admin/receivables/AR-2026-000123");
+    expect(getAdminTargetPath({ kind: "receivables-create" })).toBe(
+      "admin/receivables/new",
     );
   });
 

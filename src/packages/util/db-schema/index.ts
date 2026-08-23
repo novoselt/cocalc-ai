@@ -51,6 +51,7 @@ import "./compute-vm-instances";
 import "./compute-vms";
 import "./compute-volumes";
 import "./collaborators";
+import "./commercial-orders";
 import "./crm";
 import "./deleted-projects";
 import "./email-counter";

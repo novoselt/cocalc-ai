@@ -1,0 +1,154 @@
+/*
+ *  This file is part of CoCalc: Copyright (c) 2026 Sagemath, Inc.
+ *  License: MS-RSL - see LICENSE.md for details
+ */
+
+import {
+  addCommercialOrderNote,
+  approveCommercialOrder,
+  assignCommercialOrder,
+  backfillCommercialOrders,
+  cancelCommercialOrder,
+  createCommercialOrder,
+  getCommercialOrder,
+  getCommercialInvoice,
+  getCommercialOrderDiagnostics,
+  issueManualCommercialInvoice,
+  listCommercialOrderEvents,
+  listCommercialOrders,
+  reviseCommercialOrder,
+  retryCommercialStripeEvent,
+  updateCommercialOrder,
+  voidManualCommercialInvoice,
+} from "./store";
+import { assertCommercialReceivablesCapability } from "./feature-flags";
+import {
+  commercialInvoicePreview,
+  commercialReconcilePreview,
+  createStripeCommercialInvoiceDraft,
+  findUnlinkedCommercialStripeInvoices,
+  linkExistingStripeCommercialInvoice,
+  reconcileStripeCommercialInvoice,
+  recordStripeAwareCommercialManualPayment,
+  sendStripeCommercialInvoice,
+  voidStripeCommercialInvoice,
+} from "./invoices/stripe";
+import { enqueueCommercialStripeEvent } from "./reconcile";
+import {
+  commercialFulfillmentPreview,
+  endCommercialSiteLicenseFulfillment,
+  provisionCommercialSiteLicense,
+} from "./fulfillment/site-license";
+import admins from "@cocalc/server/accounts/admins";
+import { searchClusterAccounts } from "@cocalc/server/inter-bay/accounts";
+
+async function listCommercialAssignees() {
+  const accountIds = await admins();
+  const matches = await Promise.all(
+    accountIds.map(
+      async (accountId) =>
+        (
+          await searchClusterAccounts({
+            query: accountId,
+            admin: true,
+            limit: 1,
+          })
+        )[0],
+    ),
+  );
+  return matches.filter(
+    (account): account is NonNullable<typeof account> => account != null,
+  );
+}
+
+export interface CommercialSeedRequest {
+  action: string;
+  actor_account_id: string;
+  payload: Record<string, unknown>;
+}
+
+export async function dispatchCommercialSeedRequest(
+  request: CommercialSeedRequest,
+): Promise<unknown> {
+  const opts = {
+    ...request.payload,
+    account_id: request.actor_account_id,
+    session_hash: undefined,
+    browser_id: undefined,
+  } as any;
+  switch (request.action) {
+    case "list":
+      return await listCommercialOrders(opts);
+    case "get":
+      return await getCommercialOrder(opts.id);
+    case "listAssignees":
+      return await listCommercialAssignees();
+    case "events":
+      return await listCommercialOrderEvents(opts);
+    case "create":
+      return await createCommercialOrder(opts);
+    case "update":
+      return await updateCommercialOrder(opts);
+    case "revise":
+      return await reviseCommercialOrder(opts);
+    case "assign":
+      return await assignCommercialOrder(opts);
+    case "addNote":
+      return await addCommercialOrderNote(opts);
+    case "approve":
+      return await approveCommercialOrder(opts);
+    case "cancel":
+      return await cancelCommercialOrder(opts);
+    case "recordManualPayment":
+      return await recordStripeAwareCommercialManualPayment(opts);
+    case "issueManualInvoice":
+      return await issueManualCommercialInvoice(opts);
+    case "invoicePreview":
+      return await commercialInvoicePreview(opts);
+    case "createInvoiceDraft":
+      return await createStripeCommercialInvoiceDraft(opts);
+    case "linkExistingInvoice":
+      return await linkExistingStripeCommercialInvoice(opts);
+    case "sendInvoice":
+      return await sendStripeCommercialInvoice(opts);
+    case "voidInvoice":
+      if (
+        (await getCommercialInvoice(opts.id, opts.commercial_invoice_id))
+          .provider === "manual"
+      ) {
+        await assertCommercialReceivablesCapability("manualSettlement");
+        return await voidManualCommercialInvoice(opts);
+      }
+      await assertCommercialReceivablesCapability("stripeSend");
+      return await voidStripeCommercialInvoice(opts);
+    case "reconcileInvoice":
+      return await reconcileStripeCommercialInvoice(opts);
+    case "reconcilePreview":
+      return await commercialReconcilePreview(opts);
+    case "stripeWebhook":
+      return await enqueueCommercialStripeEvent(opts);
+    case "fulfillmentPreview":
+      return await commercialFulfillmentPreview(opts);
+    case "provision":
+      return await provisionCommercialSiteLicense(opts);
+    case "endFulfillment":
+      return await endCommercialSiteLicenseFulfillment(opts);
+    case "diagnostics": {
+      const diagnostics = await getCommercialOrderDiagnostics();
+      if (opts.reconcile === true) {
+        const scan = await findUnlinkedCommercialStripeInvoices();
+        diagnostics.review_queues.unlinked_commercial_stripe_invoices =
+          scan.invoices;
+        diagnostics.review_queues.truncated.unlinked_commercial_stripe_invoices =
+          scan.truncated;
+      }
+      return diagnostics;
+    }
+    case "retryStripeEvent":
+      return await retryCommercialStripeEvent(opts);
+    case "backfill":
+      return await backfillCommercialOrders(opts);
+    default:
+      throw Error(`unsupported commercial seed action '${request.action}'`);
+  }
+}

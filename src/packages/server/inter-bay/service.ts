@@ -141,6 +141,10 @@ import {
 import { updateClusterAccountEmailAddressVerified } from "@cocalc/server/inter-bay/account-directory-updates";
 import isAdmin from "@cocalc/server/accounts/is-admin";
 import {
+  assertCommercialReceivablesCapability,
+  COMMERCIAL_ACTION_CAPABILITIES,
+} from "@cocalc/server/commercial-orders/feature-flags";
+import {
   acceptAccountRehome,
   copyAccountRehomeState,
   getMembershipPortableState,
@@ -160,6 +164,7 @@ import {
   getMembershipAnalyticsEventsLocal,
   getMembershipAnalyticsOverviewLocal,
 } from "@cocalc/server/membership/analytics";
+import { dispatchCommercialSeedRequest } from "@cocalc/server/commercial-orders/dispatch";
 import { getMembershipAllocationSeriesLocal } from "@cocalc/server/membership/allocation-analytics-series";
 import { getActiveUserMapOverview } from "@cocalc/server/account-presence-locations";
 import {
@@ -737,6 +742,30 @@ async function startBayOpsService(): Promise<void> {
           ? await reconcileSiteFundedCodexCosts(pools)
           : undefined,
       };
+    },
+    commercialOrders: async (opts) => {
+      if (bay_id !== getConfiguredClusterSeedBayId()) {
+        throw Error("commercial orders are authoritative on the seed bay");
+      }
+      if (opts.action !== "stripeWebhook") {
+        if (!(await isAdmin(opts.actor_account_id))) {
+          throw Error("commercial order inter-bay actor must be an admin");
+        }
+        if (`${opts.payload.reason ?? ""}`.trim().length < 4) {
+          throw Error(
+            "commercial order inter-bay request requires an audit reason",
+          );
+        }
+        const capability =
+          COMMERCIAL_ACTION_CAPABILITIES[
+            opts.action as keyof typeof COMMERCIAL_ACTION_CAPABILITIES
+          ];
+        if (!capability) {
+          throw Error(`unsupported commercial order action '${opts.action}'`);
+        }
+        await assertCommercialReceivablesCapability(capability);
+      }
+      return await dispatchCommercialSeedRequest(opts);
     },
   };
   services.push(
