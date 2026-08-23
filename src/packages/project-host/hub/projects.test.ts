@@ -489,6 +489,13 @@ describe("project host start ACP rehydrate ordering", () => {
 
     await hubApi.projects.start({ project_id });
 
+    expect(
+      assertManagedRawNetworkStartAllowedBestEffortMock,
+    ).toHaveBeenCalledWith({
+      project_id,
+      managed_egress_override: undefined,
+      raw_network_enabled: false,
+    });
     expect(executeCode).toHaveBeenCalledWith(
       expect.objectContaining({
         args: [
@@ -1145,6 +1152,7 @@ describe("project host start ACP rehydrate ordering", () => {
     ).toHaveBeenCalledWith({
       project_id,
       managed_egress_override: "admin-host-drain",
+      raw_network_enabled: false,
     });
   });
 

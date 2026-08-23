@@ -2043,12 +2043,6 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           );
         }
       }
-      await timings.measure("managed_network_admission", async () => {
-        await assertManagedRawNetworkStartAllowedBestEffort({
-          project_id,
-          managed_egress_override,
-        });
-      });
       resolved = await timings.measure("resolve_start_metadata", async () =>
         resolveStartMetadata({
           project_id,
@@ -2061,6 +2055,16 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         }),
       );
       const startMetadata = resolved;
+      const networkPolicy = projectNetworkPolicyFromRunQuota(
+        startMetadata.run_quota,
+      );
+      await timings.measure("managed_network_admission", async () => {
+        await assertManagedRawNetworkStartAllowedBestEffort({
+          project_id,
+          managed_egress_override,
+          raw_network_enabled: networkPolicy === "normal",
+        });
+      });
       if (autostart && startMetadata.autostart_enabled === false) {
         throw new Error(
           "Automatic starts are disabled for this project. Use the project Start button, then try again.",
@@ -2082,7 +2086,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
       await timings.measure("prepare_network_policy", async () => {
         await prepareProjectNetworkPolicy({
           project_id,
-          policy: projectNetworkPolicyFromRunQuota(startMetadata.run_quota),
+          policy: networkPolicy,
         });
       });
       const normalizedImage = getImage({ image: startMetadata.image });

@@ -46,9 +46,6 @@ const USAGE_COUNTER_METRIC = "managed-egress-bytes";
 const QUOTA_EXCLUDED_CATEGORIES = new Set<ManagedProjectEgressCategory>([
   "interactive-conat",
   "control-plane-conat",
-  // Backups are initiated by CoCalc and are required for durability. They
-  // remain in egress history, but must never consume a user's traffic quota.
-  "backup-upload",
 ]);
 // Keep control-plane traffic visible to users and operators even though it has
 // an independent safety limit rather than consuming membership egress quota.
@@ -444,7 +441,7 @@ export async function getManagedEgressUsageForAccount(opts: {
   });
   const window5h = windows["5h"];
   const window7d = windows["7d"];
-  const storedValues =
+  const values =
     Object.keys(windows).length > 0
       ? await (async () => {
           await initializeManagedEgressCounters({
@@ -457,28 +454,6 @@ export async function getManagedEgressUsageForAccount(opts: {
           });
         })()
       : { "5h": {}, "7d": {} };
-
-  // Ignore counters written before a category became quota-exempt. This makes
-  // policy changes effective immediately without rewriting durable history or
-  // waiting for every active usage window to reset.
-  const values = {
-    "5h": Object.fromEntries(
-      Object.entries(storedValues["5h"]).filter(
-        ([category]) =>
-          !QUOTA_EXCLUDED_CATEGORIES.has(
-            category as ManagedProjectEgressCategory,
-          ),
-      ),
-    ),
-    "7d": Object.fromEntries(
-      Object.entries(storedValues["7d"]).filter(
-        ([category]) =>
-          !QUOTA_EXCLUDED_CATEGORIES.has(
-            category as ManagedProjectEgressCategory,
-          ),
-      ),
-    ),
-  };
 
   const managed_egress_categories_5h_bytes = values["5h"];
   const managed_egress_categories_7d_bytes = values["7d"];
