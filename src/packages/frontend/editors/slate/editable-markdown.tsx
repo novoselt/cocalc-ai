@@ -361,6 +361,16 @@ function isBlockPatchEnabled(): boolean {
   return true;
 }
 
+export function shouldPublishReadOnlyExternalSlateValue({
+  readOnly,
+  hasSyncstring,
+}: {
+  readOnly?: boolean;
+  hasSyncstring: boolean;
+}): boolean {
+  return readOnly === true && !hasSyncstring;
+}
+
 function isBlockPatchDebugEnabled(): boolean {
   if (typeof window === "undefined") return false;
   const anyWindow = window as any;
@@ -2523,6 +2533,19 @@ const FullEditableMarkdown: React.FC<Props> = React.memo((props: Props) => {
       );
     } else {
       applyExternalValue();
+    }
+    if (
+      shouldPublishReadOnlyExternalSlateValue({
+        readOnly: read_only,
+        hasSyncstring: actions._syncstring != null,
+      })
+    ) {
+      // External Slate operations may mutate the current value identity and
+      // defer onChange. Publish an explicit revision so read-only streaming
+      // views cannot retain an older leaf until an unrelated parent render.
+      setEditorValue([...editor.children]);
+      setChange((current) => current + 1);
+      ReactEditor.forceUpdate(editor);
     }
   };
 
