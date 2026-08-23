@@ -142,9 +142,9 @@ export async function createProjectArchiveLifecycleJob({
        backup_repo_id, backup_generation, backup_time, dedupe_key,
        completed_at
      ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb,
+       $1, $2, $3, $4, $5, $6, $7::VARCHAR(32), $8, $9, $10::jsonb, $11::jsonb,
        $12, $13, $14, $15,
-       CASE WHEN $7 = 'report-only' THEN NOW() ELSE NULL END
+       CASE WHEN $7::VARCHAR(32) = 'report-only' THEN NOW() ELSE NULL END
      )
      ON CONFLICT DO NOTHING
      RETURNING id, project_id, owning_bay_id, host_id, reason,
