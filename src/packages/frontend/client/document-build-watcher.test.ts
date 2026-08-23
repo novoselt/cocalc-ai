@@ -50,7 +50,15 @@ describe("formatDocumentBuildError", () => {
       formatDocumentBuildError(
         Error("no responders for project.document-build.start"),
       ),
-    ).toContain("Restart the project and try again");
+    ).toContain("This project must be restarted");
+  });
+
+  it("recognizes the legacy dispatcher error for a missing API namespace", () => {
+    expect(
+      formatDocumentBuildError(
+        TypeError("Cannot convert undefined or null to object"),
+      ),
+    ).toContain("This project must be restarted");
   });
 
   it("preserves ordinary document-build errors", () => {

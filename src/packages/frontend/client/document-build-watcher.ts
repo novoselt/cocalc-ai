@@ -20,14 +20,14 @@ export function documentBuildApi(projectApi: ProjectApi): DocumentBuildApi {
 }
 
 const DOCUMENT_BUILD_SERVICE_UNAVAILABLE =
-  /(?:no responders|unknown (?:service|method)|documentBuild is not a function|document-build[^\n]*(?:not found|unavailable)|request timed out)/i;
+  /(?:no responders|unknown (?:service|method)|documentBuild is not a function|document-build[^\n]*(?:not found|unavailable)|request timed out|Cannot convert undefined or null to object)/i;
 
 export function formatDocumentBuildError(err: unknown): string {
   const message = `${err}`;
   if (!DOCUMENT_BUILD_SERVICE_UNAVAILABLE.test(message)) return message;
   return (
-    "Document builds are not available in this running project. " +
-    "Restart the project and try again.\n\n" +
+    "This project must be restarted before document builds can run. " +
+    "Restart the project, then try again.\n\n" +
     message
   );
 }
