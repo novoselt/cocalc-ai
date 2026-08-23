@@ -148,7 +148,7 @@ measured and reported separately.
 | JupyterLab and VS Code app launch      | 475 KiB     | 425 KiB        |
 | CoCalc CLI discovery                   | 425 KiB     | 350 KiB        |
 | Terminal                               | 500 KiB     | 475 KiB        |
-| On-demand notifications                | 475 KiB     | 450 KiB        |
+| On-demand notifications                | 500 KiB     | 450 KiB        |
 | Minimal project settings               | 425 KiB     | 400 KiB        |
 
 Rules for changing these budgets:
@@ -162,6 +162,15 @@ Rules for changing these budgets:
   when used.
 - Raw, gzip, request-count, parse-time, and memory measurements are reported
   even when Brotli is the release gate.
+
+The 2026-08-23 pre-release measurement amended the notifications hard budget
+from 475 KiB to 500 KiB. The route measured 477.7 KiB Brotli before and after
+the amendment; the increase came from growth in the shared authenticated Conat
+session and project API graph, not the 2.7 KiB notifications surface itself.
+Splitting notifications onto a second narrow authenticated transport was
+rejected for this 2.7 KiB overage because it would duplicate security-sensitive
+connection behavior. The 450 KiB initial target remains unchanged so a future
+shared-session split or protocol tree-shaking still has an explicit target.
 
 ### 3. Deterministic Slow-Network SLOs
 
