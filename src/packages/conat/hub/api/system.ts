@@ -755,6 +755,10 @@ export interface CodexUsageStatusInfo {
   checkedAt: string;
   paymentSource: CodexPaymentSourceInfo;
   project_id?: string;
+  authentication?: {
+    status: "connected" | "needs-sign-in" | "unverified";
+    reason?: string;
+  };
   account?: unknown;
   rateLimits?: unknown;
   tokenUsage?: unknown;

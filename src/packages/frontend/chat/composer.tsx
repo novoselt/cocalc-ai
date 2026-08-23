@@ -62,6 +62,7 @@ export interface ChatRoomComposerProps {
   ) => void;
   codexPaymentSource?: CodexPaymentSourceInfo;
   codexPaymentSourceLoading?: boolean;
+  codexSubmitPreflightPending?: boolean;
   onOpenCodexPaymentConfig?: () => void;
 }
 
@@ -93,6 +94,7 @@ export function ChatRoomComposer({
   onComposerReady,
   codexPaymentSource,
   codexPaymentSourceLoading = false,
+  codexSubmitPreflightPending = false,
   onOpenCodexPaymentConfig,
 }: ChatRoomComposerProps) {
   const HEIGHT_STORAGE_KEY = "chat-composer-height-px";
@@ -329,6 +331,7 @@ export function ChatRoomComposer({
 
   const handleSend = useCallback(
     (value?: string | { preventDefault?: () => void }) => {
+      if (codexSubmitPreflightPending) return;
       const effective = typeof value === "string" ? value : input;
       if (!effective || !effective.trim()) return;
       on_send(effective);
@@ -338,11 +341,19 @@ export function ChatRoomComposer({
         void toggleZenMode();
       }
     },
-    [input, isZenMode, on_send, refocusComposerInput, toggleZenMode],
+    [
+      codexSubmitPreflightPending,
+      input,
+      isZenMode,
+      on_send,
+      refocusComposerInput,
+      toggleZenMode,
+    ],
   );
 
   const handleSendImmediately = useCallback(
     (value?: string | { preventDefault?: () => void }) => {
+      if (codexSubmitPreflightPending) return;
       const effective = typeof value === "string" ? value : input;
       if (!effective || !effective.trim()) return;
       if (on_send_immediately) {
@@ -357,6 +368,7 @@ export function ChatRoomComposer({
       }
     },
     [
+      codexSubmitPreflightPending,
       input,
       isZenMode,
       on_send,
@@ -490,6 +502,14 @@ export function ChatRoomComposer({
             type="info"
           />
         )}
+        {codexSubmitPreflightPending && (
+          <Alert
+            showIcon
+            style={{ marginBottom: 8 }}
+            title="Checking ChatGPT sign-in before sending..."
+            type="info"
+          />
+        )}
         <div ref={inputContainerRef} data-testid="chat-composer-input">
           <ChatInput
             key={`${path}${project_id}-draft-${composerDraftKey}`}
@@ -580,7 +600,8 @@ export function ChatRoomComposer({
               >
                 <Button
                   onClick={handleSendImmediately}
-                  disabled={!hasInput}
+                  disabled={!hasInput || codexSubmitPreflightPending}
+                  loading={codexSubmitPreflightPending}
                   type="primary"
                   data-testid="chat-composer-send"
                   icon={<Icon name="bolt" />}
@@ -599,7 +620,8 @@ export function ChatRoomComposer({
               >
                 <Button
                   onClick={handleSend}
-                  disabled={!hasInput}
+                  disabled={!hasInput || codexSubmitPreflightPending}
+                  loading={codexSubmitPreflightPending}
                   type="primary"
                   data-testid="chat-composer-send"
                   icon={<Icon name="paper-plane" />}
@@ -624,7 +646,8 @@ export function ChatRoomComposer({
                 >
                   <Button
                     onClick={handleSend}
-                    disabled={!hasInput}
+                    disabled={!hasInput || codexSubmitPreflightPending}
+                    loading={codexSubmitPreflightPending}
                     type="default"
                     icon={<Icon name="paper-plane" />}
                   >

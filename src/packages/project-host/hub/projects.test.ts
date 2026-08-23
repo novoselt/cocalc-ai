@@ -1194,6 +1194,7 @@ describe("project host start ACP rehydrate ordering", () => {
       env: {},
     });
     getCodexAppServerAccountStatus.mockResolvedValueOnce({
+      authentication: { status: "connected" },
       account: { account: { email: "user@example.com" } },
       rateLimits: { rateLimits: true },
       tokenUsage: { tokens: 7 },
@@ -1224,6 +1225,7 @@ describe("project host start ACP rehydrate ordering", () => {
       paymentSource: {
         source: "subscription",
       },
+      authentication: { status: "connected" },
       account: { account: { email: "user@example.com" } },
     });
   });

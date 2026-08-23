@@ -28,6 +28,7 @@ import {
   CODEX_USAGE_LABEL,
   CODEX_USAGE_URL,
   getChatGptAccountInfo,
+  getCodexSubscriptionConnection,
   getLiveCodexUsageStatus,
 } from "@cocalc/frontend/account/codex-usage";
 import { Icon, Loading } from "@cocalc/frontend/components";
@@ -211,26 +212,6 @@ function formatCodexUsageReason(reason?: string): string | undefined {
     return "Codex could not authenticate the stored ChatGPT sign-in. Sign in again, then retry the usage check.";
   }
   return reason;
-}
-
-function isCodexUsageAuthProblem(status?: CodexUsageStatusInfo): boolean {
-  const text = [
-    status?.reason,
-    status?.errors?.account,
-    status?.errors?.rateLimits,
-  ]
-    .filter(Boolean)
-    .join("\n")
-    .toLowerCase();
-  return (
-    text.includes("auth") ||
-    text.includes("credential") ||
-    text.includes("expired") ||
-    text.includes("incomplete") ||
-    text.includes("sign in") ||
-    text.includes("sign-in") ||
-    text.includes("token")
-  );
 }
 
 export function CodexCredentialsPanel(props: CodexCredentialsPanelProps = {}) {
@@ -909,11 +890,9 @@ function CodexCredentialsPanelBody({
     }
   }, [deviceAuthPending, embedded, openSubscriptionAuthPanel]);
 
-  const codexUsageAuthProblem = isCodexUsageAuthProblem(codexUsageStatus);
-  const codexConnectionVerified =
-    !codexUsageAuthProblem &&
-    (!!codexUsageStatus?.available ||
-      !!getChatGptAccountInfo(codexUsageStatus));
+  const codexConnection = getCodexSubscriptionConnection(codexUsageStatus);
+  const codexUsageAuthProblem = codexConnection.status === "needs-sign-in";
+  const codexConnectionVerified = codexConnection.status === "connected";
   const codexConnectionChecking =
     codexUsageLoading && !codexUsageStatus && !codexUsageAuthProblem;
   const codexConnectionLabel = codexUsageAuthProblem

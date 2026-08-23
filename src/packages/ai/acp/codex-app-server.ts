@@ -414,6 +414,10 @@ function authSourceForSpawned(
 }
 
 export type CodexAppServerAccountStatus = {
+  authentication: {
+    status: "connected" | "needs-sign-in" | "unverified";
+    reason?: string;
+  };
   account?: any;
   rateLimits?: any;
   tokenUsage?: any;
@@ -423,6 +427,65 @@ export type CodexAppServerAccountStatus = {
     tokenUsage?: string;
   };
 };
+
+function isCodexAuthenticationError(value: unknown): boolean {
+  const text = `${value ?? ""}`.trim().toLowerCase();
+  if (!text) return false;
+  return [
+    "authentication required",
+    "unauthorized",
+    "invalid_grant",
+    "refresh_token_expired",
+    "refresh_token_reused",
+    "refresh_token_invalidated",
+    "sign-in has expired",
+    "sign-in is no longer connected",
+    "http 401",
+  ].some((needle) => text.includes(needle));
+}
+
+function classifyCodexAuthentication({
+  account,
+  rateLimits,
+  errors,
+}: {
+  account?: any;
+  rateLimits?: any;
+  errors?: CodexAppServerAccountStatus["errors"];
+}): CodexAppServerAccountStatus["authentication"] {
+  if (
+    isCodexAuthenticationError(errors?.account) ||
+    isCodexAuthenticationError(errors?.rateLimits)
+  ) {
+    return {
+      status: "needs-sign-in",
+      reason:
+        "ChatGPT could not authenticate the stored sign-in. Sign in again with ChatGPT in CoCalc, then retry.",
+    };
+  }
+  if (rateLimits != null || account?.requiresOpenaiAuth === false) {
+    return { status: "connected" };
+  }
+  if (account?.requiresOpenaiAuth === true && account?.account == null) {
+    return {
+      status: "needs-sign-in",
+      reason:
+        "ChatGPT sign-in is missing or expired. Sign in again with ChatGPT in CoCalc, then retry.",
+    };
+  }
+  if (account?.account != null) {
+    // Account identity is authoritative even when the independent usage API is
+    // temporarily unavailable.
+    return { status: "connected" };
+  }
+  return {
+    status: "unverified",
+    reason:
+      errors?.account ??
+      errors?.rateLimits ??
+      "CoCalc could not verify the ChatGPT sign-in.",
+  };
+}
 
 type RpcResponse = {
   id?: number;
@@ -1695,26 +1758,40 @@ export async function getCodexAppServerAccountStatus(opts: {
     await client.initialize(timeoutMs);
     const appServerLogin = spawned.appServerLogin ?? opts.appServerLogin;
     await loginAppServerIfNeeded(client, appServerLogin, timeoutMs);
-    // account/read may refresh an expired ChatGPT access token. Wait for that
-    // refresh before asking for rate limits, or the two requests can race and
-    // make a successful reconnect fail its immediate verification probe.
+    // Validate the current token before rotating it. Status checks are common,
+    // and forcing a refresh on every check creates avoidable refresh-token
+    // churn across projects and browser tabs.
     const [accountResult] = await Promise.allSettled([
-      client.request("account/read", { refreshToken: true }, timeoutMs),
+      client.request("account/read", { refreshToken: false }, timeoutMs),
     ]);
     const [rateLimitsResult] = await Promise.allSettled([
       client.request("account/rateLimits/read", {}, timeoutMs),
     ]);
+    let account = settledValue(accountResult);
     let rateLimits = settledValue(rateLimitsResult);
-    if (isRateLimitsAuthError(rateLimits.error) && appServerLogin) {
+    const shouldRefreshSubscription =
+      authSourceForSpawned(spawned) === "subscription" &&
+      (isRateLimitsAuthError(rateLimits.error) ||
+        (account.value?.requiresOpenaiAuth === true &&
+          account.value?.account == null));
+    if (shouldRefreshSubscription && appServerLogin) {
       try {
-        // account/read has already had a chance to refresh the app-server's
-        // token. Do not log in again with the originally captured token here:
-        // that can replace the refreshed token with the stale one.
+        account = {
+          value: await client.request(
+            "account/read",
+            { refreshToken: true },
+            timeoutMs,
+          ),
+        };
         rateLimits = {
           value: await client.request("account/rateLimits/read", {}, timeoutMs),
         };
       } catch (reason) {
-        rateLimits = { error: `${reason}` };
+        const error = `${reason}`;
+        if (account.value == null) {
+          account = { error };
+        }
+        rateLimits = { error };
       }
     }
     let tokenUsageResult: PromiseSettledResult<any> | undefined;
@@ -1728,7 +1805,6 @@ export async function getCodexAppServerAccountStatus(opts: {
         tokenUsageResult = { status: "rejected", reason };
       }
     }
-    const account = settledValue(accountResult);
     const tokenUsage = tokenUsageResult
       ? settledValue(tokenUsageResult)
       : { value: undefined };
@@ -1736,11 +1812,17 @@ export async function getCodexAppServerAccountStatus(opts: {
     if (account.error) errors.account = account.error;
     if (rateLimits.error) errors.rateLimits = rateLimits.error;
     if (tokenUsage.error) errors.tokenUsage = tokenUsage.error;
+    const normalizedErrors = Object.keys(errors).length ? errors : undefined;
     return {
+      authentication: classifyCodexAuthentication({
+        account: account.value,
+        rateLimits: rateLimits.value,
+        errors: normalizedErrors,
+      }),
       account: account.value,
       rateLimits: rateLimits.value,
       tokenUsage: tokenUsage.value,
-      errors: Object.keys(errors).length ? errors : undefined,
+      errors: normalizedErrors,
     };
   } finally {
     if (spawned.proc.exitCode == null && !spawned.proc.killed) {

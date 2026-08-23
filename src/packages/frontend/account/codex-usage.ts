@@ -19,6 +19,53 @@ export interface CachedCodexUsageStatus {
   cachedAt: number;
 }
 
+export type CodexSubscriptionConnection = {
+  status: "connected" | "needs-sign-in" | "unverified";
+  reason?: string;
+};
+
+function isCodexUsageAuthenticationProblem(
+  status?: CodexUsageStatusInfo,
+): boolean {
+  const text = [
+    status?.reason,
+    status?.errors?.account,
+    status?.errors?.rateLimits,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+  return (
+    text.includes("auth") ||
+    text.includes("credential") ||
+    text.includes("expired") ||
+    text.includes("incomplete") ||
+    text.includes("sign in") ||
+    text.includes("sign-in") ||
+    text.includes("token")
+  );
+}
+
+export function getCodexSubscriptionConnection(
+  status?: CodexUsageStatusInfo,
+): CodexSubscriptionConnection {
+  if (status?.authentication) return status.authentication;
+  if (isCodexUsageAuthenticationProblem(status)) {
+    return {
+      status: "needs-sign-in",
+      reason:
+        "ChatGPT could not authenticate the stored sign-in. Sign in again with ChatGPT in CoCalc, then retry.",
+    };
+  }
+  if (status?.available || getChatGptAccountInfo(status)) {
+    return { status: "connected" };
+  }
+  return {
+    status: "unverified",
+    reason: status?.reason ?? "CoCalc could not verify the ChatGPT sign-in.",
+  };
+}
+
 function getCodexUsageStatusCacheKey(accountId?: string): string {
   return `${CODEX_USAGE_STATUS_CACHE_PREFIX}:${encodeURIComponent(
     accountId || "account",

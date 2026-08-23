@@ -64,7 +64,10 @@ import {
   useChatThreadSelection,
 } from "./thread-selection";
 import { dateValue, field, isAcpAssistantMessage } from "./access";
-import { useCodexPaymentSource } from "./use-codex-payment-source";
+import {
+  fetchCodexPaymentSourceForSubmit,
+  useCodexPaymentSource,
+} from "./use-codex-payment-source";
 import {
   acknowledgeThreadAutomation,
   deleteThreadAutomation,
@@ -115,10 +118,15 @@ import {
 import { OTHER_SETTINGS_CODEX_NEW_CHAT_DEFAULTS } from "./codex-defaults";
 import {
   DEFAULT_CODEX_MODEL_NAME,
+  type CodexPaymentSourcePreference,
   isCodexModelName,
   resolveCodexServiceTier,
   resolveCodexSessionMode,
 } from "@cocalc/util/ai/codex";
+import {
+  getCodexSubscriptionConnection,
+  getLiveCodexUsageStatus,
+} from "@cocalc/frontend/account/codex-usage";
 import { CodexPaymentCredentialsModal } from "./codex";
 import { showLocalCodexTurnCompletionToast } from "@cocalc/frontend/notifications/codex-turn-toast";
 import {
@@ -858,6 +866,9 @@ export function ChatPanel({
     }));
   }, [aiAgentPolicyAllowed, newThreadSetup.agentMode]);
   const [codexPaymentConfigOpen, setCodexPaymentConfigOpen] = useState(false);
+  const [codexSubmitPreflightPending, setCodexSubmitPreflightPending] =
+    useState(false);
+  const codexSubmitPreflightPendingRef = useRef(false);
   const [automationModalOpen, setAutomationModalOpen] = useState(false);
   const [automationDetailsOpen, setAutomationDetailsOpen] = useState(false);
   const [automationModalThreadKey, setAutomationModalThreadKey] = useState<
@@ -1639,16 +1650,17 @@ export function ChatPanel({
     }
   }, [agentSessionRecords, path]);
 
+  const codexPaymentPreference = ((isSelectedThreadAI
+    ? selectedThreadMetadata?.acp_config?.paymentSource
+    : newThreadSetup.codexConfig.paymentSource) ??
+    "auto") as CodexPaymentSourcePreference;
   const {
     paymentSource: codexPaymentSource,
     loading: codexPaymentSourceLoading,
     refresh: refreshCodexPaymentSource,
   } = useCodexPaymentSource({
     projectId: project_id,
-    preference:
-      (isSelectedThreadAI
-        ? selectedThreadMetadata?.acp_config?.paymentSource
-        : newThreadSetup.codexConfig.paymentSource) ?? "auto",
+    preference: codexPaymentPreference,
     enabled:
       aiAgentPolicyAllowed &&
       !readOnly &&
@@ -1852,17 +1864,63 @@ export function ChatPanel({
       });
       return;
     }
-    if (
-      isCodexSubmit &&
-      isCodexPaymentSourceNeedsUserConfiguration(codexPaymentSource)
-    ) {
-      refreshCodexPaymentSource?.();
-      setCodexPaymentConfigOpen(true);
-      return;
-    }
     if (isCodexSubmit) {
+      const verifySubscription = opts?.immediate !== true;
+      if (verifySubscription && codexSubmitPreflightPendingRef.current) {
+        return;
+      }
+      if (verifySubscription) {
+        codexSubmitPreflightPendingRef.current = true;
+        setCodexSubmitPreflightPending(true);
+      }
+      let preflightStage: "payment" | "project" = "payment";
       try {
+        const paymentPreference = ((reply_thread_id
+          ? existingThreadMetadata?.acp_config?.paymentSource
+          : newThreadSetup.codexConfig.paymentSource) ??
+          codexPaymentPreference) as CodexPaymentSourcePreference;
+        const paymentSource = verifySubscription
+          ? await fetchCodexPaymentSourceForSubmit({
+              projectId: project_id,
+              preference: paymentPreference,
+            })
+          : codexPaymentSource;
+        if (isCodexPaymentSourceNeedsUserConfiguration(paymentSource)) {
+          refreshCodexPaymentSource?.();
+          setCodexPaymentConfigOpen(true);
+          return;
+        }
+        preflightStage = "project";
         await ensureProjectRunningForCodex({ project_id, redux });
+        if (verifySubscription && paymentSource?.source === "subscription") {
+          let status;
+          try {
+            status = await getLiveCodexUsageStatus({ projectId: project_id });
+          } catch (err) {
+            Modal.error({
+              title: "Unable to verify ChatGPT sign-in",
+              content: `Your message was not sent. CoCalc could not check the ChatGPT connection: ${err}`,
+            });
+            return;
+          }
+          const connection = getCodexSubscriptionConnection(status);
+          if (connection.status === "needs-sign-in") {
+            void antdMessage.error(
+              connection.reason ??
+                "ChatGPT sign-in needs to be refreshed before starting Codex.",
+            );
+            refreshCodexPaymentSource?.();
+            setCodexPaymentConfigOpen(true);
+            return;
+          }
+          if (connection.status !== "connected") {
+            Modal.error({
+              title: "Unable to verify ChatGPT sign-in",
+              content: `${connection.reason ?? "CoCalc could not verify the ChatGPT connection."} Your message was not sent; retry shortly.`,
+            });
+            return;
+          }
+        }
       } catch (err) {
         const block = getProjectStartPolicyBlockFromError(err);
         if (block) {
@@ -1873,11 +1931,19 @@ export function ChatPanel({
           });
         } else {
           Modal.error({
-            title: "Unable to start project for Codex",
+            title:
+              preflightStage === "payment"
+                ? "Unable to check Codex connection"
+                : "Unable to start project for Codex",
             content: `${err}`,
           });
         }
         return;
+      } finally {
+        if (verifySubscription) {
+          codexSubmitPreflightPendingRef.current = false;
+          setCodexSubmitPreflightPending(false);
+        }
       }
     }
     if (!reply_thread_id && newThreadSetup.automationConfig?.enabled === true) {
@@ -2603,6 +2669,7 @@ export function ChatPanel({
             onComposerReady={onComposerReady}
             codexPaymentSource={codexPaymentSource}
             codexPaymentSourceLoading={codexPaymentSourceLoading}
+            codexSubmitPreflightPending={codexSubmitPreflightPending}
             onOpenCodexPaymentConfig={() => {
               refreshCodexPaymentSource?.();
               setCodexPaymentConfigOpen(true);
