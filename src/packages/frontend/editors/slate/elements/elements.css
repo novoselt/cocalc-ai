@@ -99,6 +99,29 @@ list spacing collapses.
   min-height: 1.5em;
 }
 
+/* Guidance is rendered inside a virtualized flex row. Explicit pasted image
+ * dimensions must not become that row's intrinsic width. */
+.cocalc-slate-guidance,
+.cocalc-slate-guidance-content {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.cocalc-slate-guidance-content .cocalc-slate-resizable-image {
+  max-width: 100% !important;
+  height: auto !important;
+}
+
+.cocalc-slate-guidance-content img {
+  display: block;
+  max-width: 100% !important;
+  height: auto !important;
+  object-fit: contain;
+}
+
 .cocalc-slate-code-block .token.comment,
 .cocalc-slate-code-block .token.prolog,
 .cocalc-slate-code-block .token.doctype,

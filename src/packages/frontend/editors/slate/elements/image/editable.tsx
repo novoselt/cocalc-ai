@@ -94,6 +94,7 @@ register({
       <span {...attributes}>
         <span ref={ref} contentEditable={false}>
           <Resizable
+            className="cocalc-slate-resizable-image"
             style={{
               display: "inline-block",
               border,
