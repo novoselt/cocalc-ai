@@ -357,7 +357,10 @@ describe("admin support API", () => {
       })),
     };
     const attachments = {
-      show: jest.fn(async () => ({ result: attachment, response: {} })),
+      show: jest.fn(async () => ({
+        result: { attachment },
+        response: {},
+      })),
     };
     mockGetZendeskClient.mockResolvedValue({
       config: {

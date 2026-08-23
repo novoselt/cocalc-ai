@@ -1569,7 +1569,8 @@ export async function getImage(
       client.attachments.show(attachmentId),
       "Zendesk attachment metadata read",
     )) as any;
-    const detailedAttachment = (detail?.result ??
+    const detailedAttachment = (detail?.result?.attachment ??
+      detail?.result ??
       detail?.response?.attachment ??
       attachment) as Attachment;
     if (
