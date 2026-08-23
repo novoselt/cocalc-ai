@@ -1,5 +1,14 @@
 # Accounts Receivable Operations
 
+This runbook is also packaged with every CoCalc CLI build so admins and agents
+can read it without access to the source checkout:
+
+```sh
+cocalc docs show admin/accounts-receivable --include-admin
+cocalc docs search "accounts receivable" --include-admin
+cocalc docs skill-context --query "accounts receivable" --include-admin
+```
+
 CoCalc's commercial-order workflow is the shared source of truth for
 sales-assisted agreements, invoicing, payment collection, and fulfillment.
 Stripe delivers invoices and accepts payment. Zendesk records customer

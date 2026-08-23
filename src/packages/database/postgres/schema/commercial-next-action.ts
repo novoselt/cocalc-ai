@@ -12,7 +12,7 @@ export const COMMERCIAL_NEXT_ACTION_CONSTRAINT =
   "commercial_orders_next_action_check";
 
 const allowedActionsSql = COMMERCIAL_NEXT_ACTIONS.map(
-  (action) => `'${action.replaceAll("'", "''")}'`,
+  (action) => `'${action.replace(/'/g, "''")}'`,
 ).join(",");
 
 async function constraintState(

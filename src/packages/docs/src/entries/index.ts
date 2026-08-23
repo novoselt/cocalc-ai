@@ -50,6 +50,7 @@ const DOCS_ENTRY_IDS = [
   "admin.site-settings",
   "admin.users",
   "admin.cocalc-cli",
+  "admin.accounts-receivable",
   "admin.cocalc-software",
   "admin.bay-ops",
   "admin.rootfs",

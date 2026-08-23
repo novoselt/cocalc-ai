@@ -69,6 +69,26 @@ function setup(
   return { program, output: () => output };
 }
 
+test("receivables help points agents to the bundled admin runbook", () => {
+  const { program } = setup({});
+  const admin = program.commands.find((command) => command.name() === "admin");
+  const receivables = admin?.commands.find(
+    (command) => command.name() === "receivables",
+  );
+  assert.ok(receivables);
+  let help = "";
+  receivables.configureOutput({ writeOut: (text) => (help += text) });
+  receivables.outputHelp();
+  assert.match(
+    help,
+    /cocalc docs show admin\/accounts-receivable --include-admin/,
+  );
+  assert.match(
+    help,
+    /cocalc docs skill-context --query "accounts receivable" --include-admin/,
+  );
+});
+
 test("receivables list maps combined states and assignee filters", async () => {
   let captured: any;
   const response = {

@@ -13,6 +13,7 @@ import {
   ADMIN_MEMBERSHIP_AND_LICENSES_BODY,
   ADMIN_NEWS_BODY,
   ADMIN_OVERVIEW_BODY,
+  ADMIN_RECEIVABLES_BODY,
   ADMIN_REGISTRATION_TOKENS_BODY,
   ADMIN_ROOTFS_BODY,
   ADMIN_SIGNUP_EMERGENCY_CONTROLS_BODY,
@@ -140,6 +141,27 @@ export const ADMIN_ENTRIES: DocsEntry[] = [
     summary:
       "Use cocalc-cli for admin inspection, fresh auth, bay listing, account location, and rehome smoke tests.",
     title: "Admin cocalc-cli cookbook",
+    visibility: "admin",
+  },
+  {
+    audiences: ["agents", "teams"],
+    body: ADMIN_RECEIVABLES_BODY.trim(),
+    category: "Admin",
+    id: "admin.accounts-receivable",
+    image: docsIcon(
+      "/public/docs/cocalc-cli-862b8d4e.webp",
+      "A commercial receivables queue with invoicing, collection, and fulfillment state",
+    ),
+    lastReviewed: "2026-08-23",
+    noActionReason:
+      "Admin operations runbook; use the documented cocalc admin receivables commands or Admin -> Accounts Receivable.",
+    searchKeywords:
+      "accounts receivable commercial orders AR invoices Stripe payments manual settlement site license fulfillment procurement purchase order PO billing collections reconciliation Zendesk adoption pilot",
+    slug: "admin/accounts-receivable",
+    status: "ready",
+    summary:
+      "Operate the shared commercial-order, invoicing, collection, and site-license fulfillment workflow safely.",
+    title: "Operate accounts receivable",
     visibility: "admin",
   },
   {

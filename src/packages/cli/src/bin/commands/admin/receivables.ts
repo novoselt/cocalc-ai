@@ -1396,6 +1396,11 @@ Safety workflow:
   3. Invoice, payment, approval, cancellation, fulfillment, and backfill actions
      never take effect without explicit --commit.
 
+Bundled operations guide:
+  cocalc docs show admin/accounts-receivable --include-admin
+  cocalc docs search "accounts receivable" --include-admin
+  cocalc docs skill-context --query "accounts receivable" --include-admin
+
 Examples:
   cocalc admin receivables list --state ready-to-invoice,overdue --json
   cocalc admin receivables show AR-2026-000123 --json
