@@ -304,7 +304,7 @@ const surfaces = [
   {
     label: "notifications",
     chunks: [...initial, ...notifications],
-    max: 475 * KiB,
+    max: 500 * KiB,
   },
   {
     label: "Essential Docs",

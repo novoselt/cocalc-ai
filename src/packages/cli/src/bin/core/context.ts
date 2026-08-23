@@ -152,6 +152,7 @@ const HUB_API_GROUPS: HubGroupName[] = [
   "reflect",
   "legacyMigration",
   "compute",
+  "commercialOrders",
 ];
 
 export function createHubApiForContext(

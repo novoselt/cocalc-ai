@@ -22,5 +22,8 @@
     "jest.config.js"
   ],
   "references_comment": "Do not define path:../comm because that causes a circular references.",
-  "references": [{ "path": "../util", "path": "../sync" }]
+  "references": [
+    { "path": "../apps/document-build" },
+    { "path": "../util", "path": "../sync" }
+  ]
 }

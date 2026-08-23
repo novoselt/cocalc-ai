@@ -58,7 +58,7 @@ describe("ensureAcpWorkerRunning", () => {
   it("does not respawn a worker that has a fresh heartbeat", async () => {
     fs.writeFileSync(path.join(tempDir, "acp-worker.pid"), "123\n");
     fs.writeFileSync(
-      path.join(tempDir, "acp-worker.heartbeat.json"),
+      path.join(tempDir, "acp-worker.heartbeat.json.123"),
       JSON.stringify({ pid: 123, updated_at: Date.now() }),
     );
     const killSpy = jest
@@ -68,6 +68,21 @@ describe("ensureAcpWorkerRunning", () => {
     await expect(ensureAcpWorkerRunning()).resolves.toBe(true);
     expect(killSpy).toHaveBeenCalledWith(123, 0);
     expect(spawnMock).not.toHaveBeenCalled();
+    expect(listQueuedAcpJobsMock).not.toHaveBeenCalled();
+    expect(listRunningAcpJobsMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a fresh legacy heartbeat during a rolling upgrade", async () => {
+    fs.writeFileSync(path.join(tempDir, "acp-worker.pid"), "123\n");
+    fs.writeFileSync(
+      path.join(tempDir, "acp-worker.heartbeat.json"),
+      JSON.stringify({ pid: 123, updated_at: Date.now() }),
+    );
+    jest.spyOn(process, "kill").mockImplementation((() => true) as any);
+
+    await expect(ensureAcpWorkerRunning()).resolves.toBe(true);
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(listQueuedAcpJobsMock).not.toHaveBeenCalled();
   });
 
   it("respawns when the pid file points at a live pid with a stale heartbeat", async () => {
@@ -85,9 +100,16 @@ describe("ensureAcpWorkerRunning", () => {
       "456\n",
     );
     const heartbeat = JSON.parse(
-      fs.readFileSync(path.join(tempDir, "acp-worker.heartbeat.json"), "utf8"),
+      fs.readFileSync(
+        path.join(tempDir, "acp-worker.heartbeat.json.456"),
+        "utf8",
+      ),
     );
     expect(heartbeat.pid).toBe(456);
     expect(Number.isFinite(heartbeat.updated_at)).toBe(true);
+    expect(spawnMock.mock.calls[0][2].env).toMatchObject({
+      DEBUG_CONSOLE: "no",
+      DEBUG_FILE: path.join(tempDir, "logs", "acp-worker.log"),
+    });
   });
 });

@@ -87,6 +87,7 @@ const Element = ({ attributes, children, element }) => {
     <section
       {...attributes}
       aria-label={appearance.label}
+      className="cocalc-slate-guidance"
       style={{
         margin: "6px 0",
         padding: "8px 10px 10px",
@@ -116,7 +117,12 @@ const Element = ({ attributes, children, element }) => {
           {appearance.label}
         </span>
       </div>
-      <div style={{ minWidth: 0, overflowWrap: "anywhere" }}>{children}</div>
+      <div
+        className="cocalc-slate-guidance-content"
+        style={{ minWidth: 0, overflowWrap: "anywhere" }}
+      >
+        {children}
+      </div>
     </section>
   );
 };

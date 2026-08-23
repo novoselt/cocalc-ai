@@ -88,6 +88,7 @@ import {
   resendEmailAuthChallengeDirect,
   startEmailAuthChallengeDirect,
 } from "@cocalc/server/auth/email/challenge-store";
+import { getArchiveLifecycleAccountStatusesLocal } from "@cocalc/server/accounts/archive-lifecycle-status";
 import adminVerifyEmailAddressLocal from "@cocalc/server/accounts/admin-verify-email-address";
 import sendEmailVerificationLocal from "@cocalc/server/accounts/send-email-verification";
 import {
@@ -141,6 +142,10 @@ import {
 import { updateClusterAccountEmailAddressVerified } from "@cocalc/server/inter-bay/account-directory-updates";
 import isAdmin from "@cocalc/server/accounts/is-admin";
 import {
+  assertCommercialReceivablesCapability,
+  COMMERCIAL_ACTION_CAPABILITIES,
+} from "@cocalc/server/commercial-orders/feature-flags";
+import {
   acceptAccountRehome,
   copyAccountRehomeState,
   getMembershipPortableState,
@@ -160,6 +165,7 @@ import {
   getMembershipAnalyticsEventsLocal,
   getMembershipAnalyticsOverviewLocal,
 } from "@cocalc/server/membership/analytics";
+import { dispatchCommercialSeedRequest } from "@cocalc/server/commercial-orders/dispatch";
 import { getMembershipAllocationSeriesLocal } from "@cocalc/server/membership/allocation-analytics-series";
 import { getActiveUserMapOverview } from "@cocalc/server/account-presence-locations";
 import {
@@ -276,6 +282,7 @@ import {
   touchExternalCredential,
   upsertExternalCredential,
 } from "@cocalc/server/external-credentials/store";
+import { refreshCodexSubscriptionAuth } from "@cocalc/server/external-credentials/codex-subscription-refresh";
 import { getDedicatedHostPolicySnapshotLocal } from "@cocalc/server/project-host/admission";
 import {
   closeDedicatedHostPurchaseSessionLocal,
@@ -738,6 +745,30 @@ async function startBayOpsService(): Promise<void> {
           : undefined,
       };
     },
+    commercialOrders: async (opts) => {
+      if (bay_id !== getConfiguredClusterSeedBayId()) {
+        throw Error("commercial orders are authoritative on the seed bay");
+      }
+      if (opts.action !== "stripeWebhook") {
+        if (!(await isAdmin(opts.actor_account_id))) {
+          throw Error("commercial order inter-bay actor must be an admin");
+        }
+        if (`${opts.payload.reason ?? ""}`.trim().length < 4) {
+          throw Error(
+            "commercial order inter-bay request requires an audit reason",
+          );
+        }
+        const capability =
+          COMMERCIAL_ACTION_CAPABILITIES[
+            opts.action as keyof typeof COMMERCIAL_ACTION_CAPABILITIES
+          ];
+        if (!capability) {
+          throw Error(`unsupported commercial order action '${opts.action}'`);
+        }
+        await assertCommercialReceivablesCapability(capability);
+      }
+      return await dispatchCommercialSeedRequest(opts);
+    },
   };
   services.push(
     ...createInterBayBayOpsHandlers({
@@ -1071,6 +1102,8 @@ async function startAccountLocalService(): Promise<void> {
     },
     getMembership: async ({ account_id }) =>
       await resolveMembershipForAccount(account_id),
+    getArchiveLifecycleStatuses: async ({ account_ids }) =>
+      await getArchiveLifecycleAccountStatusesLocal({ account_ids }),
     getMembershipDetails: async ({ account_id, refresh_usage_status }) =>
       await resolveMembershipDetailsForAccount(account_id, {
         refresh_usage_status,
@@ -1723,6 +1756,8 @@ async function startAccountLocalService(): Promise<void> {
       await publicDirectoryShares.update(opts),
     publicDirectoryShareUpsert: async (opts) =>
       await publicDirectoryShares.upsert(opts),
+    publicDirectoryShareDisableForBannedActor: async (opts) =>
+      await publicDirectoryShares.disableForBannedActor(opts),
     publicDirectoryShareAuthorizeRead: async (opts) =>
       await publicDirectoryShares.authorizeRead(opts),
     publicDirectoryShareListDirectory: async (opts) =>
@@ -2035,6 +2070,14 @@ async function startExternalCredentialsService(): Promise<void> {
       }),
     revoke: async ({ id, owner_account_id }) =>
       await revokeExternalCredential({ id, owner_account_id }),
+    refreshCodexSubscription: async ({
+      owner_account_id,
+      previous_access_token_hash,
+    }) =>
+      await refreshCodexSubscriptionAuth({
+        ownerAccountId: owner_account_id,
+        previousAccessTokenHash: previous_access_token_hash,
+      }),
   };
   services.push(
     ...createInterBayExternalCredentialsHandlers({
@@ -2693,6 +2736,7 @@ async function startHostConnectionService(): Promise<void> {
       limit,
       cursor,
       risk_only,
+      free_only,
       state_filter,
       project_state,
     }) =>
@@ -2702,6 +2746,7 @@ async function startHostConnectionService(): Promise<void> {
         limit,
         cursor,
         risk_only,
+        free_only,
         state_filter,
         project_state,
       }),

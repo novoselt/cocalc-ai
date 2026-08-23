@@ -6,6 +6,8 @@
     "sourceMap": true,
     "lib": ["es2022", "dom"],
     "paths": {
+      "@cocalc/app-document-build": ["../apps/document-build/src"],
+      "@cocalc/app-document-build/*": ["../apps/document-build/src/*"],
       "@cocalc/app-tasks": ["../apps/tasks/src"],
       "@cocalc/app-tasks/*": ["../apps/tasks/src/*"],
       "@cocalc/docs": ["../docs"],
@@ -45,6 +47,7 @@
     "**/*.spec.jsx"
   ],
   "references": [
+    { "path": "../apps/document-build" },
     { "path": "../apps/tasks" },
     { "path": "../chat" },
     { "path": "../comm" },

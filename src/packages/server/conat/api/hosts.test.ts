@@ -1194,6 +1194,52 @@ describe("hosts.listHostProjects", () => {
     expect(riskSql).toContain("INTERVAL '1 minute'");
   });
 
+  it("adds a fail-closed free-project filter when requested", async () => {
+    const listSqls: string[] = [];
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM project_hosts")) {
+        return {
+          rows: [
+            {
+              id: HOST_ID,
+              metadata: { owner: ACCOUNT_ID },
+            },
+          ],
+        };
+      }
+      if (sql.includes("COUNT(*) AS total")) {
+        return { rows: [SUMMARY_ROW] };
+      }
+      if (sql.includes("LEFT(COALESCE(title")) {
+        listSqls.push(sql);
+        return { rows: PROJECT_ROWS_PAGE_1.slice(0, 1) };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    const { listHostProjects } = await import("./hosts");
+    await listHostProjects({
+      account_id: ACCOUNT_ID,
+      id: HOST_ID,
+      limit: 1,
+      free_only: false,
+    });
+    await listHostProjects({
+      account_id: ACCOUNT_ID,
+      id: HOST_ID,
+      limit: 1,
+      free_only: true,
+    });
+
+    expect(listSqls).toHaveLength(2);
+    expect(listSqls[0]).not.toContain("shared_compute_priority");
+    expect(listSqls[1]).toContain(
+      "jsonb_typeof(run_quota->'shared_compute_priority') = 'number'",
+    );
+    expect(listSqls[1]).toContain("ELSE 0");
+    expect(listSqls[1]).toContain("END = 0");
+  });
+
   it("adds state filters when requested", async () => {
     const listSqls: string[] = [];
     queryMock.mockImplementation(async (sql: string, _params: any[]) => {
@@ -6312,7 +6358,7 @@ describe("hosts.issueProjectHostAuthToken", () => {
     });
     queryMock = jest.fn(async () => ({
       rowCount: 1,
-      rows: [{ "?column?": 1 }],
+      rows: [{ id: SHARE_UUID }],
     }));
     const { issueProjectHostAuthToken } = await import("./hosts");
     await expect(
@@ -6330,6 +6376,11 @@ describe("hosts.issueProjectHostAuthToken", () => {
       expect.stringContaining("FROM public_project_paths"),
       [PROJECT_UUID, HOST_UUID],
     );
+    expect(publicDirectorySharesAuthorizeReadMock).toHaveBeenCalledWith({
+      account_id: ACCOUNT_UUID,
+      project_id: PROJECT_UUID,
+      share_id: SHARE_UUID,
+    });
     expect(syncProjectUsersOnHostMock).not.toHaveBeenCalled();
     expect(issueProjectHostAuthTokenJwtMock).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -1,13 +1,7 @@
 import path from "node:path";
 import { spawn } from "node:child_process";
-import {
-  closeSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { closeSync, mkdirSync, openSync, rmSync, writeFileSync } from "node:fs";
+import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import getLogger from "@cocalc/backend/logger";
 import { conatPassword, conatServer, data } from "@cocalc/backend/data";
 import { listQueuedAcpJobs, listRunningAcpJobs } from "../sqlite/acp-jobs";
@@ -27,6 +21,13 @@ type AcpWorkerHeartbeat = {
   updated_at: number;
 };
 
+const pendingHeartbeatWrites = new Map<number, AcpWorkerHeartbeat>();
+const heartbeatWritePromises = new Map<number, Promise<void>>();
+
+function workerHeartbeatFile(pid: number): string {
+  return `${ACP_WORKER_HEARTBEAT_FILE}.${pid}`;
+}
+
 function pendingAcpWorkExists(): boolean {
   try {
     return listQueuedAcpJobs().length > 0 || listRunningAcpJobs().length > 0;
@@ -36,9 +37,9 @@ function pendingAcpWorkExists(): boolean {
   }
 }
 
-function readWorkerPid(): number | undefined {
+async function readWorkerPid(): Promise<number | undefined> {
   try {
-    const raw = readFileSync(ACP_WORKER_PID_FILE, "utf8").trim();
+    const raw = (await readFile(ACP_WORKER_PID_FILE, "utf8")).trim();
     if (!raw) return;
     const pid = Number(raw);
     return Number.isInteger(pid) && pid > 0 ? pid : undefined;
@@ -65,9 +66,11 @@ function clearWorkerPidFile(): void {
   }
 }
 
-function readWorkerHeartbeat(): AcpWorkerHeartbeat | undefined {
+async function readHeartbeatFile(
+  filename: string,
+): Promise<AcpWorkerHeartbeat | undefined> {
   try {
-    const raw = JSON.parse(readFileSync(ACP_WORKER_HEARTBEAT_FILE, "utf8"));
+    const raw = JSON.parse(await readFile(filename, "utf8"));
     const pid = Number(raw?.pid);
     const updated_at = Number(raw?.updated_at);
     if (!Number.isInteger(pid) || pid <= 0) return;
@@ -78,16 +81,46 @@ function readWorkerHeartbeat(): AcpWorkerHeartbeat | undefined {
   }
 }
 
-function hasFreshWorkerHeartbeat(
+async function readWorkerHeartbeat(
+  pid: number,
+): Promise<AcpWorkerHeartbeat | undefined> {
+  return (
+    (await readHeartbeatFile(workerHeartbeatFile(pid))) ??
+    (await readHeartbeatFile(ACP_WORKER_HEARTBEAT_FILE))
+  );
+}
+
+async function hasFreshWorkerHeartbeat(
   pid?: number,
   now: number = Date.now(),
-): boolean {
+): Promise<boolean> {
   if (!pid) return false;
-  const heartbeat = readWorkerHeartbeat();
+  const heartbeat = await readWorkerHeartbeat(pid);
   if (!heartbeat || heartbeat.pid !== pid) {
     return false;
   }
   return now - heartbeat.updated_at <= ACP_WORKER_HEARTBEAT_STALE_MS;
+}
+
+async function flushWorkerHeartbeat(pid: number): Promise<void> {
+  while (true) {
+    const heartbeat = pendingHeartbeatWrites.get(pid);
+    if (!heartbeat) return;
+    pendingHeartbeatWrites.delete(pid);
+    const filename = workerHeartbeatFile(pid);
+    const temp = `${filename}.${process.pid}.tmp`;
+    try {
+      await writeFile(temp, `${JSON.stringify(heartbeat)}\n`, { mode: 0o600 });
+      await rename(temp, filename);
+    } catch (err) {
+      await rm(temp, { force: true }).catch(() => {});
+      logger.debug("failed to record ACP worker heartbeat", {
+        pid,
+        heartbeat: filename,
+        err,
+      });
+    }
+  }
 }
 
 export function recordAcpWorkerHeartbeat({
@@ -96,27 +129,60 @@ export function recordAcpWorkerHeartbeat({
 }: {
   pid: number;
   now?: number;
-}): void {
-  try {
-    writeFileSync(
-      ACP_WORKER_HEARTBEAT_FILE,
-      `${JSON.stringify({ pid, updated_at: now })}\n`,
-      { mode: 0o600 },
-    );
-  } catch (err) {
-    logger.debug("failed to record ACP worker heartbeat", {
-      pid,
-      heartbeat: ACP_WORKER_HEARTBEAT_FILE,
-      err,
-    });
+}): Promise<void> {
+  pendingHeartbeatWrites.set(pid, { pid, updated_at: now });
+  const existing = heartbeatWritePromises.get(pid);
+  if (existing) return existing;
+  const promise = flushWorkerHeartbeat(pid).finally(() => {
+    heartbeatWritePromises.delete(pid);
+  });
+  heartbeatWritePromises.set(pid, promise);
+  return promise;
+}
+
+export async function clearAcpWorkerHeartbeat({
+  pid,
+  legacy = false,
+}: {
+  pid?: number;
+  legacy?: boolean;
+} = {}): Promise<void> {
+  if (pid) {
+    pendingHeartbeatWrites.delete(pid);
+    await heartbeatWritePromises.get(pid)?.catch(() => {});
+    await rm(workerHeartbeatFile(pid), { force: true }).catch(() => {});
+  }
+  if (legacy) {
+    await rm(ACP_WORKER_HEARTBEAT_FILE, { force: true }).catch(() => {});
   }
 }
 
-export function clearAcpWorkerHeartbeat(): void {
+async function clearStaleWorkerFiles(pid?: number): Promise<void> {
+  clearWorkerPidFile();
+  await clearAcpWorkerHeartbeat({ pid, legacy: true });
+}
+
+async function workerIsHealthy(pid?: number): Promise<boolean> {
+  return isPidAlive(pid) && (await hasFreshWorkerHeartbeat(pid));
+}
+
+function logStaleWorker(pid: number): void {
+  logger.warn("ignoring stale ACP worker pid without fresh heartbeat", {
+    pid,
+    pid_file: ACP_WORKER_PID_FILE,
+    heartbeat_file: workerHeartbeatFile(pid),
+  });
+}
+
+async function recordInitialWorkerHeartbeat(pid: number): Promise<void> {
   try {
-    rmSync(ACP_WORKER_HEARTBEAT_FILE, { force: true });
-  } catch {
-    // ignore
+    await recordAcpWorkerHeartbeat({ pid });
+  } catch (err) {
+    logger.debug("failed to record initial ACP worker heartbeat", {
+      pid,
+      heartbeat: workerHeartbeatFile(pid),
+      err,
+    });
   }
 }
 
@@ -125,28 +191,22 @@ export async function ensureAcpWorkerRunning({
 }: {
   force?: boolean;
 } = {}): Promise<boolean> {
+  const existingPid = await readWorkerPid();
+  if (await workerIsHealthy(existingPid)) {
+    return true;
+  }
   if (!force && !pendingAcpWorkExists()) {
     return false;
   }
-  const existingPid = readWorkerPid();
-  if (isPidAlive(existingPid) && hasFreshWorkerHeartbeat(existingPid)) {
-    return true;
-  }
   if (existingPid && isPidAlive(existingPid)) {
-    logger.warn("ignoring stale ACP worker pid without fresh heartbeat", {
-      pid: existingPid,
-      pid_file: ACP_WORKER_PID_FILE,
-      heartbeat_file: ACP_WORKER_HEARTBEAT_FILE,
-    });
+    logStaleWorker(existingPid);
   }
   if (!`${conatPassword ?? ""}`.trim()) {
     logger.warn("skipping ACP worker spawn: conat password is not initialized");
-    clearWorkerPidFile();
-    clearAcpWorkerHeartbeat();
+    await clearStaleWorkerFiles(existingPid);
     return false;
   }
-  clearWorkerPidFile();
-  clearAcpWorkerHeartbeat();
+  await clearStaleWorkerFiles(existingPid);
   const { command, args } = resolveLiteAcpWorkerLaunch();
   mkdirSync(path.dirname(ACP_WORKER_LOG_FILE), { recursive: true });
   const stdout = openSync(ACP_WORKER_LOG_FILE, "a");
@@ -159,11 +219,10 @@ export async function ensureAcpWorkerRunning({
     COCALC_LITE_ACP_SQLITE_FILENAME: path.join(data, "acp.sqlite"),
     COCALC_LITE_ACP_WORKER_CONAT_PASSWORD: conatPassword,
     COCALC_LITE_ACP_WORKER_PID_FILE: ACP_WORKER_PID_FILE,
-    // The worker's stdout/stderr are already redirected to acp-worker.log.
-    // Force debug logging to stay on console so the useful ACP worker logs land
-    // in that file instead of being redirected again into the shared dev log.
-    DEBUG_CONSOLE: "yes",
-    DEBUG_FILE: "",
+    // Use the logger's asynchronous file stream instead of synchronous writes
+    // through a console redirected to a regular file.
+    DEBUG_CONSOLE: "no",
+    DEBUG_FILE: ACP_WORKER_LOG_FILE,
     COCALC_LITE_ACP_WORKER: "1",
   };
   const child = spawn(command, args, {
@@ -176,12 +235,11 @@ export async function ensureAcpWorkerRunning({
   child.unref();
   const pid = child.pid;
   if (pid == null || !Number.isInteger(pid) || pid <= 0) {
-    clearWorkerPidFile();
-    clearAcpWorkerHeartbeat();
+    await clearStaleWorkerFiles(existingPid);
     throw new Error("failed to determine ACP worker pid");
   }
   writeFileSync(ACP_WORKER_PID_FILE, `${pid}\n`);
-  recordAcpWorkerHeartbeat({ pid });
+  await recordInitialWorkerHeartbeat(pid);
   logger.warn("spawned ACP worker", {
     pid,
     command,

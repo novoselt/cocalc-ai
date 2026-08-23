@@ -439,6 +439,25 @@ export function useCodexLog({
     };
   }, []);
 
+  const flushBufferedLiveLog = useCallback(() => {
+    if (liveFlushTimerRef.current != null) {
+      clearTimeout(liveFlushTimerRef.current);
+      liveFlushTimerRef.current = null;
+    }
+    const pending = liveBufferRef.current;
+    if (!pending.length) return;
+    liveBufferRef.current = [];
+    const pendingStreamSeq = pendingLiveStreamSeqRef.current;
+    pendingLiveStreamSeqRef.current = undefined;
+    appliedLiveStreamSeqRef.current = maxStreamSeq(
+      appliedLiveStreamSeqRef.current,
+      pendingStreamSeq,
+    );
+    if (mountedRef.current) {
+      setLiveLog((prev) => mergeLogs(prev ?? [], pending));
+    }
+  }, [mergeLogs]);
+
   // Reset when log ref changes.
   useEffect(() => {
     if (cacheKey) {
@@ -699,22 +718,6 @@ export function useCodexLog({
     let liveStreamDisconnected: (() => void) | undefined;
     let liveStreamRecovered: (() => void) | undefined;
     let stopped = false;
-    const flushBufferedLiveLog = () => {
-      if (liveFlushTimerRef.current != null) {
-        clearTimeout(liveFlushTimerRef.current);
-        liveFlushTimerRef.current = null;
-      }
-      const pending = liveBufferRef.current;
-      if (!pending.length) return;
-      liveBufferRef.current = [];
-      const pendingStreamSeq = pendingLiveStreamSeqRef.current;
-      pendingLiveStreamSeqRef.current = undefined;
-      appliedLiveStreamSeqRef.current = maxStreamSeq(
-        appliedLiveStreamSeqRef.current,
-        pendingStreamSeq,
-      );
-      setLiveLog((prev) => mergeLogs(prev ?? [], pending));
-    };
     const scheduleBufferedFlush = (immediate: boolean = false) => {
       if (immediate) {
         flushBufferedLiveLog();
@@ -882,16 +885,12 @@ export function useCodexLog({
     }
     void subscribe();
     return () => {
+      flushBufferedLiveLog();
       stopped = true;
       liveConnectedRef.current = false;
       if (liveStreamRef.current === liveStream) {
         liveStreamRef.current = null;
       }
-      if (liveFlushTimerRef.current != null) {
-        clearTimeout(liveFlushTimerRef.current);
-        liveFlushTimerRef.current = null;
-      }
-      liveBufferRef.current = [];
       try {
         sub?.close?.();
       } catch {
@@ -923,6 +922,7 @@ export function useCodexLog({
     liveLogStream,
     liveStreamIsProjection,
     logSubject,
+    flushBufferedLiveLog,
     mergeLogs,
     setLiveConnectionState,
   ]);

@@ -299,18 +299,16 @@ function normalizeActivityPathKey(
   return path.normalize(trimmed);
 }
 
-function getCoCalcRuntimeGuidanceHeader(cliCommand: string): string {
+function getCoCalcProjectRuntimeGuidance(cliCommand: string): string[] {
   return [
-    "[CoCalc runtime capabilities]",
-    "This turn may run with CoCalc CLI/browser automation context.",
+    "This turn may run with CoCalc CLI/project runtime context.",
     `When you need the CoCalc CLI, use this exact command: \`${cliCommand}\`. Do not assume bare \`cocalc\` resolves to the right binary.`,
-    `If relevant, you can use \`${cliCommand}\` to inspect browser state and run browser exec scripts.`,
     "Prefer scoped variables already provided in environment, e.g.:",
     "- COCALC_PROJECT_ID",
-    "- COCALC_BROWSER_ID",
     "- COCALC_API_URL",
     "- COCALC_BEARER_TOKEN",
     "Prefer high-signal commands over raw browser scripts when available.",
+    `For supported document builds, use \`${cliCommand} project build -h\` and \`${cliCommand} project build <path>\` so the complete editor pipeline runs without requiring a browser.`,
     "For notebook edits/execution that must survive browser refresh or disconnect, prefer `cocalc project jupyter -h` over `browser exec`.",
     "For multi-step notebook work, prefer `cocalc project jupyter exec --path ... --stdin` for ad hoc snippets or `--file <script.js>` for saved scripts instead of shelling multiple notebook commands.",
     "Use `cocalc project jupyter exec-api` to inspect the ambient notebook script API before writing a multi-step script. `api.notebook.run(...)` returns `run.run_id`.",
@@ -320,12 +318,30 @@ function getCoCalcRuntimeGuidanceHeader(cliCommand: string): string {
     `Example read: ${cliCommand} exec 'const doc = api.text.open({ path: "/home/user/file.md", projectIdentifier: process.env.COCALC_PROJECT_ID }); return await doc.read();'`,
     `Example append: ${cliCommand} exec 'const doc = api.text.open({ path: "/home/user/file.md", projectIdentifier: process.env.COCALC_PROJECT_ID }); const before = await doc.read(); return await doc.append("\\nAgent note", { expectedHash: before.hash });'`,
     "The `api.text` write/append/replace methods save to disk by default; pass `{ saveToDisk: false }` only for intentional live-only collaborative edits.",
+  ];
+}
+
+function getCoCalcBrowserRuntimeGuidance(cliCommand: string): string[] {
+  return [
+    `If relevant, you can use \`${cliCommand}\` to inspect browser state and run browser exec scripts.`,
+    "The browser-scoped environment includes COCALC_BROWSER_ID.",
     "Use `browser exec` only for UI-only context such as selection or viewport state.",
     "For questions like 'what browser tabs/files do I have open?', start with:",
     `1) List open files/tabs: ${cliCommand} browser files --project-id \"$COCALC_PROJECT_ID\" --browser \"$COCALC_BROWSER_ID\"`,
     "Use `browser workspace-state` for workspace selection/records, not as the first command for simple tab listing.",
     `For visible UI-only state that typed commands cannot answer, use screenshot or browser exec with exact targets: ${cliCommand} browser exec --project-id \"$COCALC_PROJECT_ID\" --browser \"$COCALC_BROWSER_ID\" --file <script.js>`,
     "Under agent auth, pass exact browser/project targets to avoid blocked session discovery.",
+  ];
+}
+
+function getCoCalcRuntimeGuidanceHeader(
+  cliCommand: string,
+  { hasBrowser }: { hasBrowser: boolean },
+): string {
+  return [
+    "[CoCalc runtime capabilities]",
+    ...getCoCalcProjectRuntimeGuidance(cliCommand),
+    ...(hasBrowser ? getCoCalcBrowserRuntimeGuidance(cliCommand) : []),
     "[/CoCalc runtime capabilities]",
   ].join("\n");
 }
@@ -414,6 +430,10 @@ function authSourceForSpawned(
 }
 
 export type CodexAppServerAccountStatus = {
+  authentication: {
+    status: "connected" | "needs-sign-in" | "unverified";
+    reason?: string;
+  };
   account?: any;
   rateLimits?: any;
   tokenUsage?: any;
@@ -423,6 +443,65 @@ export type CodexAppServerAccountStatus = {
     tokenUsage?: string;
   };
 };
+
+function isCodexAuthenticationError(value: unknown): boolean {
+  const text = `${value ?? ""}`.trim().toLowerCase();
+  if (!text) return false;
+  return [
+    "authentication required",
+    "unauthorized",
+    "invalid_grant",
+    "refresh_token_expired",
+    "refresh_token_reused",
+    "refresh_token_invalidated",
+    "sign-in has expired",
+    "sign-in is no longer connected",
+    "http 401",
+  ].some((needle) => text.includes(needle));
+}
+
+function classifyCodexAuthentication({
+  account,
+  rateLimits,
+  errors,
+}: {
+  account?: any;
+  rateLimits?: any;
+  errors?: CodexAppServerAccountStatus["errors"];
+}): CodexAppServerAccountStatus["authentication"] {
+  if (
+    isCodexAuthenticationError(errors?.account) ||
+    isCodexAuthenticationError(errors?.rateLimits)
+  ) {
+    return {
+      status: "needs-sign-in",
+      reason:
+        "ChatGPT could not authenticate the stored sign-in. Sign in again with ChatGPT in CoCalc, then retry.",
+    };
+  }
+  if (rateLimits != null || account?.requiresOpenaiAuth === false) {
+    return { status: "connected" };
+  }
+  if (account?.requiresOpenaiAuth === true && account?.account == null) {
+    return {
+      status: "needs-sign-in",
+      reason:
+        "ChatGPT sign-in is missing or expired. Sign in again with ChatGPT in CoCalc, then retry.",
+    };
+  }
+  if (account?.account != null) {
+    // Account identity is authoritative even when the independent usage API is
+    // temporarily unavailable.
+    return { status: "connected" };
+  }
+  return {
+    status: "unverified",
+    reason:
+      errors?.account ??
+      errors?.rateLimits ??
+      "CoCalc could not verify the ChatGPT sign-in.",
+  };
+}
 
 type RpcResponse = {
   id?: number;
@@ -1471,10 +1550,12 @@ function addRuntimeGuidance(
 ): string {
   const hasProject = `${runtimeEnv?.COCALC_PROJECT_ID ?? ""}`.trim();
   const hasBrowser = `${runtimeEnv?.COCALC_BROWSER_ID ?? ""}`.trim();
-  if (!hasProject || !hasBrowser) {
+  if (!hasProject) {
     return prompt;
   }
-  return `${getCoCalcRuntimeGuidanceHeader(getCoCalcCliCommand(runtimeEnv))}\n\n${prompt}`;
+  return `${getCoCalcRuntimeGuidanceHeader(getCoCalcCliCommand(runtimeEnv), {
+    hasBrowser: !!hasBrowser,
+  })}\n\n${prompt}`;
 }
 
 function buildTurnInput({
@@ -1695,26 +1776,40 @@ export async function getCodexAppServerAccountStatus(opts: {
     await client.initialize(timeoutMs);
     const appServerLogin = spawned.appServerLogin ?? opts.appServerLogin;
     await loginAppServerIfNeeded(client, appServerLogin, timeoutMs);
-    // account/read may refresh an expired ChatGPT access token. Wait for that
-    // refresh before asking for rate limits, or the two requests can race and
-    // make a successful reconnect fail its immediate verification probe.
+    // Validate the current token before rotating it. Status checks are common,
+    // and forcing a refresh on every check creates avoidable refresh-token
+    // churn across projects and browser tabs.
     const [accountResult] = await Promise.allSettled([
-      client.request("account/read", { refreshToken: true }, timeoutMs),
+      client.request("account/read", { refreshToken: false }, timeoutMs),
     ]);
     const [rateLimitsResult] = await Promise.allSettled([
       client.request("account/rateLimits/read", {}, timeoutMs),
     ]);
+    let account = settledValue(accountResult);
     let rateLimits = settledValue(rateLimitsResult);
-    if (isRateLimitsAuthError(rateLimits.error) && appServerLogin) {
+    const shouldRefreshSubscription =
+      authSourceForSpawned(spawned) === "subscription" &&
+      (isRateLimitsAuthError(rateLimits.error) ||
+        (account.value?.requiresOpenaiAuth === true &&
+          account.value?.account == null));
+    if (shouldRefreshSubscription && appServerLogin) {
       try {
-        // account/read has already had a chance to refresh the app-server's
-        // token. Do not log in again with the originally captured token here:
-        // that can replace the refreshed token with the stale one.
+        account = {
+          value: await client.request(
+            "account/read",
+            { refreshToken: true },
+            timeoutMs,
+          ),
+        };
         rateLimits = {
           value: await client.request("account/rateLimits/read", {}, timeoutMs),
         };
       } catch (reason) {
-        rateLimits = { error: `${reason}` };
+        const error = `${reason}`;
+        if (account.value == null) {
+          account = { error };
+        }
+        rateLimits = { error };
       }
     }
     let tokenUsageResult: PromiseSettledResult<any> | undefined;
@@ -1728,7 +1823,6 @@ export async function getCodexAppServerAccountStatus(opts: {
         tokenUsageResult = { status: "rejected", reason };
       }
     }
-    const account = settledValue(accountResult);
     const tokenUsage = tokenUsageResult
       ? settledValue(tokenUsageResult)
       : { value: undefined };
@@ -1736,11 +1830,17 @@ export async function getCodexAppServerAccountStatus(opts: {
     if (account.error) errors.account = account.error;
     if (rateLimits.error) errors.rateLimits = rateLimits.error;
     if (tokenUsage.error) errors.tokenUsage = tokenUsage.error;
+    const normalizedErrors = Object.keys(errors).length ? errors : undefined;
     return {
+      authentication: classifyCodexAuthentication({
+        account: account.value,
+        rateLimits: rateLimits.value,
+        errors: normalizedErrors,
+      }),
       account: account.value,
       rateLimits: rateLimits.value,
       tokenUsage: tokenUsage.value,
-      errors: Object.keys(errors).length ? errors : undefined,
+      errors: normalizedErrors,
     };
   } finally {
     if (spawned.proc.exitCode == null && !spawned.proc.killed) {

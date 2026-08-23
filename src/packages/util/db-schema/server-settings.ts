@@ -106,6 +106,13 @@ export interface Customize {
   policies?: string;
   shareServer?: boolean;
   legacy_migration_enabled?: boolean;
+  commercial_receivables_visible?: boolean;
+  commercial_receivables_mutations_enabled?: boolean;
+  commercial_receivables_stripe_drafts_enabled?: boolean;
+  commercial_receivables_stripe_send_enabled?: boolean;
+  commercial_receivables_manual_settlement_enabled?: boolean;
+  commercial_receivables_reconciliation_enabled?: boolean;
+  commercial_receivables_fulfillment_enabled?: boolean;
   legacy_migration_page_message?: string;
   dns?: string;
   siteURL?: string;

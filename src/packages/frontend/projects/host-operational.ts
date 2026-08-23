@@ -25,6 +25,19 @@ export type HostRecoveryDisplay = {
   timingDescription?: string;
 };
 
+export function expectsProjectHostConnection({
+  projectState,
+  runtimePreparing,
+}: {
+  projectState?: string;
+  runtimePreparing: boolean;
+}): boolean {
+  return (
+    `${projectState ?? ""}`.trim().toLowerCase() === "running" ||
+    runtimePreparing
+  );
+}
+
 function read(hostInfo: HostInfoLike | undefined, key: string): any {
   if (!hostInfo) return undefined;
   if (typeof hostInfo.get === "function") return hostInfo.get(key);

@@ -64,7 +64,10 @@ import {
   useChatThreadSelection,
 } from "./thread-selection";
 import { dateValue, field, isAcpAssistantMessage } from "./access";
-import { useCodexPaymentSource } from "./use-codex-payment-source";
+import {
+  fetchCodexPaymentSourceForSubmit,
+  useCodexPaymentSource,
+} from "./use-codex-payment-source";
 import {
   acknowledgeThreadAutomation,
   deleteThreadAutomation,
@@ -115,13 +118,16 @@ import {
 import { OTHER_SETTINGS_CODEX_NEW_CHAT_DEFAULTS } from "./codex-defaults";
 import {
   DEFAULT_CODEX_MODEL_NAME,
+  type CodexPaymentSourcePreference,
   isCodexModelName,
   resolveCodexServiceTier,
   resolveCodexSessionMode,
 } from "@cocalc/util/ai/codex";
+import { getLiveCodexUsageStatus } from "@cocalc/frontend/account/codex-usage";
 import { CodexPaymentCredentialsModal } from "./codex";
 import { showLocalCodexTurnCompletionToast } from "@cocalc/frontend/notifications/codex-turn-toast";
 import {
+  codexConnectionNeedsAttentionAfterSubmit,
   ensureProjectRunningForCodex,
   isCodexPaymentSourceNeedsUserConfiguration,
   isCodexSubmitTarget,
@@ -584,10 +590,23 @@ function asTrimmedString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function chatActionsStoreName(actions: ChatActions): string {
-  const name = (actions as any)?.name;
-  if (typeof name !== "string" || name.trim().length === 0) return "";
-  return redux.getStore(name) != null ? name : "";
+export function chatActionsStoreName(
+  actions: ChatActions,
+  storeExists: (name: string) => boolean = (name) =>
+    redux.getStore(name) != null,
+): string {
+  // Embedded chat actions can be registered under a frame-specific name while
+  // set_syncdb deliberately points actions.store at the shared document store.
+  // ACP updates are written through actions.store, so subscribe there first.
+  const candidates = [(actions as any)?.store?.name, (actions as any)?.name];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string" || candidate.trim().length === 0) {
+      continue;
+    }
+    const name = candidate.trim();
+    if (storeExists(name)) return name;
+  }
+  return "";
 }
 
 export function ChatPanel({
@@ -845,6 +864,7 @@ export function ChatPanel({
     }));
   }, [aiAgentPolicyAllowed, newThreadSetup.agentMode]);
   const [codexPaymentConfigOpen, setCodexPaymentConfigOpen] = useState(false);
+  const codexConnectionCheckPendingRef = useRef(false);
   const [automationModalOpen, setAutomationModalOpen] = useState(false);
   const [automationDetailsOpen, setAutomationDetailsOpen] = useState(false);
   const [automationModalThreadKey, setAutomationModalThreadKey] = useState<
@@ -1626,16 +1646,17 @@ export function ChatPanel({
     }
   }, [agentSessionRecords, path]);
 
+  const codexPaymentPreference = ((isSelectedThreadAI
+    ? selectedThreadMetadata?.acp_config?.paymentSource
+    : newThreadSetup.codexConfig.paymentSource) ??
+    "auto") as CodexPaymentSourcePreference;
   const {
     paymentSource: codexPaymentSource,
     loading: codexPaymentSourceLoading,
     refresh: refreshCodexPaymentSource,
   } = useCodexPaymentSource({
     projectId: project_id,
-    preference:
-      (isSelectedThreadAI
-        ? selectedThreadMetadata?.acp_config?.paymentSource
-        : newThreadSetup.codexConfig.paymentSource) ?? "auto",
+    preference: codexPaymentPreference,
     enabled:
       aiAgentPolicyAllowed &&
       !readOnly &&
@@ -1839,16 +1860,42 @@ export function ChatPanel({
       });
       return;
     }
-    if (
-      isCodexSubmit &&
-      isCodexPaymentSourceNeedsUserConfiguration(codexPaymentSource)
-    ) {
-      refreshCodexPaymentSource?.();
-      setCodexPaymentConfigOpen(true);
-      return;
-    }
     if (isCodexSubmit) {
+      const verifySubscription = opts?.immediate !== true;
+      const paymentPreference = ((reply_thread_id
+        ? existingThreadMetadata?.acp_config?.paymentSource
+        : newThreadSetup.codexConfig.paymentSource) ??
+        codexPaymentPreference) as CodexPaymentSourcePreference;
+      if (verifySubscription && !codexConnectionCheckPendingRef.current) {
+        codexConnectionCheckPendingRef.current = true;
+        void codexConnectionNeedsAttentionAfterSubmit({
+          fetchPaymentSource: () =>
+            fetchCodexPaymentSourceForSubmit({
+              projectId: project_id,
+              preference: paymentPreference,
+            }),
+          fetchUsageStatus: () =>
+            getLiveCodexUsageStatus({ projectId: project_id }),
+        })
+          .then((needsAttention) => {
+            if (!needsAttention) return;
+            refreshCodexPaymentSource?.();
+            setCodexPaymentConfigOpen(true);
+          })
+          .catch(() => {
+            refreshCodexPaymentSource?.();
+            setCodexPaymentConfigOpen(true);
+          })
+          .finally(() => {
+            codexConnectionCheckPendingRef.current = false;
+          });
+      }
       try {
+        if (isCodexPaymentSourceNeedsUserConfiguration(codexPaymentSource)) {
+          refreshCodexPaymentSource?.();
+          setCodexPaymentConfigOpen(true);
+          return;
+        }
         await ensureProjectRunningForCodex({ project_id, redux });
       } catch (err) {
         const block = getProjectStartPolicyBlockFromError(err);
@@ -2519,6 +2566,7 @@ export function ChatPanel({
         path={path}
         messages={messages as ChatMessages}
         threadIndex={indexedThreads ?? threadIndex}
+        docVersion={docVersion}
         acpState={acpState}
         scrollToBottomRef={scrollToBottomRef}
         scrollCacheId={scrollCacheId}

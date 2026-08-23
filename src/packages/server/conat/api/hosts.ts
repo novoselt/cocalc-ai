@@ -150,6 +150,7 @@ import {
 import {
   getExternalCredentialRouted,
   hasExternalCredentialRouted,
+  refreshCodexSubscriptionAuthRouted,
   touchExternalCredentialRouted,
   upsertExternalCredentialRouted,
 } from "@cocalc/server/external-credentials/routing";
@@ -2814,6 +2815,40 @@ export async function getExternalCredential({
   };
 }
 
+export async function refreshCodexSubscriptionAuth({
+  host_id,
+  project_id,
+  owner_account_id,
+  previous_access_token_hash,
+}: {
+  host_id?: string;
+  project_id: string;
+  owner_account_id: string;
+  previous_access_token_hash: string;
+}): Promise<{
+  payload: string;
+  updated: Date;
+  refreshed: boolean;
+}> {
+  if (!host_id) throw new Error("host_id must be specified");
+  if (!project_id) throw new Error("project_id must be specified");
+  if (!owner_account_id) {
+    throw new Error("owner_account_id must be specified");
+  }
+  if (!/^[a-f0-9]{64}$/i.test(previous_access_token_hash)) {
+    throw new Error("previous_access_token_hash must be a SHA-256 hash");
+  }
+  await assertHostCredentialProjectAccess({
+    host_id,
+    project_id,
+    owner_account_id,
+  });
+  return await refreshCodexSubscriptionAuthRouted({
+    owner_account_id,
+    previous_access_token_hash,
+  });
+}
+
 export async function hasExternalCredential({
   host_id,
   project_id,
@@ -4415,6 +4450,7 @@ export async function listHostProjects({
   limit,
   cursor,
   risk_only,
+  free_only,
   state_filter,
   project_state,
 }: {
@@ -4423,6 +4459,7 @@ export async function listHostProjects({
   limit?: number;
   cursor?: string;
   risk_only?: boolean;
+  free_only?: boolean;
   state_filter?: HostProjectStateFilter;
   project_state?: string;
 }): Promise<HostProjectsResponse> {
@@ -4436,6 +4473,7 @@ export async function listHostProjects({
         limit,
         cursor,
         risk_only,
+        free_only,
         state_filter,
         project_state,
       });
@@ -4445,6 +4483,7 @@ export async function listHostProjects({
   const snapshot = await listHostProjectsLocalSnapshot({
     id,
     risk_only,
+    free_only,
     state_filter,
     project_state,
   });
@@ -4487,11 +4526,13 @@ export async function listHostProjects({
 export async function listHostProjectsLocalSnapshot({
   id,
   risk_only,
+  free_only,
   state_filter,
   project_state,
 }: {
   id: string;
   risk_only?: boolean;
+  free_only?: boolean;
   state_filter?: HostProjectStateFilter;
   project_state?: string;
 }): Promise<HostProjectsResponse> {
@@ -4503,6 +4544,15 @@ export async function listHostProjectsLocalSnapshot({
 
   if (risk_only) {
     filters.push(`(${needsBackupSql})`);
+  }
+  if (free_only) {
+    filters.push(
+      `(CASE
+        WHEN jsonb_typeof(run_quota->'shared_compute_priority') = 'number'
+          THEN (run_quota->>'shared_compute_priority')::numeric
+        ELSE 0
+      END = 0)`,
+    );
   }
 
   const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
@@ -4640,12 +4690,14 @@ async function selectHostProjectActionRows({
   account_id,
   id,
   risk_only,
+  free_only,
   state_filter,
   project_state,
 }: {
   account_id?: string;
   id: string;
   risk_only?: boolean;
+  free_only?: boolean;
   state_filter?: HostProjectStateFilter;
   project_state?: string;
 }): Promise<{
@@ -4673,6 +4725,7 @@ async function selectHostProjectActionRows({
           limit: HOST_PROJECTS_MAX_LIMIT,
           cursor,
           risk_only,
+          free_only,
           state_filter,
           project_state,
         });
@@ -4693,6 +4746,7 @@ async function selectHostProjectActionRows({
   const snapshot = await listHostProjectsLocalSnapshot({
     id,
     risk_only,
+    free_only,
     state_filter,
     project_state,
   });
@@ -4823,6 +4877,7 @@ async function queueHostProjectsAction({
   state_filter,
   project_state,
   risk_only,
+  free_only,
   parallel,
 }: {
   kind: "host-stop-projects" | "host-restart-projects";
@@ -4831,6 +4886,7 @@ async function queueHostProjectsAction({
   state_filter?: HostProjectStateFilter;
   project_state?: string;
   risk_only?: boolean;
+  free_only?: boolean;
   parallel?: number;
 }): Promise<HostLroResponse> {
   const effectiveStateFilter =
@@ -4861,6 +4917,7 @@ async function queueHostProjectsAction({
     state_filter: effectiveStateFilter,
     project_state,
     risk_only,
+    free_only,
   });
   return await createHostLro({
     kind,
@@ -4872,10 +4929,11 @@ async function queueHostProjectsAction({
       state_filter: normalizedStateFilter,
       project_state: normalizedProjectState || undefined,
       risk_only: !!risk_only,
+      free_only: !!free_only,
       parallel,
       projects: rows,
     },
-    dedupe_key: `${kind}:${host.id}:${normalizedStateFilter}:${`${project_state ?? ""}`.trim()}:${!!risk_only}`,
+    dedupe_key: `${kind}:${host.id}:${normalizedStateFilter}:${`${project_state ?? ""}`.trim()}:${!!risk_only}:${!!free_only}`,
   });
 }
 
@@ -4936,6 +4994,7 @@ export async function stopHostProjects({
   state_filter,
   project_state,
   risk_only,
+  free_only,
   parallel,
 }: {
   account_id?: string;
@@ -4945,6 +5004,7 @@ export async function stopHostProjects({
   state_filter?: HostProjectStateFilter;
   project_state?: string;
   risk_only?: boolean;
+  free_only?: boolean;
   parallel?: number;
 }): Promise<HostLroResponse> {
   await maybeRequireFreshAuthForInteractiveHostAction({
@@ -4960,6 +5020,7 @@ export async function stopHostProjects({
     state_filter,
     project_state,
     risk_only,
+    free_only,
     parallel,
   });
 }

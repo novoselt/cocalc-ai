@@ -18,6 +18,13 @@ Table({
       "site_license_id",
       "updated_at",
     ],
+    pg_custom_indexes: [
+      {
+        name: "public_project_paths_active_project_idx",
+        query:
+          "(project_id) WHERE disabled IS FALSE AND visibility <> 'disabled'",
+      },
+    ],
     user_query: {
       get: {
         admin: true,

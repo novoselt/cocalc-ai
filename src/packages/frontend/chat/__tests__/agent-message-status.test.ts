@@ -343,4 +343,25 @@ describe("AttachedSteerStatusList", () => {
     expect(screen.getByText("code")).toBeTruthy();
     expect(card).toContainElement(screen.getByText("Guidance sent"));
   });
+
+  it("constrains pasted images to the guidance card", () => {
+    render(
+      React.createElement(AttachedSteerStatusList, {
+        attachedSteers: [
+          {
+            messageId: "m1",
+            date: 1000,
+            state: "sent",
+            text: '<img src="/blobs/test.png" width="1200px" height="700px" />',
+          },
+        ],
+      }),
+    );
+
+    const card = screen.getByRole("region", { name: "Guidance sent" });
+    expect(card).toHaveClass("cocalc-steer-guidance-card");
+    expect(
+      card.querySelector(".cocalc-steer-guidance-content img"),
+    ).not.toBeNull();
+  });
 });

@@ -42,7 +42,11 @@ import { CocalcErrorBoundary } from "./error-boundary";
 import { FullscreenButton } from "./fullscreen-button";
 import { AppLogo } from "./logo";
 import { NavTab } from "./nav-tab";
-import { HIDE_LABEL_THRESHOLD, NAV_CLASS } from "./top-nav-consts";
+import {
+  HIDE_LABEL_THRESHOLD,
+  NAV_CLASS,
+  shouldHideProjectsLabel,
+} from "./top-nav-consts";
 import VersionWarning from "./version-warning";
 import { lite } from "@cocalc/frontend/lite";
 import { ImpersonationBanner } from "./impersonation-banner";
@@ -50,6 +54,10 @@ import { useVisibleViewportBottom } from "./visible-viewport";
 import { ScratchpadSessionControls } from "./scratchpad-session-controls";
 import { recordSignedInAppBootstrapReady } from "./bootstrap-ux-latency";
 import { configureUxLatency } from "@cocalc/frontend/monitoring/ux-latency";
+import {
+  getStoredProjectsNavMode,
+  type ProjectsNavMode,
+} from "@cocalc/frontend/projects/projects-nav-mode";
 import { lazyWithRetry } from "./lazy-with-retry";
 import usePostSurfaceWork from "./use-post-surface-work";
 import useSignedInSurfaceReady from "./use-signed-in-surface-ready";
@@ -183,6 +191,9 @@ export const Page: React.FC = () => {
   const intl = useIntl();
 
   const open_projects = useTypedRedux("projects", "open_projects");
+  const [projectsNavMode, setProjectsNavMode] = useState<ProjectsNavMode>(
+    getStoredProjectsNavMode,
+  );
   const [show_label, set_show_label] = useState<boolean>(true);
   useEffect(() => {
     const next = open_projects.size <= HIDE_LABEL_THRESHOLD;
@@ -445,7 +456,11 @@ export const Page: React.FC = () => {
         })}
         icon="edit"
         label={intl.formatMessage(labels.projects)}
-        hide_label={isNarrow}
+        hide_label={shouldHideProjectsLabel(
+          open_projects.size,
+          isNarrow,
+          projectsNavMode === "tabs",
+        )}
         ariaLabel={intl.formatMessage(labels.projects)}
       />
     );
@@ -509,6 +524,7 @@ export const Page: React.FC = () => {
               <PostSurfaceSlot scope="app.post-surface-project-navigation">
                 <PostSurfaceProjectsNav
                   height={pageStyle.height}
+                  onModeChange={setProjectsNavMode}
                   style={projectsNavStyle}
                 />
               </PostSurfaceSlot>
@@ -529,6 +545,7 @@ export const Page: React.FC = () => {
             <PostSurfaceSlot scope="app.post-surface-project-navigation-narrow">
               <PostSurfaceProjectsNav
                 height={pageStyle.height}
+                onModeChange={setProjectsNavMode}
                 style={projectsNavStyle}
               />
             </PostSurfaceSlot>

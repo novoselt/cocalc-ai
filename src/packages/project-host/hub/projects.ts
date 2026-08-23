@@ -154,6 +154,10 @@ import {
 } from "../project-start-quota";
 import { normalizeRunQuota, runnerConfigFromQuota } from "../run-quota";
 import { browserIdleTimeoutSeconds } from "../browser-runtime";
+import {
+  prepareProjectNetworkPolicy,
+  projectNetworkPolicyFromRunQuota,
+} from "../network-policy";
 import { withBtrfsMutationContext } from "@cocalc/file-server/btrfs/operation-cache";
 import {
   acceptProjectVolumeQuotaDesired,
@@ -1851,6 +1855,10 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         run_quota_revision: (opts as any)?.run_quota_revision,
         image: opts?.image,
       });
+      await prepareProjectNetworkPolicy({
+        project_id,
+        policy: projectNetworkPolicyFromRunQuota(resolved.run_quota),
+      });
       upsertProjectStopState({
         project_id,
         last_started_ms: Date.now(),
@@ -2035,12 +2043,6 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           );
         }
       }
-      await timings.measure("managed_network_admission", async () => {
-        await assertManagedRawNetworkStartAllowedBestEffort({
-          project_id,
-          managed_egress_override,
-        });
-      });
       resolved = await timings.measure("resolve_start_metadata", async () =>
         resolveStartMetadata({
           project_id,
@@ -2053,6 +2055,16 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         }),
       );
       const startMetadata = resolved;
+      const networkPolicy = projectNetworkPolicyFromRunQuota(
+        startMetadata.run_quota,
+      );
+      await timings.measure("managed_network_admission", async () => {
+        await assertManagedRawNetworkStartAllowedBestEffort({
+          project_id,
+          managed_egress_override,
+          raw_network_enabled: networkPolicy === "normal",
+        });
+      });
       if (autostart && startMetadata.autostart_enabled === false) {
         throw new Error(
           "Automatic starts are disabled for this project. Use the project Start button, then try again.",
@@ -2071,6 +2083,12 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           "This free project stopped after its CoCalc browser tabs closed. Open the project in CoCalc before using automatic services again.",
         );
       }
+      await timings.measure("prepare_network_policy", async () => {
+        await prepareProjectNetworkPolicy({
+          project_id,
+          policy: networkPolicy,
+        });
+      });
       const normalizedImage = getImage({ image: startMetadata.image });
       const preparedOciEstimate = isManagedRootfsImageName(normalizedImage)
         ? undefined
@@ -2954,6 +2972,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         checkedAt,
         paymentSource,
         project_id,
+        authentication: status.authentication,
         account: status.account,
         rateLimits: status.rateLimits,
         tokenUsage: status.tokenUsage,

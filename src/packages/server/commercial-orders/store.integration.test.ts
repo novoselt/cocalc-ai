@@ -1,0 +1,958 @@
+/*
+ *  This file is part of CoCalc: Copyright (c) 2026 Sagemath, Inc.
+ *  License: MS-RSL - see LICENSE.md for details
+ */
+
+import { randomUUID } from "node:crypto";
+
+import type * as Store from "./store";
+import type { CommercialOrderCreateRequest } from "@cocalc/conat/hub/api/commercial-orders";
+
+const describePglite =
+  process.env.COCALC_TEST_USE_PGLITE === "1" ? describe : describe.skip;
+
+const actor = randomUUID();
+
+function request(
+  overrides: Partial<CommercialOrderCreateRequest> = {},
+): CommercialOrderCreateRequest {
+  return {
+    account_id: actor,
+    reason: "accepted institutional pilot",
+    source: "cli" as const,
+    idempotency_key: `test-create-${randomUUID()}`,
+    organization_name: "Integration Test University",
+    collection_mode: "manual_invoice" as const,
+    agreed_subtotal: "3900",
+    agreed_total: "3900",
+    next_action: "Approve agreement",
+    next_action_due_at: new Date(Date.now() + 86_400_000).toISOString(),
+    items: [
+      {
+        description: "Campus-wide adoption pilot",
+        quantity: "1",
+        unit_amount: "3900",
+        subtotal: "3900",
+        product_kind: "site_license",
+      },
+    ],
+    contacts: [
+      {
+        role: "billing" as const,
+        name_snapshot: "Accounts Payable",
+        email_snapshot: "ap@example.edu",
+      },
+    ],
+    ...overrides,
+  };
+}
+
+describePglite("commercial order store", () => {
+  const originalEnv = {
+    COCALC_BAY_ID: process.env.COCALC_BAY_ID,
+    COCALC_DB: process.env.COCALC_DB,
+    COCALC_PGLITE_DATA_DIR: process.env.COCALC_PGLITE_DATA_DIR,
+  };
+  let store: typeof Store;
+  let pool: Awaited<
+    ReturnType<(typeof import("@cocalc/database/pool"))["default"]>
+  >;
+
+  beforeAll(async () => {
+    process.env.COCALC_BAY_ID = "commercial-orders-test-bay";
+    process.env.COCALC_DB = "pglite";
+    process.env.COCALC_PGLITE_DATA_DIR = "memory://";
+    const getPool = (await import("@cocalc/database/pool")).default;
+    pool = getPool();
+    store = await import("./store");
+    const { SCHEMA } = await import("@cocalc/util/db-schema");
+    const { syncSchema } =
+      await import("@cocalc/database/postgres/schema/sync");
+    const commercialOrderSchema = Object.fromEntries(
+      Object.entries(SCHEMA).filter(([name]) => name.startsWith("commercial_")),
+    );
+    await syncSchema(commercialOrderSchema);
+    await getPool().query("DELETE FROM commercial_provider_operations");
+    await getPool().query("DELETE FROM commercial_stripe_events");
+    await getPool().query("DELETE FROM commercial_order_events");
+    await getPool().query("DELETE FROM commercial_payments");
+    await getPool().query("DELETE FROM commercial_invoices");
+    await getPool().query("DELETE FROM commercial_order_contacts");
+    await getPool().query("DELETE FROM commercial_order_items");
+    await getPool().query("DELETE FROM commercial_orders");
+  });
+
+  afterAll(async () => {
+    const { closePglite } = await import("@cocalc/database/pglite");
+    await closePglite();
+    for (const [name, value] of Object.entries(originalEnv)) {
+      if (value == null) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
+  it("creates an idempotent seed-global order and immutable event", async () => {
+    const opts = request();
+    const first = await store.createCommercialOrder(opts);
+    const replay = await store.createCommercialOrder(opts);
+    expect(replay.id).toBe(first.id);
+    expect(first.order_number).toMatch(/^AR-\d{4}-[A-F0-9]{8}$/);
+    expect(first.items).toHaveLength(1);
+    const events = await store.listCommercialOrderEvents({
+      id: first.id,
+      reason: "verify audit timeline",
+    });
+    expect(events.events.map(({ event_type }) => event_type)).toEqual([
+      "order-created",
+    ]);
+    expect(events.truncated).toBe(false);
+    expect(events.result_bytes).toBeGreaterThan(2);
+  });
+
+  it("binds event idempotency keys to action, order, and payload", async () => {
+    const createKey = `bound-create-${randomUUID()}`;
+    const original = request({ idempotency_key: createKey });
+    const created = await store.createCommercialOrder(original);
+    await expect(
+      store.createCommercialOrder({
+        ...original,
+        organization_name: "Different University",
+      }),
+    ).rejects.toThrow("different action, order, or payload");
+
+    const noteKey = `bound-note-${randomUUID()}`;
+    const noted = await store.addCommercialOrderNote({
+      account_id: actor,
+      id: created.id,
+      expected_version: created.version,
+      reason: "record customer context",
+      idempotency_key: noteKey,
+      note: "Original note",
+    });
+    await expect(
+      store.addCommercialOrderNote({
+        account_id: actor,
+        id: created.id,
+        expected_version: noted.version,
+        reason: "record customer context",
+        idempotency_key: noteKey,
+        note: "Changed note",
+      }),
+    ).rejects.toThrow("different action, order, or payload");
+    await expect(
+      store.assignCommercialOrder({
+        account_id: actor,
+        id: created.id,
+        expected_version: noted.version,
+        reason: "attempt cross-action replay",
+        idempotency_key: noteKey,
+        next_action: "Contact customer",
+      }),
+    ).rejects.toThrow("different action, order, or payload");
+
+    const other = await store.createCommercialOrder(request());
+    await expect(
+      store.addCommercialOrderNote({
+        account_id: actor,
+        id: other.id,
+        expected_version: other.version,
+        reason: "record customer context",
+        idempotency_key: noteKey,
+        note: "Original note",
+      }),
+    ).rejects.toThrow("different action, order, or payload");
+  });
+
+  it("enforces optimistic versions and keeps fulfillment independent", async () => {
+    const created = await store.createCommercialOrder(request());
+    await expect(
+      store.updateCommercialOrder({
+        account_id: actor,
+        id: created.id,
+        expected_version: created.version + 1,
+        reason: "stale browser update",
+        changes: { next_action: "Contact customer" },
+      }),
+    ).rejects.toThrow("current version");
+    const approved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: created.id,
+      expected_version: created.version,
+      reason: "terms reviewed",
+    });
+    const paid = await store.recordManualCommercialPayment({
+      account_id: actor,
+      id: approved.id,
+      expected_version: approved.version,
+      reason: "wire confirmed by bank",
+      amount: "3900",
+      currency: "usd",
+      method: "wire",
+      evidence_reference: "bank-reference-test-1",
+    });
+    expect(paid.collection_state).toBe("paid");
+    expect(paid.fulfillment_state).toBe("not_provisioned");
+    expect(paid.workflow_state).toBe("awaiting_payment");
+    expect(paid.payments).toHaveLength(1);
+  });
+
+  it("supports bounded queue filtering", async () => {
+    const result = await store.listCommercialOrders({
+      reason: "review open receivables",
+      needs_action: true,
+      organization: "Integration Test",
+      limit: 2,
+      max_bytes: 100_000,
+    });
+    expect(result.orders.length).toBeGreaterThan(0);
+    expect(
+      result.orders.every(({ organization_name }) =>
+        organization_name.includes("Integration Test"),
+      ),
+    ).toBe(true);
+    expect(result.result_bytes).toBeLessThanOrEqual(100_000);
+  });
+
+  it("filters stale follow-up work by next-action due date in SQL", async () => {
+    const organization = `Due Filter University ${randomUUID()}`;
+    await store.createCommercialOrder(
+      request({ organization_name: organization }),
+    );
+    const future = await store.listCommercialOrders({
+      reason: "review stale next actions",
+      organization,
+      next_action_due_before: new Date(
+        Date.now() + 2 * 86_400_000,
+      ).toISOString(),
+    });
+    const past = await store.listCommercialOrders({
+      reason: "review stale next actions",
+      organization,
+      next_action_due_before: new Date(
+        Date.now() - 2 * 86_400_000,
+      ).toISOString(),
+    });
+    expect(future.orders).toHaveLength(1);
+    expect(past.orders).toHaveLength(0);
+  });
+
+  it("freezes approved terms and atomically resets approval on revision", async () => {
+    const created = await store.createCommercialOrder(request());
+    const approved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: created.id,
+      expected_version: created.version,
+      reason: "approve reviewed terms",
+    });
+    await expect(
+      store.updateCommercialOrder({
+        account_id: actor,
+        id: approved.id,
+        expected_version: approved.version,
+        reason: "attempt silent price change",
+        changes: { agreed_total: "4100" },
+      }),
+    ).rejects.toThrow("approved terms are frozen");
+
+    const revised = await store.reviseCommercialOrder({
+      account_id: actor,
+      id: approved.id,
+      expected_version: approved.version,
+      reason: "customer accepted revised price",
+      changes: {
+        agreed_subtotal: "4100",
+        agreed_total: "4100",
+      },
+      items: [
+        {
+          description: "Revised campus-wide adoption pilot",
+          quantity: "1",
+          unit_amount: "4100",
+          subtotal: "4100",
+          product_kind: "site_license",
+        },
+      ],
+    });
+    expect(revised.workflow_state).toBe("draft");
+    expect(revised.collection_state).toBe("not_invoiced");
+    expect(revised.approved_at).toBeNull();
+    expect(revised.approved_by_account_id).toBeNull();
+    expect(revised.agreed_total).toBe("4100.0000000000");
+    expect(revised.next_action).toBe("Review agreement");
+  });
+
+  it("enforces terminal and fulfillment transition invariants", async () => {
+    const unapproved = await store.createCommercialOrder(request());
+    await expect(
+      store.setCommercialFulfillment({
+        account_id: actor,
+        id: unapproved.id,
+        expected_version: unapproved.version,
+        reason: "attempt premature provisioning",
+        fulfillment_state: "provisioned",
+      }),
+    ).rejects.toThrow("must be approved before fulfillment");
+
+    const approved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: unapproved.id,
+      expected_version: unapproved.version,
+      reason: "approve reviewed terms",
+    });
+    await expect(
+      store.setCommercialFulfillment({
+        account_id: actor,
+        id: approved.id,
+        expected_version: approved.version,
+        reason: "attempt invalid service ending",
+        fulfillment_state: "ended",
+      }),
+    ).rejects.toThrow("cannot end before");
+
+    const cancelled = await store.cancelCommercialOrder({
+      account_id: actor,
+      id: approved.id,
+      expected_version: approved.version,
+      reason: "customer withdrew agreement",
+    });
+    await expect(
+      store.recordManualCommercialPayment({
+        account_id: actor,
+        id: cancelled.id,
+        expected_version: cancelled.version,
+        reason: "attempt cancelled payment",
+        amount: "3900",
+        currency: "usd",
+        method: "wire",
+        evidence_reference: "cancelled-order-wire",
+      }),
+    ).rejects.toThrow("not allowed on a cancelled order");
+    await expect(
+      store.setCommercialFulfillment({
+        account_id: actor,
+        id: cancelled.id,
+        expected_version: cancelled.version,
+        reason: "attempt cancelled provisioning",
+        fulfillment_state: "provisioned",
+      }),
+    ).rejects.toThrow("cancelled order");
+    await expect(
+      store.updateCommercialOrder({
+        account_id: actor,
+        id: cancelled.id,
+        expected_version: cancelled.version,
+        reason: "attempt cancelled reopening",
+        changes: { workflow_state: "draft" },
+      }),
+    ).rejects.toThrow("not allowed on a cancelled order");
+
+    const completionDraft = await store.createCommercialOrder(request());
+    const completionApproved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: completionDraft.id,
+      expected_version: completionDraft.version,
+      reason: "approve completion fixture",
+    });
+    const provisioned = await store.setCommercialFulfillment({
+      account_id: actor,
+      id: completionApproved.id,
+      expected_version: completionApproved.version,
+      reason: "provision completion fixture",
+      fulfillment_state: "provisioned",
+    });
+    await expect(
+      store.cancelCommercialOrder({
+        account_id: actor,
+        id: provisioned.id,
+        expected_version: provisioned.version,
+        reason: "attempt cancellation with active service",
+      }),
+    ).rejects.toThrow("end active fulfillment");
+    const complete = await store.recordManualCommercialPayment({
+      account_id: actor,
+      id: provisioned.id,
+      expected_version: provisioned.version,
+      reason: "settle completion fixture",
+      amount: "3900",
+      currency: "usd",
+      method: "wire",
+      evidence_reference: "completion-wire",
+    });
+    expect(complete.workflow_state).toBe("complete");
+    await expect(
+      store.updateCommercialOrder({
+        account_id: actor,
+        id: complete.id,
+        expected_version: complete.version,
+        reason: "attempt complete reopening",
+        changes: { workflow_state: "draft" },
+      }),
+    ).rejects.toThrow("not allowed on a complete order");
+  });
+
+  it("records a due manual invoice before collecting payment", async () => {
+    const created = await store.createCommercialOrder(request());
+    const approved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: created.id,
+      expected_version: created.version,
+      reason: "approve manual invoice terms",
+    });
+    const issueRequest = {
+      account_id: actor,
+      id: approved.id,
+      expected_version: approved.version,
+      reason: "manual invoice sent by finance",
+      idempotency_key: `manual-invoice-${randomUUID()}`,
+      invoice_reference: "FIN-2026-0042",
+      issued_at: "2026-08-01T00:00:00.000Z",
+      due_at: "2026-08-22T00:00:00.000Z",
+      document_url: "https://billing.example.edu/invoices/42",
+      evidence_reference: "finance-ledger-42",
+    };
+    const issued = await store.issueManualCommercialInvoice(issueRequest);
+    const replay = await store.issueManualCommercialInvoice(issueRequest);
+    expect(replay.id).toBe(issued.id);
+    expect(issued.collection_state).toBe("overdue");
+    expect(issued.workflow_state).toBe("awaiting_payment");
+    expect(issued.invoices).toHaveLength(1);
+    expect(issued.invoices[0]).toMatchObject({
+      provider: "manual",
+      status: "open",
+      total: "3900.0000000000",
+      amount_due: "3900.0000000000",
+      sent_at: "2026-08-01T00:00:00.000Z",
+    });
+  });
+
+  it("voids and reissues a manual invoice idempotently", async () => {
+    const created = await store.createCommercialOrder(request());
+    const approved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: created.id,
+      expected_version: created.version,
+      reason: "approve manual correction fixture",
+    });
+    const issued = await store.issueManualCommercialInvoice({
+      account_id: actor,
+      id: approved.id,
+      expected_version: approved.version,
+      reason: "issue original manual invoice",
+      idempotency_key: `manual-original-${randomUUID()}`,
+      invoice_reference: "FIN-ORIGINAL",
+    });
+    const voidRequest = {
+      account_id: actor,
+      id: issued.id,
+      commercial_invoice_id: issued.invoices[0].id,
+      expected_version: issued.version,
+      reason: "correct recipient on manual invoice",
+      idempotency_key: `manual-void-${randomUUID()}`,
+    };
+    const voided = await store.voidManualCommercialInvoice(voidRequest);
+    const replay = await store.voidManualCommercialInvoice(voidRequest);
+    expect(replay.version).toBe(voided.version);
+    expect(voided.collection_state).toBe("void");
+    expect(voided.workflow_state).toBe("ready_to_invoice");
+    expect(voided.invoices[0]).toMatchObject({
+      provider: "manual",
+      status: "void",
+      amount_due: "0.0000000000",
+    });
+
+    const reissued = await store.issueManualCommercialInvoice({
+      account_id: actor,
+      id: voided.id,
+      expected_version: voided.version,
+      reason: "issue corrected manual invoice",
+      idempotency_key: `manual-reissue-${randomUUID()}`,
+      invoice_reference: "FIN-CORRECTED",
+    });
+    expect(reissued.invoices).toHaveLength(2);
+    expect(reissued.invoices.map(({ status }) => status).sort()).toEqual([
+      "open",
+      "void",
+    ]);
+  });
+
+  it("uses collection-mode-specific approval transitions", async () => {
+    const complimentary = await store.createCommercialOrder(
+      request({
+        collection_mode: "complimentary",
+        terms_snapshot: { fulfillment_required: false },
+      }),
+    );
+    const completed = await store.approveCommercialOrder({
+      account_id: actor,
+      id: complimentary.id,
+      expected_version: complimentary.version,
+      reason: "approve no-fulfillment complimentary order",
+    });
+    expect(completed.collection_state).toBe("waived");
+    expect(completed.workflow_state).toBe("complete");
+    expect(completed.next_action).toBe("Complete");
+
+    const provisionedLater = await store.createCommercialOrder(
+      request({
+        collection_mode: "complimentary",
+        terms_snapshot: { fulfillment_required: true },
+      }),
+    );
+    const ready = await store.approveCommercialOrder({
+      account_id: actor,
+      id: provisionedLater.id,
+      expected_version: provisionedLater.version,
+      reason: "approve complimentary fulfillment order",
+    });
+    expect(ready.collection_state).toBe("waived");
+    expect(ready.workflow_state).toBe("ready_to_invoice");
+    expect(ready.next_action).toBe("Provision service");
+  });
+
+  it("requires one deterministic invoice recipient", async () => {
+    const created = await store.createCommercialOrder(
+      request({
+        contacts: [
+          {
+            role: "billing",
+            name_snapshot: "First Billing Contact",
+            email_snapshot: "first@example.edu",
+          },
+          {
+            role: "billing",
+            name_snapshot: "Second Billing Contact",
+            email_snapshot: "second@example.edu",
+          },
+        ],
+      }),
+    );
+    await expect(
+      store.approveCommercialOrder({
+        account_id: actor,
+        id: created.id,
+        expected_version: created.version,
+        reason: "attempt ambiguous invoice recipient",
+      }),
+    ).rejects.toThrow("exactly one billing contact");
+  });
+
+  it("blocks cancellation during provider work and after collection", async () => {
+    const created = await store.createCommercialOrder(request());
+    const approved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: created.id,
+      expected_version: created.version,
+      reason: "approve cancellation safety fixture",
+    });
+    const reservation = await store.reserveCommercialProviderOperation({
+      order_id: approved.id,
+      operation: "provision-site-license",
+      expected_version: approved.version,
+      idempotency_key: `provision-race-${randomUUID()}`,
+    });
+    await expect(
+      store.cancelCommercialOrder({
+        account_id: actor,
+        id: approved.id,
+        expected_version: approved.version,
+        reason: "attempt cancellation during provisioning",
+      }),
+    ).rejects.toThrow("provider operation provision-site-license");
+    await store.setCommercialProviderOperationStatus({
+      id: reservation.operation.id,
+      status: "failed",
+    });
+
+    const paid = await store.recordManualCommercialPayment({
+      account_id: actor,
+      id: approved.id,
+      expected_version: approved.version,
+      reason: "collect cancellation safety fixture",
+      amount: "3900",
+      currency: "usd",
+      method: "wire",
+      evidence_reference: "paid-cancellation-safety",
+    });
+    await expect(
+      store.cancelCommercialOrder({
+        account_id: actor,
+        id: paid.id,
+        expected_version: paid.version,
+        reason: "attempt cancellation after collection",
+      }),
+    ).rejects.toThrow("resolve collected funds");
+  });
+
+  it("deduplicates provider payments only through explicit provider linkage", async () => {
+    const created = await store.createCommercialOrder(
+      request({ collection_mode: "stripe_invoice" }),
+    );
+    const approved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: created.id,
+      expected_version: created.version,
+      reason: "approve Stripe invoice terms",
+    });
+    const intent = await store.createCommercialInvoiceIntent({
+      order_id: approved.id,
+      actor_account_id: actor,
+      expected_version: approved.version,
+      reason: "create invoice for payment test",
+      idempotency_key: `payment-intent-${randomUUID()}`,
+      due_at: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    const open = await store.updateCommercialInvoiceProvider({
+      invoice_id: intent.invoice.id,
+      status: "open",
+      provider_customer_id: "cus_test",
+      provider_invoice_id: "in_test",
+      subtotal: "3900",
+      tax: "0",
+      total: "3900",
+      amount_due: "3900",
+      amount_paid: "0",
+      due_at: intent.invoice.due_at,
+      provider_snapshot: {},
+      collection_state: "open",
+      event_type: "invoice-opened-test",
+      event_source: "reconciler",
+      event_reason: "test provider invoice opened",
+      event_idempotency_key: `provider-open-${randomUUID()}`,
+    });
+    const manual = await store.recordManualCommercialPayment({
+      account_id: actor,
+      id: open.id,
+      expected_version: open.version,
+      reason: "record linked out of band payment",
+      amount: "1000",
+      currency: "usd",
+      method: "wire",
+      evidence_reference: "wire-evidence-1000",
+      provider_payment_id: "inpay_linked",
+    });
+    const reconciled = await store.updateCommercialInvoiceProvider({
+      invoice_id: intent.invoice.id,
+      status: "open",
+      provider_customer_id: "cus_test",
+      provider_invoice_id: "in_test",
+      subtotal: "3900",
+      tax: "0",
+      total: "3900",
+      amount_due: "1900",
+      amount_paid: "2000",
+      due_at: intent.invoice.due_at,
+      provider_snapshot: {},
+      provider_payments: [
+        {
+          id: "inpay_linked",
+          amount: "1000",
+          currency: "usd",
+          status: "succeeded",
+          received_at: new Date().toISOString(),
+          method: "other",
+        },
+        {
+          id: "inpay_distinct_same_amount",
+          amount: "1000",
+          currency: "usd",
+          status: "succeeded",
+          received_at: new Date().toISOString(),
+          method: "card",
+        },
+      ],
+      collection_state: "partially_paid",
+      event_type: "invoice-payment-reconciled-test",
+      event_source: "reconciler",
+      event_reason: "test provider payment reconciliation",
+      event_idempotency_key: `provider-payments-${randomUUID()}`,
+    });
+    expect(manual.payments).toHaveLength(1);
+    expect(reconciled.payments).toHaveLength(2);
+    expect(
+      reconciled.payments.find(
+        ({ provider_payment_id }) => provider_payment_id === "inpay_linked",
+      ),
+    ).toMatchObject({
+      provider: "manual",
+      method: "wire",
+      evidence_reference: "wire-evidence-1000",
+    });
+    expect(
+      reconciled.payments.some(
+        ({ provider_payment_id }) =>
+          provider_payment_id === "inpay_distinct_same_amount",
+      ),
+    ).toBe(true);
+  });
+
+  it("reconciles unchanged provider state without invalidating an operator version", async () => {
+    const created = await store.createCommercialOrder(
+      request({ collection_mode: "stripe_invoice" }),
+    );
+    const approved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: created.id,
+      expected_version: created.version,
+      reason: "approve no-op reconciliation fixture",
+    });
+    const intent = await store.createCommercialInvoiceIntent({
+      order_id: approved.id,
+      actor_account_id: actor,
+      expected_version: approved.version,
+      reason: "create no-op reconciliation invoice",
+      idempotency_key: `noop-intent-${randomUUID()}`,
+      due_at: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    const providerSnapshot = {
+      id: "in_noop",
+      status: "open",
+      payments: [
+        {
+          id: "inpay_pending",
+          status: "open",
+          amount_requested: 390000,
+        },
+      ],
+    };
+    const opened = await store.updateCommercialInvoiceProvider({
+      invoice_id: intent.invoice.id,
+      status: "open",
+      provider_customer_id: "cus_noop",
+      provider_invoice_id: "in_noop",
+      subtotal: "3900",
+      tax: "0",
+      total: "3900",
+      amount_due: "3900",
+      amount_paid: "0",
+      due_at: intent.invoice.due_at,
+      sent_at: "2026-08-23T00:00:00.000Z",
+      hosted_invoice_url: "https://invoice.stripe.test/first-token",
+      provider_snapshot: providerSnapshot,
+      collection_state: "open",
+      event_type: "invoice-opened-noop-test",
+      event_source: "reconciler",
+      event_reason: "record initial provider state",
+      event_idempotency_key: `provider-noop-open-${randomUUID()}`,
+    });
+    const eventsBefore = await store.listCommercialOrderEvents({
+      id: opened.id,
+      reason: "count events before no-op reconciliation",
+    });
+
+    const reconciled = await store.updateCommercialInvoiceProvider({
+      invoice_id: intent.invoice.id,
+      status: "open",
+      provider_customer_id: "cus_noop",
+      provider_invoice_id: "in_noop",
+      subtotal: "3900",
+      tax: "0",
+      total: "3900",
+      amount_due: "3900",
+      amount_paid: "0",
+      due_at: intent.invoice.due_at,
+      sent_at: "2026-08-23T00:00:00.000Z",
+      hosted_invoice_url: "https://invoice.stripe.test/rotated-token",
+      provider_snapshot: providerSnapshot,
+      provider_payments: [],
+      collection_state: "open",
+      event_type: "invoice-reconciled-noop-test",
+      event_source: "reconciler",
+      event_reason: "verify unchanged provider state",
+      event_idempotency_key: `provider-noop-reconcile-${randomUUID()}`,
+      skip_if_unchanged: true,
+    });
+    const eventsAfter = await store.listCommercialOrderEvents({
+      id: opened.id,
+      reason: "count events after no-op reconciliation",
+    });
+
+    expect(reconciled.version).toBe(opened.version);
+    expect(eventsAfter.events).toHaveLength(eventsBefore.events.length);
+    expect(reconciled.invoices[0].hosted_invoice_url).toBe(
+      "https://invoice.stripe.test/first-token",
+    );
+    const invoiceRow = (
+      await pool.query(
+        "SELECT reconcile_attempt_count,last_reconciled_at FROM commercial_invoices WHERE id=$1",
+        [intent.invoice.id],
+      )
+    ).rows[0];
+    expect(Number(invoiceRow.reconcile_attempt_count)).toBe(2);
+    expect(invoiceRow.last_reconciled_at).toBeTruthy();
+  });
+
+  it("uses a stable event cursor tuple and enforces the event byte cap", async () => {
+    const created = await store.createCommercialOrder(request());
+    let current = created;
+    for (let index = 0; index < 3; index++) {
+      current = await store.addCommercialOrderNote({
+        account_id: actor,
+        id: current.id,
+        expected_version: current.version,
+        reason: "add pagination fixture note",
+        note: `pagination note ${index}`,
+      });
+    }
+    await pool.query(
+      "UPDATE commercial_order_events SET created_at='2026-08-23T12:00:00Z' WHERE commercial_order_id=$1",
+      [created.id],
+    );
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await store.listCommercialOrderEvents({
+        id: created.id,
+        reason: "verify tuple event pagination",
+        limit: 1,
+        cursor,
+      });
+      seen.push(...page.events.map(({ id }) => id));
+      cursor = page.next_cursor;
+    } while (cursor);
+    expect(seen).toHaveLength(4);
+    expect(new Set(seen).size).toBe(4);
+
+    current = await store.addCommercialOrderNote({
+      account_id: actor,
+      id: current.id,
+      expected_version: current.version,
+      reason: "add oversized audit fixture",
+      note: "x".repeat(15_000),
+    });
+    const capped = await store.listCommercialOrderEvents({
+      id: current.id,
+      reason: "verify audit response cap",
+      max_bytes: 10_000,
+    });
+    expect(capped.truncated).toBe(true);
+    expect(capped.result_bytes).toBeLessThanOrEqual(10_000);
+  });
+
+  it("updates provider status with explicit SQL types and returns actionable diagnostics", async () => {
+    const created = await store.createCommercialOrder(request());
+    const reserved = await store.reserveCommercialProviderOperation({
+      order_id: created.id,
+      operation: "diagnostic-test",
+      expected_version: created.version,
+      idempotency_key: `provider-operation-${randomUUID()}`,
+      request: { fixture: true },
+    });
+    await store.setCommercialProviderOperationStatus({
+      id: reserved.operation.id,
+      status: "remote_started",
+    });
+    await store.setCommercialProviderOperationStatus({
+      id: reserved.operation.id,
+      status: "indeterminate",
+      error: "ambiguous provider response",
+    });
+    await pool.query(
+      `INSERT INTO commercial_stripe_events
+        (event_id,event_type,livemode,commercial_order_id,status,payload,
+         attempt_count,next_attempt_at,last_error,created_at,updated_at)
+       VALUES ($1,'invoice.payment_failed',false,$2,'failed','{}',3,NOW(),
+         'test webhook failure',NOW(),NOW())`,
+      [`evt_${randomUUID()}`, created.id],
+    );
+    await pool.query(
+      `INSERT INTO commercial_invoices
+        (id,commercial_order_id,provider,provider_invoice_id,status,currency,subtotal,tax,total,
+         amount_due,amount_paid,idempotency_key,provider_snapshot,
+         last_reconciled_at,created_at,updated_at)
+       VALUES ($1,$2,'stripe',$3,'open','usd',3900,0,3900,3900,0,$4,
+         $5,NOW()-INTERVAL '1 hour',NOW()-INTERVAL '1 hour',NOW())`,
+      [
+        randomUUID(),
+        created.id,
+        `in_${randomUUID()}`,
+        `diagnostic-invoice-${randomUUID()}`,
+        {
+          status: "paid",
+          currency: "usd",
+          subtotal: 390000,
+          total: 390000,
+          amount_remaining: 0,
+          amount_paid: 390000,
+        },
+      ],
+    );
+    await pool.query(`CREATE TABLE IF NOT EXISTS site_licenses (
+      id uuid PRIMARY KEY, metadata jsonb NOT NULL DEFAULT '{}',
+      expires_at timestamptz, updated timestamptz
+    )`);
+    const diagnostics = await store.getCommercialOrderDiagnostics();
+    expect(diagnostics.review_queues.indeterminate_provider_operations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: reserved.operation.id,
+          commercial_order_id: created.id,
+          operation: "diagnostic-test",
+          status: "indeterminate",
+          attempt_count: 1,
+          last_error: "ambiguous provider response",
+          updated_at: expect.any(String),
+        }),
+      ]),
+    );
+    expect(diagnostics.review_queues.failed_stripe_events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          commercial_order_id: created.id,
+          event_type: "invoice.payment_failed",
+          status: "failed",
+          attempt_count: 3,
+          last_error: "test webhook failure",
+          next_attempt_at: expect.any(String),
+        }),
+      ]),
+    );
+    expect(
+      diagnostics.reconciliation.provider_local_mismatch_count,
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      diagnostics.reconciliation.oldest_reconciliation_lag_seconds,
+    ).toBeGreaterThanOrEqual(3_500);
+  });
+
+  it("audits idempotent manual retry of a failed Stripe event", async () => {
+    const created = await store.createCommercialOrder(request());
+    const eventId = `evt_${randomUUID().replaceAll("-", "")}`;
+    await pool.query(
+      `INSERT INTO commercial_stripe_events
+        (event_id,event_type,livemode,commercial_order_id,status,payload,
+         attempt_count,next_attempt_at,last_error,processed_at,created_at,updated_at)
+       VALUES ($1,'invoice.updated',false,$2,'dead_letter','{}',8,NOW(),
+         'review required',NOW(),NOW(),NOW())`,
+      [eventId, created.id],
+    );
+    const retryRequest = {
+      account_id: actor,
+      event_id: eventId,
+      reason: "operator corrected event identity",
+      source: "cli" as const,
+      idempotency_key: `retry-event-${randomUUID()}`,
+    };
+    const first = await store.retryCommercialStripeEvent(retryRequest);
+    const replay = await store.retryCommercialStripeEvent(retryRequest);
+    expect(replay).toEqual(first);
+    const { rows } = await pool.query(
+      "SELECT status,attempt_count,last_error FROM commercial_stripe_events WHERE event_id=$1",
+      [eventId],
+    );
+    expect(rows[0]).toMatchObject({
+      status: "pending",
+      attempt_count: 0,
+      last_error: null,
+    });
+    const events = await store.listCommercialOrderEvents({
+      id: created.id,
+      reason: "verify Stripe retry audit",
+      limit: 500,
+    });
+    expect(
+      events.events.filter(
+        ({ event_type }) => event_type === "stripe-event-retry-requested",
+      ),
+    ).toHaveLength(1);
+  });
+});

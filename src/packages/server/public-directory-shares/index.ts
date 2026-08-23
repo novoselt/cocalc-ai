@@ -27,6 +27,7 @@ import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
 import { createLro } from "@cocalc/server/lro/lro-db";
 import { publishLroEvent, publishLroSummary } from "@cocalc/server/lro/stream";
+import { getClusterAccountsByIds } from "@cocalc/server/inter-bay/accounts";
 import {
   assignSiteLicensePoolSeat as assignSiteLicensePoolSeatDirect,
   revokeSiteLicensePoolSeat as revokeSiteLicensePoolSeatDirect,
@@ -84,6 +85,8 @@ import type {
   CopyPublicDirectoryShareToProjectResponse,
   DisableMyPublicDirectorySharesByActorOptions,
   DisableMyPublicDirectorySharesByActorResponse,
+  DisablePublicDirectorySharesForBannedActorOptions,
+  DisablePublicDirectorySharesForBannedActorResponse,
   AuthorizePublicDirectoryShareReadOptions,
   AuthorizePublicDirectoryShareReadResponse,
   CreatePublicDirectoryShareOptions,
@@ -105,6 +108,10 @@ const MAX_LEGACY_PUBLIC_SHARE_ROUTE_PATH_LENGTH = 4096;
 const DEFAULT_TEMPORARY_VIEWER_GRANT_DAYS = 7;
 const DISABLED_PREVIOUS_VISIBILITY_METADATA_KEY =
   "public_share_previous_visibility";
+const DISABLED_FOR_BANNED_ACTOR_METADATA_KEY =
+  "public_share_disabled_for_banned_actor";
+const DISABLED_FOR_BANNED_ACTOR_REASON_METADATA_KEY =
+  "public_share_disabled_for_banned_actor_reason";
 const PUBLIC_SHARE_COPY_TARGET_LABEL = "system/public-share-copy-target/v1";
 const PUBLIC_SHARE_COPY_LABEL_PREFIX = "system/public-share-copy/v1/";
 const log = getLogger("server:public-directory-shares");
@@ -126,6 +133,7 @@ type PublicDirectoryShareRow = PublicDirectoryShareSummary & {
   host_status?: HostStatus | "active" | null;
   host_last_seen?: Date | string | null;
   host_metadata?: Record<string, any> | null;
+  project_users?: Record<string, { group?: string } | null> | null;
   total_count?: number | string | null;
 };
 
@@ -155,6 +163,9 @@ type TemporaryViewerGrantRow = {
   read_policy: ProjectViewerReadPolicy;
   status: string;
   expires_at: Date | string;
+  created_by?: string | null;
+  updated_by?: string | null;
+  project_users?: Record<string, { group?: string } | null> | null;
 };
 
 type PublicShareSiteLicenseGrantRow = {
@@ -377,6 +388,40 @@ function metadataWithPreviousVisibility(
     metadata[DISABLED_PREVIOUS_VISIBILITY_METADATA_KEY] = current.visibility;
   }
   return metadata;
+}
+
+function publicationAccountIds(
+  row: Pick<
+    PublicDirectoryShareRow,
+    "created_by" | "updated_by" | "project_users"
+  >,
+): string[] {
+  const accountIds = new Set<string>();
+  for (const accountId of [row.created_by, row.updated_by]) {
+    if (accountId && isValidUUID(accountId)) {
+      accountIds.add(accountId);
+    }
+  }
+  for (const [accountId, user] of Object.entries(row.project_users ?? {})) {
+    if (user?.group === "owner" && isValidUUID(accountId)) {
+      accountIds.add(accountId);
+    }
+  }
+  return [...accountIds];
+}
+
+async function isPublicationBlockedByBannedAccount(
+  row: Pick<
+    PublicDirectoryShareRow,
+    "created_by" | "updated_by" | "project_users"
+  >,
+): Promise<boolean> {
+  const accountIds = publicationAccountIds(row);
+  if (accountIds.length === 0) {
+    return false;
+  }
+  const accounts = await getClusterAccountsByIds(accountIds);
+  return accounts.some((account) => account.banned === true);
 }
 
 function metadataWithoutPreviousVisibility(
@@ -1383,6 +1428,7 @@ async function resolveRow({
         projects.title AS project_title,
         projects.host_id,
         projects.owning_bay_id,
+        projects.users AS project_users,
         project_hosts.bay_id AS host_bay_id,
         project_hosts.name AS host_name,
         project_hosts.public_url AS host_public_url,
@@ -1417,6 +1463,9 @@ async function resolveRow({
   }
   if (!account_id) {
     throw Error("user must be signed in");
+  }
+  if (await isPublicationBlockedByBannedAccount(row)) {
+    throw Error("public directory share not found");
   }
   if (row.visibility === "private") {
     const privateAccess = await getPool().query<{ allowed: boolean }>(
@@ -1614,9 +1663,14 @@ export async function getTemporaryViewerReadPolicy({
   }
   const { rows } = await getPool().query<TemporaryViewerGrantRow>(
     `
-      SELECT g.*
+      SELECT
+        g.*,
+        p.created_by,
+        p.updated_by,
+        projects.users AS project_users
       FROM public_project_path_viewer_grants g
       JOIN public_project_paths p ON p.id=g.public_project_path_id
+      LEFT JOIN projects ON projects.project_id=p.project_id
       WHERE g.project_id=$1
         AND g.account_id=$2
         AND g.status='active'
@@ -1627,7 +1681,13 @@ export async function getTemporaryViewerReadPolicy({
     `,
     [project_id, account_id],
   );
-  const rules = rows.flatMap((row) =>
+  const allowedRows: TemporaryViewerGrantRow[] = [];
+  for (const row of rows) {
+    if (!(await isPublicationBlockedByBannedAccount(row))) {
+      allowedRows.push(row);
+    }
+  }
+  const rules = allowedRows.flatMap((row) =>
     Array.isArray(row.read_policy?.rules) ? row.read_policy.rules : [],
   );
   return {
@@ -1654,12 +1714,13 @@ export async function authorizeRead({
   }
   const { rows } = await getPool().query<PublicDirectoryShareRow>(
     `
-      SELECT *
-      FROM public_project_paths
-      WHERE id=$1
-        AND project_id=$2
-        AND disabled IS FALSE
-        AND visibility <> 'disabled'
+      SELECT pps.*, projects.users AS project_users
+      FROM public_project_paths pps
+      LEFT JOIN projects ON projects.project_id=pps.project_id
+      WHERE pps.id=$1
+        AND pps.project_id=$2
+        AND pps.disabled IS FALSE
+        AND pps.visibility <> 'disabled'
       LIMIT 1
     `,
     [share_id, project_id],
@@ -1670,6 +1731,9 @@ export async function authorizeRead({
   }
   if (row.requires_auth !== true) {
     throw Error("anonymous public directory shares are not supported");
+  }
+  if (await isPublicationBlockedByBannedAccount(row)) {
+    throw Error("public directory share not found");
   }
   if (row.visibility === "private") {
     const privateAccess = await getPool().query<{ allowed: boolean }>(
@@ -1861,6 +1925,91 @@ export async function disableMineByActor({
       disabled: true,
     });
     shareIds.push(id);
+  }
+  return {
+    disabled_count: shareIds.length,
+    share_ids: shareIds,
+  };
+}
+
+async function disableShareForBannedActor({
+  current,
+  actor_account_id,
+  reason,
+}: {
+  current: PublicDirectoryShareRow;
+  actor_account_id: string;
+  reason: string;
+}): Promise<void> {
+  const metadata = metadataWithPreviousVisibility(current);
+  metadata[DISABLED_FOR_BANNED_ACTOR_METADATA_KEY] = actor_account_id;
+  metadata[DISABLED_FOR_BANNED_ACTOR_REASON_METADATA_KEY] = reason;
+  await savePublicDirectoryShare({
+    account_id: actor_account_id,
+    id: current.id,
+    project_id: current.project_id,
+    path: current.path,
+    path_type: current.path_type,
+    slug: current.slug,
+    visibility: "disabled",
+    requires_auth: current.requires_auth,
+    availability_status: current.availability_status,
+    availability_message: current.availability_message ?? null,
+    title: current.title ?? null,
+    description: current.description ?? null,
+    license: current.license ?? null,
+    image: current.image ?? null,
+    redirect: current.redirect ?? null,
+    site_license_id: current.site_license_id ?? null,
+    site_license_pool_id: current.site_license_pool_id ?? null,
+    site_license_membership_tier_id:
+      current.site_license_membership_tier_id ?? null,
+    site_license_duration_days: current.site_license_duration_days ?? null,
+    site_license_grant_on_copy: current.site_license_grant_on_copy,
+    site_license_copy_requires_grant: current.site_license_copy_requires_grant,
+    metadata,
+    legacy_public_path_id: current.legacy_public_path_id ?? null,
+    legacy_url: current.legacy_url ?? null,
+    last_edited: current.last_edited ?? null,
+    disabled: true,
+  });
+}
+
+export async function disableForBannedActor({
+  actor_account_id,
+  reason,
+}: DisablePublicDirectorySharesForBannedActorOptions): Promise<DisablePublicDirectorySharesForBannedActorResponse> {
+  await ensurePublicDirectorySharesSchema();
+  if (!isValidUUID(actor_account_id)) {
+    throw Error("invalid actor_account_id");
+  }
+  const normalizedReason =
+    `${reason ?? "publisher account banned"}`.trim().slice(0, 4000) ||
+    "publisher account banned";
+  const { rows } = await getPool().query<PublicDirectoryShareRow>(
+    `
+      SELECT pps.*, p.users AS project_users
+      FROM public_project_paths pps
+      LEFT JOIN projects p ON p.project_id=pps.project_id
+      WHERE pps.disabled IS FALSE
+        AND pps.visibility <> 'disabled'
+        AND (
+          pps.created_by=$1::uuid
+          OR pps.updated_by=$1::uuid
+          OR COALESCE(p.users -> $1::text ->> 'group', '') = 'owner'
+        )
+      ORDER BY pps.updated_at DESC, pps.created_at DESC
+    `,
+    [actor_account_id],
+  );
+  const shareIds: string[] = [];
+  for (const current of rows) {
+    await disableShareForBannedActor({
+      current,
+      actor_account_id,
+      reason: normalizedReason,
+    });
+    shareIds.push(current.id);
   }
   return {
     disabled_count: shareIds.length,

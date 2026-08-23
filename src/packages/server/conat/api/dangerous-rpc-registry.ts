@@ -139,6 +139,89 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "deletes a Zendesk ticket as spam and suspends its requester",
   },
+  "commercialOrders.addNote": {
+    decision: "fresh-auth-not-required",
+    reason: "adds an admin-only immutable coordination note",
+  },
+  "commercialOrders.approve": {
+    decision: "fresh-auth-required",
+    reason: "approves institutional commercial terms for invoicing",
+  },
+  "commercialOrders.assign": {
+    decision: "fresh-auth-not-required",
+    reason: "changes internal receivables ownership and follow-up",
+  },
+  "commercialOrders.backfill": {
+    decision: "fresh-auth-required",
+    reason:
+      "imports historical institutional receivables into seed-global state",
+  },
+  "commercialOrders.cancel": {
+    decision: "fresh-auth-required",
+    reason: "cancels an approved commercial agreement",
+  },
+  "commercialOrders.create": {
+    decision: "fresh-auth-required",
+    reason: "creates durable institutional commercial terms",
+  },
+  "commercialOrders.createInvoiceDraft": {
+    decision: "fresh-auth-required",
+    reason: "creates a recoverable external Stripe invoice draft",
+  },
+  "commercialOrders.linkExistingInvoice": {
+    decision: "fresh-auth-required",
+    reason:
+      "adopts and reconciles an existing external Stripe invoice into commercial state",
+  },
+  "commercialOrders.issueManualInvoice": {
+    decision: "fresh-auth-required",
+    reason: "records an issued customer-facing manual institutional invoice",
+  },
+  "commercialOrders.diagnostics": {
+    decision: "fresh-auth-not-required",
+    reason: "admin-only aggregate receivables consistency diagnostics",
+  },
+  "commercialOrders.endFulfillment": {
+    decision: "fresh-auth-required",
+    reason: "ends a provisioned institutional commercial service",
+  },
+  "commercialOrders.provision": {
+    decision: "fresh-auth-required",
+    reason: "creates or links an institutional site-license entitlement",
+  },
+  "commercialOrders.reconcileInvoice": {
+    decision: "fresh-auth-required",
+    reason: "reconciles external payment facts into commercial state",
+  },
+  "commercialOrders.reconcilePreview": {
+    decision: "fresh-auth-not-required",
+    reason: "previews local reconciliation state without provider mutation",
+  },
+  "commercialOrders.retryStripeEvent": {
+    decision: "fresh-auth-required",
+    reason: "requeues a failed or dead-lettered Stripe reconciliation event",
+  },
+  "commercialOrders.recordManualPayment": {
+    decision: "fresh-auth-required",
+    reason: "records an externally verified institutional settlement",
+  },
+  "commercialOrders.revise": {
+    decision: "fresh-auth-required",
+    reason:
+      "revises and invalidates approval of institutional commercial terms",
+  },
+  "commercialOrders.sendInvoice": {
+    decision: "fresh-auth-required",
+    reason: "finalizes and sends a customer-facing institutional invoice",
+  },
+  "commercialOrders.update": {
+    decision: "fresh-auth-required",
+    reason: "changes institutional terms, money, contacts, or workflow",
+  },
+  "commercialOrders.voidInvoice": {
+    decision: "fresh-auth-required",
+    reason: "voids an external institutional invoice",
+  },
   "adminData.deleteView": {
     decision: "fresh-auth-required",
     reason: "Admin Data Explorer shared view deletion",
@@ -372,6 +455,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   "system.recordBrowserAutomationAudit": {
     decision: "fresh-auth-not-required",
     reason: TELEMETRY_ONLY,
+  },
+  "system.backfillBayOwnership": {
+    decision: "fresh-auth-required",
+    reason: "rewrites authoritative bay ownership fields across core tables",
   },
   "system.recordLaunchSmokeResult": {
     decision: "fresh-auth-not-required",
@@ -886,6 +973,11 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   "purchases.adminProvisionSiteLicense": {
     decision: "fresh-auth-required",
     reason: "admin site-license entitlement mutation",
+  },
+  "purchases.backfillMembershipAnalyticsPurchases": {
+    decision: "fresh-auth-not-required",
+    reason:
+      "admin-only idempotent reconstruction of derived membership analytics events",
   },
   "purchases.adminCreateMembershipPackagePurchase": {
     decision: "fresh-auth-required",

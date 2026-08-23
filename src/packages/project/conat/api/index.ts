@@ -95,12 +95,14 @@ import * as system from "./system";
 import * as editor from "./editor";
 import * as jupyter from "./jupyter";
 import * as apps from "./apps";
+import * as documentBuild from "./document-build";
 
 export const projectApi: ProjectApi = {
   system,
   editor,
   jupyter,
   apps,
+  documentBuild,
   isReady: async () => true,
   waitUntilReady: async () => {},
 };

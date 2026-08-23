@@ -38,6 +38,7 @@ import {
   normalizeProjectStateForDisplay,
 } from "@cocalc/frontend/projects/host-operational";
 import { useProjectRuntimeCapabilities } from "../runtime-capabilities";
+import { projectArchiveReasonText } from "@cocalc/frontend/projects/archive-lifecycle";
 
 interface ReactProps {
   project: Project;
@@ -161,8 +162,17 @@ export const ProjectControl: React.FC<ReactProps> = (props: ReactProps) => {
     if (lifecycle.kind !== "archived" && lifecycle.kind !== "new") {
       return;
     }
+    const archiveReason = projectArchiveReasonText({
+      reason: project.get("archive_reason"),
+      archivedAt: project.get("archived_at"),
+    });
     return (
       <Paragraph style={{ color: COLORS.GRAY_D, marginBottom: "12px" }}>
+        {lifecycle.kind === "archived" && archiveReason && (
+          <>
+            <strong>{archiveReason}</strong> <br />
+          </>
+        )}
         {lifecycle.kind === "archived"
           ? "Archived projects do not count toward active storage. Starting this project restores it from backup and may take a while if the image must be made available on the host."
           : "This project has not been provisioned yet. Starting it will create the filesystem and make it available on the host."}

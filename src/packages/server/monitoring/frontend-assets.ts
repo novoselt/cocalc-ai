@@ -12,6 +12,8 @@ const logger = getLogger("server:monitoring:frontend-assets");
 const DEFAULT_INTERVAL_MS = 60 * 60_000;
 const DEFAULT_INITIAL_DELAY_MS = 15 * 60_000;
 const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_HISTORY_ATTEMPTS = 3;
+const DEFAULT_HISTORY_RETRY_DELAY_MS = 1_000;
 const MAX_ASSETS = 10_000;
 const CONCURRENCY = 20;
 
@@ -88,26 +90,55 @@ async function fetchWithTimeout({
   }
 }
 
+async function delay(ms: number): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
 export async function probeFrontendAssets({
   origin,
   fetchImpl = globalThis.fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  historyAttempts = DEFAULT_HISTORY_ATTEMPTS,
+  historyRetryDelayMs = DEFAULT_HISTORY_RETRY_DELAY_MS,
 }: {
   origin: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  historyAttempts?: number;
+  historyRetryDelayMs?: number;
 }): Promise<FrontendAssetProbeResult> {
-  const historyUrl = new URL(
-    "static/frontend-build-history.json",
-    `${origin}/`,
-  );
-  historyUrl.searchParams.set("_", `${Date.now()}`);
-  const historyResponse = await fetchWithTimeout({
-    fetchImpl,
-    url: historyUrl.toString(),
-    method: "GET",
-    timeoutMs,
-  });
+  const attempts = Math.max(1, Math.floor(historyAttempts));
+  let historyResponse: Response | undefined;
+  let historyError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const historyUrl = new URL(
+      "static/frontend-build-history.json",
+      `${origin}/`,
+    );
+    historyUrl.searchParams.set("_", `${Date.now()}-${attempt}`);
+    try {
+      historyResponse = await fetchWithTimeout({
+        fetchImpl,
+        url: historyUrl.toString(),
+        method: "GET",
+        timeoutMs,
+      });
+      historyError = undefined;
+      if (historyResponse.ok) break;
+    } catch (err) {
+      historyResponse = undefined;
+      historyError = err;
+    }
+    if (attempt + 1 < attempts) {
+      await delay(historyRetryDelayMs);
+    }
+  }
+  if (historyResponse == null) {
+    throw historyError instanceof Error
+      ? historyError
+      : new Error(`frontend asset history request failed: ${historyError}`);
+  }
   if (!historyResponse.ok) {
     throw new Error(
       `frontend asset history returned HTTP ${historyResponse.status}`,
@@ -150,6 +181,24 @@ export async function probeFrontendAssets({
 
 let maintenanceStarted = false;
 
+export function frontendAssetMonitoringEnabled({
+  configured = process.env.COCALC_FRONTEND_ASSET_MONITORING,
+  nodeEnv = process.env.NODE_ENV,
+}: {
+  configured?: string;
+  nodeEnv?: string;
+} = {}): boolean {
+  const value = `${configured ?? ""}`.trim().toLowerCase();
+  if (value === "true") return true;
+  if (value === "false") return false;
+  // Dev upgrades do not create the retained-release history manifest. Keep
+  // their missing manifest from paging admins. Packaged bay workers currently
+  // leave NODE_ENV unset, so unknown/unset environments retain monitoring.
+  return !["development", "test"].includes(
+    `${nodeEnv ?? ""}`.trim().toLowerCase(),
+  );
+}
+
 export async function runFrontendAssetHealthCheck(): Promise<
   FrontendAssetProbeResult | undefined
 > {
@@ -184,8 +233,11 @@ export function startFrontendAssetHealthMaintenance({
   initialDelayMs?: number;
 } = {}): void {
   if (maintenanceStarted) return;
-  if (`${process.env.COCALC_FRONTEND_ASSET_MONITORING ?? "true"}` === "false") {
-    logger.info("frontend asset health maintenance disabled");
+  if (!frontendAssetMonitoringEnabled()) {
+    logger.info("frontend asset health maintenance disabled", {
+      node_env: process.env.NODE_ENV,
+      configured: process.env.COCALC_FRONTEND_ASSET_MONITORING,
+    });
     return;
   }
   maintenanceStarted = true;

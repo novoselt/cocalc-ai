@@ -190,7 +190,21 @@ export async function enqueueMissingRuntimeRefresh(opts: { limit?: number }) {
       SELECT id, metadata
       FROM project_hosts
       WHERE metadata->'runtime'->>'instance_id' IS NOT NULL
-        AND (metadata->'runtime'->>'public_ip' IS NULL OR metadata->'runtime'->>'public_ip' = '')
+        AND status IN ('starting', 'restarting', 'running')
+        AND COALESCE(metadata->'runtime'->>'provider_status', '') <> 'missing'
+        AND (
+          (
+            COALESCE(metadata->'machine'->>'cloud', '') = 'nebius'
+            AND COALESCE(metadata->'runtime'->>'public_ip', '') = ''
+            AND COALESCE(metadata->'runtime'->>'private_ip', '') = ''
+            AND COALESCE(metadata->'runtime'->>'internal_hostname', '') = ''
+          )
+          OR
+          (
+            COALESCE(metadata->'machine'->>'cloud', '') <> 'nebius'
+            AND COALESCE(metadata->'runtime'->>'public_ip', '') = ''
+          )
+        )
         AND deleted IS NULL
       LIMIT $1
     `,

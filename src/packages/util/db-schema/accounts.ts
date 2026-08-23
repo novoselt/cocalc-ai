@@ -258,6 +258,10 @@ Table({
         editable: true,
       },
     },
+    banned_at: {
+      type: "timestamp",
+      desc: "Authoritative time of the current ban transition; null when the account is not banned.",
+    },
     terminal: {
       type: "map",
       desc: "Settings for the terminal, e.g., font_size, etc. (see get query)",
@@ -567,6 +571,7 @@ Table({
             [USE_BALANCE_TOWARD_SUBSCRIPTIONS]:
               USE_BALANCE_TOWARD_SUBSCRIPTIONS_DEFAULT,
             hide_navbar_balance: false,
+            hide_navbar_membership: false,
             cookie_consent: null,
           },
           display_name: "",
@@ -764,6 +769,7 @@ Table({
         fields: {
           ...schema.accounts.user_query?.get?.fields,
           banned: null,
+          banned_at: null,
           groups: null,
           notes: null,
           salesloft_id: null,

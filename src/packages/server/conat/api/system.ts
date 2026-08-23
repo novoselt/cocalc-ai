@@ -381,6 +381,7 @@ import { getClusterConfig } from "@cocalc/server/cluster-config";
 import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
 import { assertAccountTrustedForProductAccess } from "@cocalc/server/accounts/trusted-product-access";
 import { requireDangerousSessionAuth } from "./dangerous-session-auth";
+import { getProjectArchiveLifecycleOperationalStatus } from "@cocalc/server/projects/archive-lifecycle-maintenance";
 import { getConatAdmissionConfig } from "../admission-settings";
 import {
   recordServiceAdmissionDenialLocal,
@@ -1666,6 +1667,7 @@ export async function getBayLoad({
     accountCollaboratorBacklog,
     accountNotificationBacklog,
     hostCountResult,
+    project_archive_lifecycle,
   ] = await Promise.all([
     getLiveBrowserControlStatus(),
     getParallelOpsStatus0(),
@@ -1685,6 +1687,7 @@ export async function getBayLoad({
           AND COALESCE(bay_id, $1) = $1`,
       [currentBay.bay_id],
     ),
+    getProjectArchiveLifecycleOperationalStatus(),
   ]);
   return {
     ...currentBay,
@@ -1697,6 +1700,7 @@ export async function getBayLoad({
       ),
     },
     parallel_ops: summarizeParallelOpsLoad(parallel_ops_workers),
+    project_archive_lifecycle,
     projections: {
       account_project_index: summarizeProjectionLoad({
         backlog: accountProjectBacklog,
@@ -3682,16 +3686,27 @@ export async function getRoutingContext({
 
 export async function backfillBayOwnership({
   account_id,
+  browser_id,
+  session_hash,
   bay_id,
   dry_run = true,
   limit_per_table,
 }: {
   account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
   bay_id?: string;
   dry_run?: boolean;
   limit_per_table?: number;
 }) {
   await assertAdmin(account_id);
+  await requireDangerousSessionAuth({
+    account_id,
+    browser_id,
+    session_hash,
+    require_second_factor: "if_enabled",
+    allow_actor_impersonation: false,
+  });
   return await backfillBayOwnership0({
     bay_id,
     dry_run,

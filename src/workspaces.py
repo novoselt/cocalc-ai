@@ -175,6 +175,7 @@ def all_packages() -> List[str]:
         'packages/cdn',  # packages/hub assumes this is built
         'packages/docs',  # util depends on this for public docs metadata
         'packages/util',
+        'packages/apps/document-build',  # conat and downstream apps import its dist
         'packages/sync',
         'packages/sync-client',
         'packages/conat',

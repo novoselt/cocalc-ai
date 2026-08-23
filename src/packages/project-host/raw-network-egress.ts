@@ -406,11 +406,14 @@ function buildBlockedMessage(policy: ManagedEgressPolicy): string {
 export async function assertManagedRawNetworkStartAllowedBestEffort({
   project_id,
   managed_egress_override,
+  raw_network_enabled,
 }: {
   project_id: string;
   managed_egress_override?: ManagedProjectEgressOverride;
+  raw_network_enabled?: boolean;
 }): Promise<void> {
   if (managed_egress_override === "admin-host-drain") return;
+  if (raw_network_enabled === false) return;
   if (!isProjectHostManagedEgressEnforced()) return;
   if (!hubApi.system?.getManagedProjectEgressPolicy) return;
   try {

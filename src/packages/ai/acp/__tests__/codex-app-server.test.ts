@@ -3689,6 +3689,83 @@ describe("CodexAppServerAgent", () => {
     expect(turnStartParams?.input?.[0]?.text).toContain(
       "write/append/replace methods save to disk by default",
     );
+    expect(turnStartParams?.input?.[0]?.text).toContain(
+      "browser files --project-id",
+    );
+  });
+
+  it("adds project guidance without browser-only guidance", async () => {
+    let turnStartParams: any;
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, { ok: true });
+          break;
+        case "thread/start":
+          fake.sendResponse(message.id, {
+            thread: { id: "thr-project-guidance-1" },
+          });
+          break;
+        case "turn/start":
+          turnStartParams = message.params;
+          fake.sendResponse(message.id, {
+            turn: { id: "turn-project-guidance-1" },
+          });
+          setImmediate(() => {
+            fake.sendNotification("turn/started", {
+              turn: { id: "turn-project-guidance-1", status: "inProgress" },
+            });
+            fake.sendNotification("turn/completed", {
+              turn: { id: "turn-project-guidance-1", status: "completed" },
+            });
+          });
+          break;
+        default:
+          if (typeof message.id === "number") {
+            fake.sendResponse(message.id, {});
+          }
+      }
+    });
+
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer: async () => ({
+        proc: proc as any,
+        cmd: "fake-codex",
+        args: ["app-server"],
+        cwd: "/tmp/project",
+        runtimeEnv: {
+          COCALC_CLI_CMD:
+            '"/opt/cocalc/bin/node" "/opt/cocalc/bin2/cocalc-cli.js"',
+        },
+      }),
+    });
+
+    const agent = new CodexAppServerAgent();
+    await agent.evaluate({
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      prompt: "build the paper",
+      runtime_env: {
+        COCALC_PROJECT_ID: "00000000-0000-4000-8000-000000000000",
+        COCALC_API_URL: "https://lite3.cocalc.ai",
+      },
+      stream: async () => {},
+      config: {
+        workingDirectory: "/tmp/project",
+      } as any,
+    });
+
+    const text = turnStartParams?.input?.[0]?.text;
+    expect(text).toContain("project build -h");
+    expect(text).toContain("project build <path>");
+    expect(text).toContain("complete editor pipeline");
+    expect(text).not.toContain("COCALC_BROWSER_ID");
+    expect(text).not.toContain("browser files --project-id");
+    expect(text).not.toContain("browser workspace-state");
+    expect(text).toContain("build the paper");
   });
 
   it("passes full-access sandbox policy to turn/start", async () => {
@@ -4752,6 +4829,7 @@ describe("CodexAppServerAgent", () => {
       }),
     );
     expect(status.errors).toBeUndefined();
+    expect(status.authentication).toEqual({ status: "connected" });
     expect(status.account?.account?.email).toBe("user@example.com");
     expect(status.rateLimits?.rateLimits?.primary?.usedPercent).toBe(42);
     expect(status.tokenUsage?.summary?.lifetimeTokens).toBe(12345);
@@ -4840,8 +4918,114 @@ describe("CodexAppServerAgent", () => {
     ]);
   });
 
+  it("reports when stored ChatGPT auth needs a new sign-in", async () => {
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, {});
+          break;
+        case "initialized":
+          break;
+        case "account/login/start":
+          fake.sendResponse(message.id, {});
+          break;
+        case "account/read":
+          fake.sendResponse(message.id, {
+            account: null,
+            requiresOpenaiAuth: true,
+          });
+          break;
+        case "account/rateLimits/read":
+          fake.sendError(
+            message.id,
+            "codex account authentication required to read rate limits",
+          );
+          break;
+        default:
+          throw new Error(`unexpected method ${message.method}`);
+      }
+    });
+    setCodexProjectSpawner({
+      spawnCodexExec: jest.fn() as any,
+      spawnCodexAppServer: async () => ({
+        proc: proc as any,
+        args: ["app-server"],
+        cmd: "codex",
+        appServerLogin: {
+          type: "chatgptAuthTokens" as const,
+          accessToken: "expired-token",
+          chatgptAccountId: "account-1",
+          chatgptPlanType: "pro",
+        },
+      }),
+    });
+
+    const status = await getCodexAppServerAccountStatus({
+      projectId: "project-1",
+      accountId: "account-1",
+    });
+
+    expect(status.authentication).toEqual({
+      status: "needs-sign-in",
+      reason: expect.stringContaining("Sign in again"),
+    });
+  });
+
+  it("keeps a verified account connected when usage is temporarily unavailable", async () => {
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, {});
+          break;
+        case "initialized":
+          break;
+        case "account/login/start":
+          fake.sendResponse(message.id, {});
+          break;
+        case "account/read":
+          fake.sendResponse(message.id, {
+            account: {
+              type: "chatgpt",
+              email: "user@example.com",
+              planType: "pro",
+            },
+            requiresOpenaiAuth: true,
+          });
+          break;
+        case "account/rateLimits/read":
+          fake.sendError(message.id, "rate limit service unavailable");
+          break;
+        default:
+          throw new Error(`unexpected method ${message.method}`);
+      }
+    });
+    setCodexProjectSpawner({
+      spawnCodexExec: jest.fn() as any,
+      spawnCodexAppServer: async () => ({
+        proc: proc as any,
+        args: ["app-server"],
+        cmd: "codex",
+        appServerLogin: {
+          type: "chatgptAuthTokens" as const,
+          accessToken: "token",
+          chatgptAccountId: "account-1",
+          chatgptPlanType: "pro",
+        },
+      }),
+    });
+
+    const status = await getCodexAppServerAccountStatus({
+      projectId: "project-1",
+      accountId: "account-1",
+    });
+
+    expect(status.authentication).toEqual({ status: "connected" });
+    expect(status.errors?.rateLimits).toContain("service unavailable");
+  });
+
   it("waits for account token refresh before reading rate limits", async () => {
     const seen: Array<{ method: string; params: any }> = [];
+    let accountReads = 0;
     let accountRefreshCompleted = false;
     const proc = new FakeCodexAppServerProc((fake, message) => {
       seen.push({ method: message.method, params: message.params });
@@ -4855,6 +5039,19 @@ describe("CodexAppServerAgent", () => {
           fake.sendResponse(message.id, {});
           break;
         case "account/read":
+          accountReads += 1;
+          if (accountReads === 1) {
+            fake.sendResponse(message.id, {
+              account: {
+                type: "chatgpt",
+                email: "user@example.com",
+                planType: "pro",
+              },
+              requiresOpenaiAuth: true,
+            });
+            break;
+          }
+          expect(message.params).toEqual({ refreshToken: true });
           setImmediate(() => {
             accountRefreshCompleted = true;
             fake.sendResponse(message.id, {
@@ -4863,7 +5060,7 @@ describe("CodexAppServerAgent", () => {
                 email: "user@example.com",
                 planType: "pro",
               },
-              requiresOpenaiAuth: false,
+              requiresOpenaiAuth: true,
             });
           });
           break;
@@ -4917,6 +5114,8 @@ describe("CodexAppServerAgent", () => {
       "initialize",
       "initialized",
       "account/login/start",
+      "account/read",
+      "account/rateLimits/read",
       "account/read",
       "account/rateLimits/read",
     ]);
@@ -5000,6 +5199,7 @@ describe("CodexAppServerAgent", () => {
       "account/login/start",
       "account/read",
       "account/rateLimits/read",
+      "account/read",
       "account/rateLimits/read",
     ]);
   });

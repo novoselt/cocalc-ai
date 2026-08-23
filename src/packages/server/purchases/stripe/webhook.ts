@@ -12,6 +12,7 @@ import adminAlert from "@cocalc/server/messages/admin-alert";
 import { createCreditFromPaidStripeInvoice } from "@cocalc/server/purchases/create-invoice";
 import { setUsageSubscription } from "@cocalc/server/purchases/stripe-usage-based-subscription";
 import getConn from "@cocalc/server/stripe/connection";
+import { acceptCommercialStripeWebhookEvent } from "@cocalc/server/commercial-orders/invoices/stripe";
 
 import {
   alertUncreditedSucceededPayment,
@@ -110,6 +111,28 @@ export async function processStripeWebhookEvent(event): Promise<{
   type: string;
   action: string;
 }> {
+  if (await acceptCommercialStripeWebhookEvent(event)) {
+    return {
+      processed: true,
+      type: event?.type,
+      action: "commercial-invoice-queued",
+    };
+  }
+  const eventObject = event?.data?.object;
+  const eventMetadata =
+    eventObject?.metadata ?? eventObject?.parent?.invoice_details?.metadata;
+  if (eventMetadata?.flow === "commercial_order") {
+    logger.warn("Malformed or unroutable commercial Stripe event rejected", {
+      event_type: event?.type,
+      stripe_event_id: event?.id,
+      stripe_object_id: eventObject?.id,
+    });
+    return {
+      processed: false,
+      type: event?.type,
+      action: "commercial-invoice-invalid",
+    };
+  }
   switch (event?.type) {
     case "payment_intent.succeeded":
     case "payment_intent.canceled":

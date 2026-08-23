@@ -3,15 +3,20 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Button, ConfigProvider, theme } from "antd";
+import { Button } from "antd";
 import { type ReactElement, useEffect, useState } from "react";
 
-import { useAsyncEffect, useTypedRedux } from "@cocalc/frontend/app-framework";
+import {
+  useAccountOtherSetting,
+  useAsyncEffect,
+  useTypedRedux,
+} from "@cocalc/frontend/app-framework";
 import api from "@cocalc/frontend/client/api";
 import { openAccountSettings } from "@cocalc/frontend/account/settings-routing";
 import { Tooltip } from "@cocalc/frontend/components";
 import type { MembershipResolution } from "@cocalc/conat/hub/api/purchases";
 import { capitalize } from "@cocalc/util/misc";
+import { HIDE_NAVBAR_MEMBERSHIP_SETTING } from "./navbar-membership-setting";
 
 interface MembershipTier {
   id: string;
@@ -30,14 +35,14 @@ interface MembershipBadgeData {
 
 export default function MembershipBadge(): ReactElement | null {
   const accountId = useTypedRedux("account", "account_id");
-  const stripeEnabled = !!useTypedRedux("customize", "stripe_enabled");
-  const { token } = theme.useToken();
+  const hidden =
+    useAccountOtherSetting<boolean>(HIDE_NAVBAR_MEMBERSHIP_SETTING) ?? false;
   const [data, setData] = useState<MembershipBadgeData>();
   const [refreshToken, setRefreshToken] = useState<number>(0);
 
   useAsyncEffect(
     async (isMounted) => {
-      if (!accountId) {
+      if (!accountId || hidden) {
         setData(undefined);
         return;
       }
@@ -58,7 +63,7 @@ export default function MembershipBadge(): ReactElement | null {
         }
       }
     },
-    [accountId, refreshToken],
+    [accountId, hidden, refreshToken],
   );
 
   useEffect(() => {
@@ -70,7 +75,7 @@ export default function MembershipBadge(): ReactElement | null {
     };
   }, []);
 
-  if (!accountId || data?.accountId !== accountId) {
+  if (hidden || !accountId || data?.accountId !== accountId) {
     return null;
   }
 
@@ -78,60 +83,41 @@ export default function MembershipBadge(): ReactElement | null {
   const tierLabel =
     data.tiers.find(({ id }) => id === membershipClass)?.label ??
     capitalize(membershipClass);
-  const showUpgrade = data.membership.source === "free" && stripeEnabled;
-  const buttonLabel = showUpgrade ? "Upgrade" : tierLabel;
-  const actionDescription = showUpgrade
-    ? "View plans or claim a site license."
-    : "View details and change plans.";
-  const description = showUpgrade
-    ? `Upgrade. Current membership: ${tierLabel}. ${actionDescription}`
-    : `Current membership: ${tierLabel}. ${actionDescription}`;
+  const actionDescription = "View details and change plans.";
+  const description = `Current membership: ${tierLabel}. ${actionDescription}`;
 
   return (
-    <ConfigProvider
-      theme={{
-        token: {
-          colorPrimary: token.green6,
-          colorPrimaryBg: token.green2,
-          colorPrimaryBgHover: token.green3,
-          colorPrimaryBorder: token.green4,
-        },
-      }}
+    <Tooltip
+      title={
+        <>
+          <div>Current membership: {tierLabel}</div>
+          <div>{actionDescription}</div>
+        </>
+      }
+      placement="bottom"
     >
-      <Tooltip
-        title={
-          <>
-            <div>Current membership: {tierLabel}</div>
-            <div>{actionDescription}</div>
-          </>
-        }
-        placement="bottom"
+      <Button
+        aria-label={description}
+        color="default"
+        onClick={() => openAccountSettings({ page: "membership" })}
+        size="small"
+        variant="filled"
+        style={{
+          marginInline: 4,
+          maxWidth: 120,
+        }}
       >
-        <Button
-          aria-label={description}
-          color="primary"
-          onClick={() => openAccountSettings({ page: "membership" })}
-          size="small"
-          variant="filled"
+        <span
           style={{
-            color: token.colorText,
-            fontWeight: token.fontWeightStrong,
-            marginInline: token.marginXXS,
-            maxWidth: 120,
+            display: "block",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           }}
         >
-          <span
-            style={{
-              display: "block",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {buttonLabel}
-          </span>
-        </Button>
-      </Tooltip>
-    </ConfigProvider>
+          {tierLabel}
+        </span>
+      </Button>
+    </Tooltip>
   );
 }

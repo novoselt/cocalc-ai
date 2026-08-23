@@ -120,6 +120,13 @@ export type SiteSettingsKeys =
   | "public_signup_without_registration_token"
   | "legacy_migration_enabled"
   | "legacy_migration_page_message"
+  | "commercial_receivables_visible"
+  | "commercial_receivables_mutations_enabled"
+  | "commercial_receivables_stripe_drafts_enabled"
+  | "commercial_receivables_stripe_send_enabled"
+  | "commercial_receivables_manual_settlement_enabled"
+  | "commercial_receivables_reconciliation_enabled"
+  | "commercial_receivables_fulfillment_enabled"
   | "project_hosts_google-cloud_enabled"
   | "project_hosts_hyperstack_enabled"
   | "project_hosts_lambda_enabled"
@@ -134,6 +141,15 @@ export type SiteSettingsKeys =
   | "project_hosts_app_private_hostnames_enabled"
   | "project_hosts_app_private_hostname_domain"
   | "project_hosts_app_private_hostname_bay_limit"
+  | "automatic_project_archiving_enabled"
+  | "automatic_project_archiving_report_only"
+  | "free_project_archive_after_days"
+  | "banned_project_archive_after_days"
+  | "automatic_project_archiving_batch_limit"
+  | "automatic_project_archiving_global_per_hour"
+  | "automatic_project_archiving_per_host_concurrency"
+  | "automatic_project_archiving_canary_bays"
+  | "automatic_project_archiving_canary_hosts"
   | "launcher_default_quick_create"
   | "project_rootfs_default_image"
   | "project_rootfs_default_image_gpu"
@@ -971,6 +987,76 @@ export const site_settings_conf: SiteSettings = {
     group: "Access & Identity",
     subgroup: "Migration",
   },
+  commercial_receivables_visible: {
+    name: "Show commercial receivables",
+    desc: "Allow admins and authorized agents to read the shared commercial order queue and audit history. Disable mutations separately so rollback does not hide operational records.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
+  commercial_receivables_mutations_enabled: {
+    name: "Enable commercial order mutations",
+    desc: "Allow reviewed creation, assignment, notes, approval, updates, cancellation, and backfill of commercial orders.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
+  commercial_receivables_stripe_drafts_enabled: {
+    name: "Enable commercial Stripe invoice drafts",
+    desc: "Allow fresh-auth admins to create draft Stripe invoices from approved commercial orders. Drafts are not sent automatically.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization", "Stripe"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
+  commercial_receivables_stripe_send_enabled: {
+    name: "Enable commercial Stripe invoice send",
+    desc: "Allow fresh-auth admins to finalize, send, and void Stripe invoices for commercial orders.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization", "Stripe"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
+  commercial_receivables_manual_settlement_enabled: {
+    name: "Enable commercial manual settlements",
+    desc: "Allow fresh-auth admins to record externally verified checks, wires, and other manual commercial payments.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
+  commercial_receivables_reconciliation_enabled: {
+    name: "Enable commercial invoice reconciliation",
+    desc: "Process the durable commercial Stripe webhook inbox and periodically reconcile stale nonterminal invoices.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization", "Stripe"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
+  commercial_receivables_fulfillment_enabled: {
+    name: "Enable commercial fulfillment",
+    desc: "Allow fresh-auth admins to provision, link, or end site-license fulfillment from approved commercial orders.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization", "Licensing"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
   openai_enabled: {
     name: "Enable OpenAI Integration",
     desc: "Allows OpenAI-backed AI features. This does not require a site OpenAI API key; users may use their own subscriptions, and the site key is optional.",
@@ -1050,6 +1136,97 @@ export const site_settings_conf: SiteSettings = {
     tags: ["Project Hosts", "Cloud", "Nebius"],
     group: "Compute / Project Hosts",
     subgroup: "Enable Providers",
+  },
+  automatic_project_archiving_enabled: {
+    name: "Automatic Project Archiving",
+    desc: "Run the owning-bay lifecycle selector. Keep report-only enabled until candidate decisions have been reviewed.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Project Hosts", "Backups", "Workspace"],
+    group: "Compute / Project Hosts",
+    subgroup: "Archive Lifecycle",
+  },
+  automatic_project_archiving_report_only: {
+    name: "Automatic Project Archiving: Report Only",
+    desc: "Record eligible candidates and exclusions without changing project storage.",
+    default: "yes",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Project Hosts", "Backups", "Workspace"],
+    group: "Compute / Project Hosts",
+    subgroup: "Archive Lifecycle",
+  },
+  free_project_archive_after_days: {
+    name: "Free Project Archive Inactivity (days)",
+    desc: "Archive eligible free projects after this many days without project-local last_edited activity.",
+    default: "30",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["Project Hosts", "Backups", "Workspace"],
+    group: "Compute / Project Hosts",
+    subgroup: "Archive Lifecycle",
+  },
+  banned_project_archive_after_days: {
+    name: "Banned Project Archive Grace (days)",
+    desc: "Archive projects only after every collaborator has remained banned for this many days.",
+    default: "7",
+    valid: only_nonneg_int,
+    to_val: to_int,
+    tags: ["Project Hosts", "Backups", "Security"],
+    group: "Compute / Project Hosts",
+    subgroup: "Archive Lifecycle",
+  },
+  automatic_project_archiving_batch_limit: {
+    name: "Automatic Project Archiving: Batch Limit",
+    desc: "Maximum candidate projects evaluated during one maintenance tick.",
+    default: "25",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["Project Hosts", "Backups"],
+    group: "Compute / Project Hosts",
+    subgroup: "Archive Lifecycle",
+    advanced: true,
+  },
+  automatic_project_archiving_global_per_hour: {
+    name: "Automatic Project Archiving: Global Hourly Limit",
+    desc: "Maximum mutating archive completions started by each bay per hour.",
+    default: "10",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["Project Hosts", "Backups"],
+    group: "Compute / Project Hosts",
+    subgroup: "Archive Lifecycle",
+    advanced: true,
+  },
+  automatic_project_archiving_per_host_concurrency: {
+    name: "Automatic Project Archiving: Per-host Concurrency",
+    desc: "Maximum archive lifecycle jobs running concurrently against one project host.",
+    default: "1",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["Project Hosts", "Backups"],
+    group: "Compute / Project Hosts",
+    subgroup: "Archive Lifecycle",
+    advanced: true,
+  },
+  automatic_project_archiving_canary_bays: {
+    name: "Automatic Project Archiving: Canary Bays",
+    desc: "Optional comma-separated owning bay IDs. Empty permits every bay.",
+    default: "",
+    tags: ["Project Hosts", "Backups"],
+    group: "Compute / Project Hosts",
+    subgroup: "Archive Lifecycle",
+    advanced: true,
+  },
+  automatic_project_archiving_canary_hosts: {
+    name: "Automatic Project Archiving: Canary Hosts",
+    desc: "Optional comma-separated project-host UUIDs. Empty permits every host.",
+    default: "",
+    tags: ["Project Hosts", "Backups"],
+    group: "Compute / Project Hosts",
+    subgroup: "Archive Lifecycle",
+    advanced: true,
   },
   "project_hosts_google-cloud_enabled": {
     name: "Enable Project Hosts - Google Cloud",

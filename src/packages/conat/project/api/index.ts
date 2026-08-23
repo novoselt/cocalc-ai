@@ -2,6 +2,7 @@ import { type System, system } from "./system";
 import { type Editor, editor } from "./editor";
 import { type Jupyter, jupyter } from "./jupyter";
 import { type Apps, apps } from "./apps";
+import { type DocumentBuildApi, documentBuild } from "./document-build";
 import { handleErrorMessage } from "@cocalc/conat/util";
 export { projectApiClient } from "./project-client";
 
@@ -21,6 +22,7 @@ export interface ProjectApi {
   editor: Editor;
   jupyter: Jupyter;
   apps: Apps;
+  documentBuild: DocumentBuildApi;
   isReady: () => Promise<boolean>;
   waitUntilReady: (opts?: { timeout?: number }) => Promise<void>;
 }
@@ -30,6 +32,7 @@ const ProjectApiStructure = {
   editor,
   jupyter,
   apps,
+  documentBuild,
 } as const;
 
 export function initProjectApi({

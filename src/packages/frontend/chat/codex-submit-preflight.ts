@@ -1,7 +1,11 @@
 import { until } from "@cocalc/util/async-utils";
-import type { CodexPaymentSourceInfo } from "@cocalc/conat/hub/api/system";
+import type {
+  CodexPaymentSourceInfo,
+  CodexUsageStatusInfo,
+} from "@cocalc/conat/hub/api/system";
 import { isCodexModelName } from "@cocalc/util/ai/codex";
 import { lite } from "@cocalc/frontend/lite";
+import { getCodexSubscriptionConnection } from "@cocalc/frontend/account/codex-usage";
 import {
   getProjectStartPolicyBlock,
   throwProjectStartPolicyBlock,
@@ -43,6 +47,22 @@ export function isCodexSubmitTarget({
     newThreadAgentMode === "codex" ||
     existingThreadAgentKind === "acp" ||
     isCodexModelName(`${existingThreadAgentModel ?? ""}`.trim())
+  );
+}
+
+export async function codexConnectionNeedsAttentionAfterSubmit({
+  fetchPaymentSource,
+  fetchUsageStatus,
+}: {
+  fetchPaymentSource: () => Promise<CodexPaymentSourceInfo | undefined>;
+  fetchUsageStatus: () => Promise<CodexUsageStatusInfo>;
+}): Promise<boolean> {
+  const paymentSource = await fetchPaymentSource();
+  if (isCodexPaymentSourceNeedsUserConfiguration(paymentSource)) return true;
+  if (paymentSource?.source !== "subscription") return false;
+  return (
+    getCodexSubscriptionConnection(await fetchUsageStatus()).status !==
+    "connected"
   );
 }
 

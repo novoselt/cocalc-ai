@@ -570,6 +570,69 @@ describe("cloud host start failures", () => {
     });
   });
 
+  it("stops refresh_runtime retries when the provider instance is missing", async () => {
+    const hostId = "8f4b30a3-5387-4e04-8932-5980c648ef71";
+    const getInstance = jest.fn(async () => undefined);
+    getProviderContextMock.mockResolvedValue({
+      entry: {
+        provider: {
+          getInstance,
+        },
+      },
+      creds: {},
+    });
+
+    await upsertProjectHost({
+      id: hostId,
+      name: "Missing Nebius host",
+      region: "eu-north1",
+      status: "starting",
+      last_seen: new Date(),
+      metadata: {
+        owner: "acct-owner",
+        machine: {
+          cloud: "nebius",
+          machine_type: "1gpu-8vcpu-32gb",
+        },
+        runtime: {
+          provider: "nebius",
+          instance_id: "computeinstance-missing",
+          public_ip: "192.0.2.20",
+          private_ip: "10.0.0.20",
+          internal_hostname: "missing.internal",
+        },
+      },
+    });
+
+    const { cloudHostHandlers } = await import("./host-work");
+    await cloudHostHandlers.refresh_runtime({
+      id: "work-refresh-missing",
+      vm_id: hostId,
+      action: "refresh_runtime",
+      payload: { provider: "nebius", force: true, attempt: 0 },
+    } as any);
+
+    expect(getInstance).toHaveBeenCalledTimes(1);
+    const hostRows = await getPool().query(
+      "SELECT last_seen, metadata FROM project_hosts WHERE id=$1",
+      [hostId],
+    );
+    expect(hostRows.rows[0].last_seen).toBeNull();
+    expect(hostRows.rows[0].metadata.runtime).toMatchObject({
+      instance_id: "computeinstance-missing",
+      provider_status: "missing",
+    });
+    expect(hostRows.rows[0].metadata.runtime.public_ip).toBeUndefined();
+    expect(hostRows.rows[0].metadata.runtime.private_ip).toBeUndefined();
+    expect(hostRows.rows[0].metadata.runtime.internal_hostname).toBeUndefined();
+
+    const workRows = await getPool().query(
+      "SELECT action FROM cloud_vm_work WHERE vm_id=$1",
+      [hostId],
+    );
+    expect(workRows.rows).toEqual([]);
+  });
+
   it("passes queued refresh_runtime payload through to force observation", async () => {
     const hostId = "d8d2ca6f-563d-473d-a01d-2b4a7e8bdd89";
     const getInstance = jest.fn(async () => ({

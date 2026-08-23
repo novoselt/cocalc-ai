@@ -482,6 +482,7 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
           display: "flex",
           alignItems: "center",
           gap: "8px",
+          height: "40px",
           width: "100%",
         }}
       >

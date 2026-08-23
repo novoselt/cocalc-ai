@@ -12,6 +12,7 @@ const openAccountSettings = jest.fn();
 
 let accountId = "account-1";
 let stripeEnabled = true;
+let hideNavbarMembership = false;
 
 jest.mock("antd", () => {
   const Button = ({ children, onClick, ...props }: any) => (
@@ -67,6 +68,8 @@ jest.mock("@cocalc/frontend/app-framework", () => {
       }
       return undefined;
     },
+    useAccountOtherSetting: (key: string) =>
+      key === "hide_navbar_membership" ? hideNavbarMembership : undefined,
   };
 });
 
@@ -96,6 +99,7 @@ describe("MembershipBadge", () => {
     jest.clearAllMocks();
     accountId = "account-1";
     stripeEnabled = true;
+    hideNavbarMembership = false;
   });
 
   it("clears the previous tier label immediately when the account changes", async () => {
@@ -135,7 +139,7 @@ describe("MembershipBadge", () => {
     await waitFor(() => {
       expect(
         screen.getByRole("button", {
-          name: "Upgrade. Current membership: Free. View plans or claim a site license.",
+          name: "Current membership: Free. View details and change plans.",
         }),
       ).toBeTruthy();
     });
@@ -163,8 +167,7 @@ describe("MembershipBadge", () => {
     expect(openAccountSettings).toHaveBeenCalledWith({ page: "membership" });
   });
 
-  it("shows the Free tier name when commercial billing is disabled", async () => {
-    stripeEnabled = false;
+  it("shows the Free tier name instead of an upgrade label", async () => {
     api
       .mockResolvedValueOnce({ class: "free", source: "free" })
       .mockResolvedValueOnce({
@@ -179,5 +182,14 @@ describe("MembershipBadge", () => {
       }),
     ).toHaveTextContent("Free");
     expect(screen.queryByText("Upgrade")).toBeNull();
+  });
+
+  it("does not load or show the tier when hidden in account settings", () => {
+    hideNavbarMembership = true;
+
+    render(<MembershipBadge />);
+
+    expect(api).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });

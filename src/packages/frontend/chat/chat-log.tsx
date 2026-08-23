@@ -10,14 +10,19 @@ Render all the messages in the chat.
 // cSpell:ignore: timespan
 
 import {
+  createContext,
   KeyboardEvent,
   MutableRefObject,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
+  type ComponentProps,
+  type ReactNode,
 } from "react";
 import { Button } from "antd";
 import { VirtuosoHandle } from "react-virtuoso";
@@ -85,6 +90,45 @@ function sameInlineCodexActivityBlocks(
     }
   }
   return true;
+}
+
+type CodexActivityBlocksStore = {
+  getSnapshot: (messageId: string) => InlineCodexActivityBlock[] | undefined;
+  set: (
+    messageId: string,
+    blocks: InlineCodexActivityBlock[] | undefined,
+  ) => void;
+  subscribe: (messageId: string, listener: () => void) => () => void;
+};
+
+function createCodexActivityBlocksStore(): CodexActivityBlocksStore {
+  const values = new Map<string, InlineCodexActivityBlock[]>();
+  const listeners = new Map<string, Set<() => void>>();
+  return {
+    getSnapshot: (messageId) => values.get(messageId),
+    set: (messageId, blocks) => {
+      const next =
+        Array.isArray(blocks) && blocks.length > 0 ? blocks : undefined;
+      if (sameInlineCodexActivityBlocks(values.get(messageId), next)) return;
+      if (next == null) {
+        values.delete(messageId);
+      } else {
+        values.set(messageId, next);
+      }
+      for (const listener of listeners.get(messageId) ?? []) {
+        listener();
+      }
+    },
+    subscribe: (messageId, listener) => {
+      const current = listeners.get(messageId) ?? new Set();
+      current.add(listener);
+      listeners.set(messageId, current);
+      return () => {
+        current.delete(listener);
+        if (current.size === 0) listeners.delete(messageId);
+      };
+    },
+  };
 }
 
 function toAttachedSteerState(
@@ -187,17 +231,50 @@ type SteerCollections = {
   representedMessageIds: Set<string>;
 };
 
-function steerRenderKey({
-  attachedByParentMessageId,
-  byAssistantMessageId,
-}: SteerCollections): string {
-  const serialize = (
-    entries: Map<string, AttachedSteerMessage[]>,
-  ): [string, AttachedSteerMessage[]][] => [...entries.entries()];
-  return JSON.stringify([
-    serialize(attachedByParentMessageId),
-    serialize(byAssistantMessageId),
-  ]);
+const ActivitySteersContext = createContext<
+  Map<string, AttachedSteerMessage[]> | undefined
+>(undefined);
+
+function ReactiveActivitySteersMessage({
+  steerMessageId,
+  activitySteers,
+  cachedCodexActivityBlocks,
+  codexActivityBlocksStore,
+  ...props
+}: ComponentProps<typeof Message> & {
+  steerMessageId: string;
+  codexActivityBlocksStore?: CodexActivityBlocksStore;
+}) {
+  const currentActivitySteers = useContext(ActivitySteersContext);
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      codexActivityBlocksStore?.subscribe(steerMessageId, listener) ??
+      (() => {}),
+    [codexActivityBlocksStore, steerMessageId],
+  );
+  const getSnapshot = useCallback(
+    () =>
+      codexActivityBlocksStore == null
+        ? cachedCodexActivityBlocks
+        : codexActivityBlocksStore.getSnapshot(steerMessageId),
+    [cachedCodexActivityBlocks, codexActivityBlocksStore, steerMessageId],
+  );
+  const currentCodexActivityBlocks = useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    getSnapshot,
+  );
+  return (
+    <Message
+      {...props}
+      activitySteers={
+        currentActivitySteers == null
+          ? activitySteers
+          : currentActivitySteers.get(steerMessageId)
+      }
+      cachedCodexActivityBlocks={currentCodexActivityBlocks}
+    />
+  );
 }
 
 function collectSteers({
@@ -263,14 +340,16 @@ function collectSteers({
       continue;
     }
     if (!byMessageId.has(anchoredParentId)) continue;
-    if (assistantMessageId) {
-      const next = byAssistantMessageId.get(assistantMessageId) ?? [];
-      next.push(steer);
-      byAssistantMessageId.set(assistantMessageId, next);
-    }
-    const next = attachedByParentMessageId.get(anchoredParentId) ?? [];
+    if (!assistantMessageId) continue;
+    const activitySteers = byAssistantMessageId.get(assistantMessageId) ?? [];
+    activitySteers.push(steer);
+    byAssistantMessageId.set(assistantMessageId, activitySteers);
+    // Once a turn completes, keep its compact guidance status on the assistant
+    // message. Attaching it to the original user prompt implies the user was
+    // guided and makes the submitted message appear to vanish from agent work.
+    const next = attachedByParentMessageId.get(assistantMessageId) ?? [];
     next.push(steer);
-    attachedByParentMessageId.set(anchoredParentId, next);
+    attachedByParentMessageId.set(assistantMessageId, next);
     representedMessageIds.add(messageId);
   }
   for (const list of attachedByParentMessageId.values()) {
@@ -366,6 +445,7 @@ interface Props {
   path: string;
   messages?: ChatMessages;
   threadIndex?: Map<string, ThreadIndexEntry>;
+  docVersion?: number;
   mode: Mode;
   scrollToBottomRef?: MutableRefObject<(force?: boolean) => void>;
   setLastVisible?: (x: Date | null) => void;
@@ -401,6 +481,7 @@ export function ChatLog({
   path,
   messages: messagesProp,
   threadIndex,
+  docVersion,
   scrollToBottomRef,
   mode,
   setLastVisible,
@@ -435,11 +516,7 @@ export function ChatLog({
   const account_id = useTypedRedux("account", "account_id");
   const steerCollections = useMemo(
     () => collectSteers({ messages, visibleKeys, acpState }),
-    [messages, visibleKeys, acpState],
-  );
-  const guidanceRenderKey = useMemo(
-    () => steerRenderKey(steerCollections),
-    [steerCollections],
+    [messages, visibleKeys, acpState, docVersion],
   );
   const anyOverlayOpen = useAnyChatOverlayOpen();
   const activeTopTab = useTypedRedux("page", "active_top_tab");
@@ -477,6 +554,7 @@ export function ChatLog({
   }, [
     messages,
     account_id,
+    docVersion,
     singleThreadView,
     steerCollections.representedMessageIds,
     visibleKeys,
@@ -607,51 +685,54 @@ export function ChatLog({
 
   return (
     <div style={CHAT_LOG_CONTAINER_STYLE}>
-      <MessageList
-        {...{
-          virtuosoRef,
-          sortedDates,
-          messages,
-          account_id,
-          user_map,
-          project_id,
-          path,
-          fontSize,
-          actions,
-          manualScrollRef,
-          manualScroll,
-          setManualScroll,
-          mode,
-          selectedDate,
-          numChildren,
-          singleThreadView,
-          scrollCacheId,
-          isVisible,
-          scrollToDate,
-          scrollToBottomRef,
-          scrollToIndex,
-          keepBottomAnchoredRef,
-          acpState,
-          attachedSteersByParentMessageId:
-            steerCollections.attachedByParentMessageId,
-          activitySteersByAssistantMessageId:
-            steerCollections.byAssistantMessageId,
-          guidanceRenderKey,
-          searchQuery,
-          searchJumpDate,
-          searchJumpToken,
-          onAtTopStateChange,
-          activityJumpDate,
-          activityJumpToken,
-          notifyOnTurnFinish,
-          onNotifyOnTurnFinishChange,
-          selectedThread,
-          anyOverlayOpen,
-          onOpenGitBrowser,
-          suppressInlineCodexStatusDate,
-          readOnly,
-        }}
-      />
+      <ActivitySteersContext.Provider
+        value={steerCollections.byAssistantMessageId}
+      >
+        <MessageList
+          {...{
+            virtuosoRef,
+            sortedDates,
+            messages,
+            account_id,
+            user_map,
+            project_id,
+            path,
+            fontSize,
+            actions,
+            manualScrollRef,
+            manualScroll,
+            setManualScroll,
+            mode,
+            selectedDate,
+            numChildren,
+            singleThreadView,
+            scrollCacheId,
+            isVisible,
+            scrollToDate,
+            scrollToBottomRef,
+            scrollToIndex,
+            keepBottomAnchoredRef,
+            acpState,
+            attachedSteersByParentMessageId:
+              steerCollections.attachedByParentMessageId,
+            activitySteersByAssistantMessageId:
+              steerCollections.byAssistantMessageId,
+            searchQuery,
+            searchJumpDate,
+            searchJumpToken,
+            onAtTopStateChange,
+            activityJumpDate,
+            activityJumpToken,
+            notifyOnTurnFinish,
+            onNotifyOnTurnFinishChange,
+            selectedThread,
+            anyOverlayOpen,
+            onOpenGitBrowser,
+            suppressInlineCodexStatusDate,
+            readOnly,
+          }}
+        />
+      </ActivitySteersContext.Provider>
       {!readOnly ? (
         <Composing
           actions={actions}
@@ -785,7 +866,6 @@ export function MessageList({
   acpState,
   attachedSteersByParentMessageId,
   activitySteersByAssistantMessageId,
-  guidanceRenderKey = "",
   searchQuery,
   searchJumpDate,
   searchJumpToken,
@@ -826,7 +906,6 @@ export function MessageList({
   acpState?;
   attachedSteersByParentMessageId?: Map<string, AttachedSteerMessage[]>;
   activitySteersByAssistantMessageId?: Map<string, AttachedSteerMessage[]>;
-  guidanceRenderKey?: string;
   searchQuery?: string;
   searchJumpDate?: string;
   searchJumpToken?: number;
@@ -880,10 +959,13 @@ export function MessageList({
     explicitCodexActivityByMessageId,
     setExplicitCodexActivityByMessageId,
   ] = useState<Record<string, boolean>>({});
-  const [
-    cachedCodexActivityBlocksByMessageId,
-    setCachedCodexActivityBlocksByMessageId,
-  ] = useState<Record<string, InlineCodexActivityBlock[] | undefined>>({});
+  const codexActivityBlocksStoreRef = useRef<
+    CodexActivityBlocksStore | undefined
+  >(undefined);
+  if (codexActivityBlocksStoreRef.current == null) {
+    codexActivityBlocksStoreRef.current = createCodexActivityBlocksStore();
+  }
+  const codexActivityBlocksStore = codexActivityBlocksStoreRef.current;
   const userScrollIntentRef = useRef(false);
   const userScrollIntentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -1280,7 +1362,7 @@ export function MessageList({
       ? explicitCodexActivityByMessageId[messageId] === true
       : false;
     const cachedCodexActivityBlocks = messageId
-      ? cachedCodexActivityBlocksByMessageId[messageId]
+      ? codexActivityBlocksStore.getSnapshot(messageId)
       : undefined;
 
     const is_thread = numChildren != null && isThread(message, numChildren);
@@ -1296,7 +1378,8 @@ export function MessageList({
     return (
       <div style={wrapperStyle}>
         <DivTempHeight height={h ? `${h}px` : undefined}>
-          <Message
+          <ReactiveActivitySteersMessage
+            steerMessageId={messageId}
             messages={messages}
             key={date}
             index={index}
@@ -1341,27 +1424,10 @@ export function MessageList({
               !readOnly && allowAsyncCompletedCodexActivityLoad
             }
             cachedCodexActivityBlocks={cachedCodexActivityBlocks}
+            codexActivityBlocksStore={codexActivityBlocksStore}
             onCachedCodexActivityBlocksChange={
               messageId
-                ? (blocks) => {
-                    setCachedCodexActivityBlocksByMessageId((prev) => {
-                      const current = prev[messageId];
-                      if (sameInlineCodexActivityBlocks(current, blocks)) {
-                        return prev;
-                      }
-                      if (
-                        blocks == null ||
-                        !Array.isArray(blocks) ||
-                        blocks.length === 0
-                      ) {
-                        if (!(messageId in prev)) return prev;
-                        const next = { ...prev };
-                        delete next[messageId];
-                        return next;
-                      }
-                      return { ...prev, [messageId]: blocks };
-                    });
-                  }
+                ? (blocks) => codexActivityBlocksStore.set(messageId, blocks)
                 : undefined
             }
             onExpandedCodexActivityChange={
@@ -1415,14 +1481,12 @@ export function MessageList({
   // react-virtuoso republishes changed function props synchronously from a
   // layout effect. Chat messages can rerender several times per second while
   // streaming, so keep the functions stable and forward them to current state
-  // through this ref instead of restarting Virtuoso's measurement graph. The
-  // item renderer is invalidated narrowly when inline guidance changes below.
+  // through this ref instead of restarting Virtuoso's measurement graph.
   const virtuosoCallbackStateRef = useRef({
     keepBottomAnchoredRef,
     manualScrollRef,
     markManualScrollAway,
     onAtTopStateChange,
-    renderMessage,
     scheduleAnchorCapture,
     setManualScroll,
     sortedDatesLength: sortedDates.length,
@@ -1432,7 +1496,6 @@ export function MessageList({
     manualScrollRef,
     markManualScrollAway,
     onAtTopStateChange,
-    renderMessage,
     scheduleAnchorCapture,
     setManualScroll,
     sortedDatesLength: sortedDates.length,
@@ -1453,19 +1516,54 @@ export function MessageList({
     }
     return height;
   }, []);
-  const renderVirtuosoItem = useCallback(
-    (index: number) => {
-      // Guidance is rendered inside an existing assistant row, so its state can
-      // change without changing Virtuoso's item count or row data.
-      void guidanceRenderKey;
-      const { renderMessage, sortedDatesLength } =
-        virtuosoCallbackStateRef.current;
-      if (sortedDatesLength === index) {
-        return <div style={{ height: "25px" }} />;
-      }
-      return renderMessage(index);
+  type ChatVirtualRow = {
+    key: string;
+    render: () => ReactNode;
+  };
+  const steerRowKey = (date: string): string => {
+    const message = getMessageAtDate({
+      messages,
+      date: parseFloat(date),
+    });
+    const messageId = `${field<string>(message, "message_id") ?? ""}`.trim();
+    if (!messageId) return date;
+    const activitySteers =
+      activitySteersByAssistantMessageId?.get(messageId) ?? [];
+    const attachedSteers =
+      attachedSteersByParentMessageId?.get(messageId) ?? [];
+    const revision = [
+      ...activitySteers.map(
+        ({ messageId, state }) => `activity:${messageId}:${state}`,
+      ),
+      ...attachedSteers.map(
+        ({ messageId, state }) => `attached:${messageId}:${state}`,
+      ),
+    ].join("|");
+    return revision ? `${date}:${revision}` : date;
+  };
+  // Virtuoso memoizes mounted items. The key includes guidance revisions so an
+  // existing assistant activity row remounts when guidance is added or changes
+  // state, without remounting the rest of the chat history.
+  const virtuosoData: ChatVirtualRow[] = Array.from(
+    { length: sortedDates.length + 1 },
+    (_, index) => {
+      const date = sortedDates[index];
+      return {
+        key: date == null ? "end" : steerRowKey(date),
+        render:
+          index === sortedDates.length
+            ? () => <div style={{ height: "25px" }} />
+            : () => renderMessage(index),
+      };
     },
-    [guidanceRenderKey],
+  );
+  const renderVirtuosoItem = useCallback(
+    (_index: number, row: ChatVirtualRow) => row.render(),
+    [],
+  );
+  const computeVirtuosoItemKey = useCallback(
+    (_index: number, row: ChatVirtualRow) => row.key,
+    [],
   );
   const handleVirtuosoRangeChanged = useCallback(
     ({ endIndex }: { endIndex: number }) => {
@@ -1650,6 +1748,7 @@ export function MessageList({
         ref={listVirtuosoRef}
         scrollerRef={handleVirtuosoScrollerRef}
         totalCount={sortedDates.length + 1}
+        data={virtuosoData}
         context={virtuosoCallbackStateRef.current}
         cacheId={cacheId}
         persistState={false}
@@ -1658,6 +1757,7 @@ export function MessageList({
         atTopThreshold={240}
         itemSize={measureVirtuosoItem}
         itemContent={renderVirtuosoItem}
+        computeItemKey={computeVirtuosoItemKey}
         rangeChanged={manualScrollRef ? handleVirtuosoRangeChanged : undefined}
         atBottomStateChange={
           manualScrollRef ? handleVirtuosoAtBottomStateChange : undefined

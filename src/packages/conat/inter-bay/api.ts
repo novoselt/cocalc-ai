@@ -77,6 +77,8 @@ import type {
   CopyPublicDirectoryShareToProjectOptions,
   CopyPublicDirectoryShareToProjectResponse,
   CreatePublicDirectoryShareOptions,
+  DisablePublicDirectorySharesForBannedActorOptions,
+  DisablePublicDirectorySharesForBannedActorResponse,
   GetTemporaryViewerReadPolicyOptions,
   GetTemporaryViewerReadPolicyResponse,
   GrantTemporaryViewerAccessOptions,
@@ -949,6 +951,18 @@ export interface AccountLocalRevokeMembershipGrantRequest {
 
 export interface AccountLocalGetMembershipRequest {
   account_id: string;
+}
+
+export interface AccountLocalGetArchiveLifecycleStatusesRequest {
+  account_ids: string[];
+}
+
+export interface AccountLocalArchiveLifecycleStatus {
+  account_id: string;
+  resolved: boolean;
+  banned: boolean;
+  banned_at: string | null;
+  membership: MembershipResolution | null;
 }
 
 export interface AccountLocalGetMembershipDetailsRequest {
@@ -2051,6 +2065,12 @@ export interface BayOpsSiteFundedCodexStatusRequest {
   reconcile?: boolean;
 }
 
+export interface BayOpsCommercialOrdersRequest {
+  action: string;
+  actor_account_id: string;
+  payload: Record<string, unknown>;
+}
+
 export interface AuthTokenRequiresRequest {}
 
 export interface AuthTokenRedeemRequest {
@@ -2609,6 +2629,7 @@ export type AccountLocalMethod =
   | "upsert-membership-grant"
   | "revoke-membership-grant"
   | "get-membership"
+  | "get-archive-lifecycle-statuses"
   | "get-membership-details"
   | "get-account-usage-overview"
   | "record-site-funded-codex-usage"
@@ -2695,6 +2716,7 @@ export type AccountLocalMethod =
   | "public-directory-share-create"
   | "public-directory-share-update"
   | "public-directory-share-upsert"
+  | "public-directory-share-disable-for-banned-actor"
   | "public-directory-share-authorize-read"
   | "public-directory-share-list-directory"
   | "public-directory-share-copy-to-project"
@@ -2738,7 +2760,8 @@ export type BayOpsMethod =
   | "heartbeat-site-funded-codex-turn"
   | "record-site-funded-codex-usage"
   | "finish-site-funded-codex-turn"
-  | "get-site-funded-codex-status";
+  | "get-site-funded-codex-status"
+  | "commercial-orders";
 export type ProjectCollabInviteMethod =
   | "upsert-inbox"
   | "delete-inbox"
@@ -2801,7 +2824,8 @@ export type ExternalCredentialMethod =
   | "has"
   | "touch"
   | "list"
-  | "revoke";
+  | "revoke"
+  | "refresh-codex-subscription";
 export type AccountProjectFeedMethod = "upsert" | "remove";
 export type AccountNotificationFeedMethod = "upsert";
 
@@ -3142,6 +3166,14 @@ export interface InterBayExternalCredentialsApi {
     scope?: ExternalCredentialSelector["scope"];
   }) => Promise<InterBayExternalCredentialInfo[]>;
   revoke: (opts: { id: string; owner_account_id?: string }) => Promise<boolean>;
+  refreshCodexSubscription: (opts: {
+    owner_account_id: string;
+    previous_access_token_hash: string;
+  }) => Promise<{
+    payload: string;
+    updated: Date;
+    refreshed: boolean;
+  }>;
 }
 
 export interface InterBayHostConnectionApi {
@@ -3395,6 +3427,7 @@ export interface InterBayHostConnectionApi {
       | "limit"
       | "cursor"
       | "risk_only"
+      | "free_only"
       | "state_filter"
       | "project_state"
     >,
@@ -4049,6 +4082,9 @@ export interface InterBayAccountLocalApi {
   getMembership: (
     opts: AccountLocalGetMembershipRequest,
   ) => Promise<MembershipResolution>;
+  getArchiveLifecycleStatuses: (
+    opts: AccountLocalGetArchiveLifecycleStatusesRequest,
+  ) => Promise<AccountLocalArchiveLifecycleStatus[]>;
   getMembershipDetails: (
     opts: AccountLocalGetMembershipDetailsRequest,
   ) => Promise<MembershipDetails>;
@@ -4307,6 +4343,9 @@ export interface InterBayAccountLocalApi {
   publicDirectoryShareUpsert: (
     opts: UpsertPublicDirectoryShareOptions,
   ) => Promise<PublicDirectoryShareSummary>;
+  publicDirectoryShareDisableForBannedActor: (
+    opts: DisablePublicDirectorySharesForBannedActorOptions,
+  ) => Promise<DisablePublicDirectorySharesForBannedActorResponse>;
   publicDirectoryShareAuthorizeRead: (
     opts: AuthorizePublicDirectoryShareReadOptions,
   ) => Promise<AuthorizePublicDirectoryShareReadResponse>;
@@ -4419,6 +4458,7 @@ export interface InterBayBayOpsApi {
   getSiteFundedCodexStatus: (
     opts: BayOpsSiteFundedCodexStatusRequest,
   ) => Promise<SiteFundedCodexStatus>;
+  commercialOrders: (opts: BayOpsCommercialOrdersRequest) => Promise<unknown>;
 }
 
 export interface InterBayAuthTokenApi {
@@ -4765,6 +4805,10 @@ const EXTERNAL_CREDENTIAL_METHOD_SPECS = [
   { name: "touch", method: "touch" },
   { name: "list", method: "list" },
   { name: "revoke", method: "revoke" },
+  {
+    name: "refreshCodexSubscription",
+    method: "refresh-codex-subscription",
+  },
 ] as const satisfies ReadonlyArray<{
   name: ExternalCredentialName;
   method: ExternalCredentialMethod;
@@ -6654,6 +6698,15 @@ export function createInterBayAccountLocalClient({
       method: "get-membership",
     }),
   });
+  const getArchiveLifecycleStatusesClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "getArchiveLifecycleStatuses">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "get-archive-lifecycle-statuses",
+    }),
+  });
   const getMembershipDetailsClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "getMembershipDetails">
   >({
@@ -7457,6 +7510,15 @@ export function createInterBayAccountLocalClient({
       method: "public-directory-share-upsert",
     }),
   });
+  const publicDirectoryShareDisableForBannedActorClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "publicDirectoryShareDisableForBannedActor">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "public-directory-share-disable-for-banned-actor",
+    }),
+  });
   const publicDirectoryShareAuthorizeReadClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "publicDirectoryShareAuthorizeRead">
   >({
@@ -7595,6 +7657,8 @@ export function createInterBayAccountLocalClient({
       await revokeMembershipGrantClient.revokeMembershipGrant(opts),
     getMembership: async (opts) =>
       await getMembershipClient.getMembership(opts),
+    getArchiveLifecycleStatuses: async (opts) =>
+      await getArchiveLifecycleStatusesClient.getArchiveLifecycleStatuses(opts),
     getMembershipDetails: async (opts) =>
       await getMembershipDetailsClient.getMembershipDetails(opts),
     getAccountUsageOverview: async (opts) =>
@@ -7867,6 +7931,10 @@ export function createInterBayAccountLocalClient({
       await publicDirectoryShareUpdateClient.publicDirectoryShareUpdate(opts),
     publicDirectoryShareUpsert: async (opts) =>
       await publicDirectoryShareUpsertClient.publicDirectoryShareUpsert(opts),
+    publicDirectoryShareDisableForBannedActor: async (opts) =>
+      await publicDirectoryShareDisableForBannedActorClient.publicDirectoryShareDisableForBannedActor(
+        opts,
+      ),
     publicDirectoryShareAuthorizeRead: async (opts) =>
       await publicDirectoryShareAuthorizeReadClient.publicDirectoryShareAuthorizeRead(
         opts,
@@ -8369,6 +8437,20 @@ export function createInterBayAccountLocalHandler({
       }),
       impl: {
         getMembership: async (opts) => await impl.getMembership(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "getArchiveLifecycleStatuses">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "get-archive-lifecycle-statuses",
+      }),
+      impl: {
+        getArchiveLifecycleStatuses: async (opts) =>
+          await impl.getArchiveLifecycleStatuses(opts),
       },
     }),
     createServiceHandler<Pick<InterBayAccountLocalApi, "getMembershipDetails">>(
@@ -9963,6 +10045,12 @@ export function createInterBayBayOpsClient({
       method: "set-webapp-crash-resolution",
     }),
   });
+  const commercialOrdersClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "commercialOrders">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({ dest_bay, method: "commercial-orders" }),
+  });
   return {
     getLoad: async (opts) => await loadClient.getLoad(opts),
     getBackups: async (opts) => await backupsClient.getBackups(opts),
@@ -10040,6 +10128,8 @@ export function createInterBayBayOpsClient({
       await finishSiteFundedCodexTurnClient.finishSiteFundedCodexTurn(opts),
     getSiteFundedCodexStatus: async (opts) =>
       await siteFundedCodexStatusClient.getSiteFundedCodexStatus(opts),
+    commercialOrders: async (opts) =>
+      await commercialOrdersClient.commercialOrders(opts),
   };
 }
 
@@ -10449,6 +10539,14 @@ export function createInterBayBayOpsHandlers({
       impl: {
         getProjectRuntimeSlotReport: async (opts) =>
           await impl.getProjectRuntimeSlotReport(opts),
+      },
+    }),
+    createServiceHandler<Pick<InterBayBayOpsApi, "commercialOrders">>({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({ dest_bay: bay_id, method: "commercial-orders" }),
+      impl: {
+        commercialOrders: async (opts) => await impl.commercialOrders(opts),
       },
     }),
   ];

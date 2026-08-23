@@ -58,4 +58,39 @@ describe("event loop stall GC summaries", () => {
     expect(__test__.gcKindName(16)).toBe("weakcb");
     expect(__test__.gcKindName(999)).toBe("unknown");
   });
+
+  it("summarizes process activity during the delayed sample", () => {
+    expect(
+      __test__.summarizeProcessActivity(
+        {
+          at_ms: 1_000,
+          cpu: { user: 1_000_000, system: 500_000 },
+          resources: {
+            voluntaryContextSwitches: 10,
+            involuntaryContextSwitches: 20,
+            fsRead: 30,
+            fsWrite: 40,
+          } as NodeJS.ResourceUsage,
+        },
+        {
+          at_ms: 2_000,
+          cpu: { user: 1_200_000, system: 600_000 },
+          resources: {
+            voluntaryContextSwitches: 15,
+            involuntaryContextSwitches: 27,
+            fsRead: 41,
+            fsWrite: 53,
+          } as NodeJS.ResourceUsage,
+        },
+      ),
+    ).toEqual({
+      sample_elapsed_ms: 1_000,
+      process_cpu_ms: 300,
+      process_cpu_percent: 30,
+      voluntary_context_switches: 5,
+      involuntary_context_switches: 7,
+      fs_read_ops: 11,
+      fs_write_ops: 13,
+    });
+  });
 });

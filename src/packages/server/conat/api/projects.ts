@@ -117,6 +117,7 @@ import {
 } from "@cocalc/server/projects/offline-move-confirmation";
 import { getProjectCollaboratorInviteUsage as getProjectCollaboratorInviteUsageLocal } from "@cocalc/server/membership/project-limits";
 import { assertCanPerformDestructiveStorageAction } from "@cocalc/server/projects/destructive-storage-actions";
+import { archiveProjectStorage } from "@cocalc/server/projects/archive";
 import {
   drainProjectRehome as drainProjectRehomeControl,
   getProjectRehomeOperation as getProjectRehomeOperationControl,
@@ -260,10 +261,7 @@ import {
   PROJECT_HAS_NO_ASSIGNED_HOST_ERROR,
 } from "@cocalc/server/conat/project-host-assignment";
 import { appendProjectOutboxEventForProject } from "@cocalc/database/postgres/project-events-outbox";
-import {
-  assertProjectNotRehoming,
-  withProjectRehomeWriteFence,
-} from "@cocalc/database/postgres/project-rehome-fence";
+import { withProjectRehomeWriteFence } from "@cocalc/database/postgres/project-rehome-fence";
 import {
   applyAccountProjectFeedRemoveOnHomeBay,
   publishProjectAccountFeedEventsBestEffort,
@@ -281,10 +279,7 @@ import {
 } from "@cocalc/server/rootfs/build-index";
 import { loadProjectReadDetailsDirect } from "@cocalc/server/projects/details";
 import { fromWire as collabInviteFromWire } from "@cocalc/server/projects/collab-invite-inbox";
-import {
-  deleteProjectDataOnHost,
-  savePlacement,
-} from "@cocalc/server/project-host/control";
+import { savePlacement } from "@cocalc/server/project-host/control";
 import { assertAccountTrustedForProductAccess } from "@cocalc/server/accounts/trusted-product-access";
 import getName from "@cocalc/server/accounts/get-name";
 import {
@@ -5488,142 +5483,10 @@ export async function archiveProject({
     project_id,
     action: "archive this project",
   });
-
-  const { rows } = await getPool().query<{
-    host_id: string | null;
-    host_status: string | null;
-    backup_repo_id: string | null;
-    provisioned: boolean | null;
-    state: { state?: string } | null;
-    last_backup: Date | string | null;
-  }>(
-    `
-      SELECT projects.host_id,
-             project_hosts.status AS host_status,
-             projects.backup_repo_id,
-             projects.provisioned,
-             projects.state,
-             projects.last_backup
-      FROM projects
-      LEFT JOIN project_hosts
-        ON project_hosts.id = projects.host_id
-      WHERE projects.project_id = $1
-        AND projects.deleted IS NULL
-      LIMIT 1
-    `,
-    [project_id],
-  );
-  const row = rows[0];
-  if (!row) {
-    throw new Error("project not found");
-  }
-
-  const currentState = `${row.state?.state ?? ""}`.trim();
-  if (currentState === "archived" && row.provisioned === false) {
-    return;
-  }
-  if (!row.backup_repo_id) {
-    throw new Error(
-      "project must have a configured backup repository before it can be archived",
-    );
-  }
-  const hostStatus = `${row.host_status ?? ""}`.trim().toLowerCase();
-  const hostDeprovisioned = hostStatus === "deprovisioned";
-  const hostCanRunMutations =
-    !hostStatus || hostStatus === "active" || hostStatus === "running";
-
-  if (!hostDeprovisioned) {
-    if (row.last_backup == null) {
-      throw new Error(
-        "project must have at least one backup before it can be archived",
-      );
-    }
-  } else {
-    log.info(
-      "archiveProject: skipping backup verification for deprovisioned host",
-      {
-        project_id,
-        host_id: row.host_id,
-      },
-    );
-  }
-
-  const ownership = await resolveProjectBay(project_id);
-  if (ownership == null) {
-    throw new Error(`project ${project_id} not found`);
-  }
-
-  if (
-    hostCanRunMutations &&
-    ["running", "starting", "pending", "stopping"].includes(currentState)
-  ) {
-    await getInterBayBridge().projectControl(ownership.bay_id).stop({
-      project_id,
-      epoch: ownership.epoch,
-    });
-  }
-
-  if (row.provisioned !== false && hostCanRunMutations) {
-    const host_id = `${row.host_id ?? ""}`.trim();
-    if (!host_id) {
-      throw new Error("project has no assigned host to archive from");
-    }
-    await deleteProjectDataOnHost({
-      project_id,
-      host_id,
-    });
-  } else if (row.provisioned !== false) {
-    log.info("archiveProject: marking project archived without host mutation", {
-      project_id,
-      host_id: row.host_id,
-      host_status: hostStatus || undefined,
-    });
-  }
-
-  const checkedAt = new Date();
-  const nextState = {
-    state: "archived",
-    time: checkedAt.toISOString(),
-  };
-  const client = await getPool().connect();
-  try {
-    await client.query("BEGIN");
-    await assertProjectNotRehoming({
-      db: client,
-      project_id,
-      action: "archive project",
-    });
-    const result = await client.query(
-      `
-        UPDATE projects
-        SET state = $2::jsonb,
-            provisioned = FALSE,
-            provisioned_checked_at = $3
-        WHERE project_id = $1
-          AND deleted IS NULL
-      `,
-      [project_id, nextState, checkedAt],
-    );
-    if ((result.rowCount ?? 0) === 0) {
-      throw new Error("project not found");
-    }
-    await appendProjectOutboxEventForProject({
-      db: client,
-      event_type: "project.state_changed",
-      project_id,
-      default_bay_id: getConfiguredBayId(),
-    });
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-
-  await publishProjectAccountFeedEventsBestEffort({
+  await archiveProjectStorage({
     project_id,
-    default_bay_id: getConfiguredBayId(),
+    mode: "manual",
+    actor_account_id: account_id,
   });
 }
 

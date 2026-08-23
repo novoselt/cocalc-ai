@@ -46,6 +46,7 @@
   ],
   "license": "SEE LICENSE.md",
   "dependencies": {
+    "@cocalc/app-document-build": "workspace:*",
     "@cocalc/comm": "workspace:*",
     "@cocalc/conat": "workspace:*",
     "@cocalc/sync": "workspace:*",

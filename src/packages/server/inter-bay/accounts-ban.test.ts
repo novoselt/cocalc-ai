@@ -17,6 +17,7 @@ const quarantineAccountBillingResourcesLocalMock = jest.fn();
 const recordAccountBanAuditEventMock = jest.fn();
 const remoteSetBanMock = jest.fn();
 const assertSignupEmailDomainAllowedMock = jest.fn();
+const disablePublicDirectorySharesForBannedAccountAcrossClusterMock = jest.fn();
 
 jest.mock("@cocalc/server/bay-config", () => ({
   getConfiguredBayId: jest.fn(() => "bay-1"),
@@ -82,6 +83,11 @@ jest.mock("@cocalc/server/accounts/signup-email-domain-policy", () => ({
     assertSignupEmailDomainAllowedMock(...args),
 }));
 
+jest.mock("@cocalc/server/public-directory-shares/ban-containment", () => ({
+  disablePublicDirectorySharesForBannedAccountAcrossCluster: (...args: any[]) =>
+    disablePublicDirectorySharesForBannedAccountAcrossClusterMock(...args),
+}));
+
 describe("inter-bay account ban routing", () => {
   beforeEach(() => {
     jest.resetModules();
@@ -111,6 +117,9 @@ describe("inter-bay account ban routing", () => {
       banned: true,
     });
     assertSignupEmailDomainAllowedMock.mockReset().mockResolvedValue(undefined);
+    disablePublicDirectorySharesForBannedAccountAcrossClusterMock
+      .mockReset()
+      .mockResolvedValue({ disabled_count: 0, share_ids: [] });
   });
 
   it("applies local bans on the account home bay and syncs the directory", async () => {
@@ -144,6 +153,12 @@ describe("inter-bay account ban routing", () => {
     expect(updateClusterAccountBannedDirectMock).toHaveBeenCalledWith({
       account_id: "00000000-0000-4000-8000-000000000001",
       banned: true,
+    });
+    expect(
+      disablePublicDirectorySharesForBannedAccountAcrossClusterMock,
+    ).toHaveBeenCalledWith({
+      actor_account_id: "00000000-0000-4000-8000-000000000001",
+      reason: "account ban",
     });
   });
 
@@ -203,6 +218,30 @@ describe("inter-bay account ban routing", () => {
       account_id: "00000000-0000-4000-8000-000000000001",
       banned: true,
     });
+    expect(
+      disablePublicDirectorySharesForBannedAccountAcrossClusterMock,
+    ).toHaveBeenCalledWith({
+      actor_account_id: "00000000-0000-4000-8000-000000000001",
+      reason: "spam campaign",
+    });
+  });
+
+  it("does not republish content when an account is unbanned", async () => {
+    getClusterAccountByIdDirectMock.mockResolvedValue({
+      account_id: "00000000-0000-4000-8000-000000000001",
+      home_bay_id: "bay-1",
+    });
+
+    const { setClusterAccountBan } = await import("./accounts");
+    await setClusterAccountBan({
+      account_id: "00000000-0000-4000-8000-000000000001",
+      banned: false,
+      reason: "appeal accepted",
+    });
+
+    expect(
+      disablePublicDirectorySharesForBannedAccountAcrossClusterMock,
+    ).not.toHaveBeenCalled();
   });
 
   it("blocks new or changed Gmail-equivalent identities when an equivalent account is banned", async () => {

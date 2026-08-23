@@ -41,6 +41,7 @@ import { UsageStatistics } from "./stats/page";
 import { AdminDataExplorer } from "./admin-data-explorer";
 import { RetentionAdminOverview } from "./retention-overview";
 import { ActiveUsersMapAdmin } from "./active-users-map";
+import { ReceivablesAdmin } from "./receivables";
 import {
   getAdminUrlPath,
   normalizeAdminRoute,
@@ -62,6 +63,7 @@ const STAR_HIDDEN_ADMIN_SECTIONS = new Set<string>([
   "sso",
   "admin-purchase",
   "site-licenses",
+  "receivables",
 ]);
 
 type AdminMenuKey =
@@ -135,12 +137,22 @@ export function AdminPage({
     navigate({ kind: "index", section });
   }
 
+  function navigateToReceivable(id: string) {
+    navigate({ kind: "receivables-detail", id });
+  }
+
+  function navigateToNewReceivable() {
+    navigate({ kind: "receivables-create" });
+  }
+
   function openSetup() {
     navigateToSection("site-setup");
   }
 
   const sections = getAdminSections({
     closeSiteSettings: () => navigate({ kind: "index" }),
+    navigateToNewReceivable,
+    navigateToReceivable,
     navigateToSection,
   }).filter(
     (section) =>
@@ -155,10 +167,15 @@ export function AdminPage({
   const activeNavItem = navItemByKey.get(activeMenuKey);
   const activeGroupKey =
     activeNavItem?.group == null ? undefined : activeNavItem.group;
-  const activeSection =
-    route.kind === "index" && route.section != null
-      ? sectionByKey.get(route.section)
-      : undefined;
+  const activeSectionKey =
+    route.kind === "receivables-detail" || route.kind === "receivables-create"
+      ? "receivables"
+      : route.kind === "index"
+        ? route.section
+        : undefined;
+  const activeSection = activeSectionKey
+    ? sectionByKey.get(activeSectionKey)
+    : undefined;
   const menuOpenKeys =
     manualOpenKeys ?? (activeGroupKey == null ? [] : [activeGroupKey]);
   const title =
@@ -287,6 +304,26 @@ export function AdminPage({
   }
 
   function renderActiveContent() {
+    if (route.kind === "receivables-detail") {
+      return (
+        <ReceivablesAdmin
+          orderId={route.id}
+          onBack={() => navigateToSection("receivables")}
+          onCreateOrder={navigateToNewReceivable}
+          onOpenOrder={navigateToReceivable}
+        />
+      );
+    }
+    if (route.kind === "receivables-create") {
+      return (
+        <ReceivablesAdmin
+          creating
+          onBack={() => navigateToSection("receivables")}
+          onCreateOrder={navigateToNewReceivable}
+          onOpenOrder={navigateToReceivable}
+        />
+      );
+    }
     if (route.kind !== "index") {
       return <NewsAdminPage route={route} />;
     }
@@ -412,9 +449,13 @@ export function AdminPage({
 
 function getAdminSections({
   closeSiteSettings,
+  navigateToNewReceivable,
+  navigateToReceivable,
   navigateToSection,
 }: {
   closeSiteSettings: () => void;
+  navigateToNewReceivable: () => void;
+  navigateToReceivable: (id: string) => void;
   navigateToSection: (section: AdminSection) => void;
 }): AdminSectionDefinition[] {
   return [
@@ -534,6 +575,24 @@ function getAdminSections({
       icon: "sign-in",
       group: "access",
       component: () => <SsoAdmin />,
+    },
+    {
+      key: "receivables",
+      title: "Accounts Receivable",
+      description:
+        "Track negotiated orders, collection, fulfillment, and ownership.",
+      pageTitle: "Accounts Receivable",
+      pageDescription:
+        "Shared commercial order, invoicing, collection, and fulfillment workflow.",
+      icon: "shopping-cart",
+      group: "commercial",
+      component: () => (
+        <ReceivablesAdmin
+          onBack={() => navigateToSection("receivables")}
+          onCreateOrder={navigateToNewReceivable}
+          onOpenOrder={navigateToReceivable}
+        />
+      ),
     },
     {
       key: "membership-tiers",
@@ -674,6 +733,11 @@ function getOrderedNavigationItems(
 }
 
 function getActiveMenuKey(route: AdminRoute): AdminMenuKey {
+  if (
+    route.kind === "receivables-detail" ||
+    route.kind === "receivables-create"
+  )
+    return "receivables";
   if (route.kind !== "index") return NEWS_MENU_KEY;
   return route.section ?? OVERVIEW_MENU_KEY;
 }
