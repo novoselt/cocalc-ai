@@ -23,6 +23,7 @@ export COCALC_BAY_SQLITE_MIRROR_DIR="${TMP_ROOT}/backup/sqlite-mirror/sync"
 export COCALC_BAY_SQLITE_MIRROR_CATALOG="${TMP_ROOT}/catalog.json"
 export COCALC_BAY_SQLITE_BACKUP_STATUS_FILE="${TMP_ROOT}/status.json"
 export COCALC_BAY_SQLITE_RUSTIC_PROFILE="${TMP_ROOT}/rustic.toml"
+export COCALC_BAY_SQLITE_BACKUP_LOCK_WAIT_SECONDS=5
 export COCALC_BAY_PGBACKREST_S3_BUCKET=test-bucket
 export COCALC_BAY_PGBACKREST_S3_ENDPOINT=example.r2.cloudflarestorage.com
 export COCALC_BAY_PGBACKREST_S3_ACCESS_KEY=test-access
@@ -51,7 +52,21 @@ export COCALC_BAY_SQLITE_MIRROR_ENTRY="${TMP_ROOT}/entry.js"
 export COCALC_BAY_SQLITE_RUSTIC_BIN="${TMP_ROOT}/bin/rustic"
 touch "$COCALC_BAY_SQLITE_MIRROR_ENTRY"
 
+# The weekly prune and hourly backup share this lock. A timer collision must
+# delay the backup rather than silently skipping an entire hourly snapshot.
+mkdir -p "$COCALC_BAY_RUN_DIR"
+(
+  exec 8> "${COCALC_BAY_RUN_DIR}/sqlite-backup.lock"
+  flock 8
+  touch "${TMP_ROOT}/lock-ready"
+  sleep 1
+) &
+lock_holder_pid=$!
+while [[ ! -e "${TMP_ROOT}/lock-ready" ]]; do
+  sleep 0.01
+done
 bash "${SCRIPT_DIR}/bay-sqlite-backup-run" >/dev/null
+wait "$lock_holder_pid"
 python3 - "$COCALC_BAY_SQLITE_BACKUP_STATUS_FILE" <<'PY'
 import json
 import sys

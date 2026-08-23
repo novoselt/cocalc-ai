@@ -25,6 +25,7 @@ assert_backup_storage_ready
 : "${COCALC_BAY_SQLITE_RETENTION_WEEKLY:=8}"
 : "${COCALC_BAY_SQLITE_RETENTION_MONTHLY:=12}"
 : "${COCALC_BAY_SQLITE_BACKUP_LOCK:=${COCALC_BAY_RUN_DIR}/sqlite-backup.lock}"
+: "${COCALC_BAY_SQLITE_BACKUP_LOCK_WAIT_SECONDS:=1800}"
 
 required=(
   COCALC_BAY_PGBACKREST_S3_BUCKET
@@ -60,9 +61,9 @@ mkdir -p \
   "$(dirname "$COCALC_BAY_SQLITE_RUSTIC_PROFILE")" \
   "$(dirname "$COCALC_BAY_SQLITE_BACKUP_STATUS_FILE")"
 exec 9> "$COCALC_BAY_SQLITE_BACKUP_LOCK"
-if ! flock -n 9; then
-  bay_log "another SQLite backup or prune operation is active"
-  exit 0
+if ! flock -w "$COCALC_BAY_SQLITE_BACKUP_LOCK_WAIT_SECONDS" 9; then
+  bay_log "timed out waiting ${COCALC_BAY_SQLITE_BACKUP_LOCK_WAIT_SECONDS}s for another SQLite backup or prune operation"
+  exit 1
 fi
 
 umask 077
