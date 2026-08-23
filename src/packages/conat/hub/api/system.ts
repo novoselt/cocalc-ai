@@ -2428,6 +2428,8 @@ export interface System {
 
   backfillBayOwnership: (opts: {
     account_id?: string;
+    browser_id?: string;
+    session_hash?: string;
     bay_id?: string;
     dry_run?: boolean;
     limit_per_table?: number;

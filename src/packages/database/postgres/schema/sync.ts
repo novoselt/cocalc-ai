@@ -21,6 +21,10 @@ import {
   withPurchaseCostCentsTriggerSuspended,
 } from "./purchase-cost-cents";
 import {
+  commercialNextActionSchemaNeedsSync,
+  ensureCommercialNextActionSchema,
+} from "./commercial-next-action";
+import {
   getColumnInvariantActions,
   syncTableSchemaColumnInvariants,
 } from "./column-invariants";
@@ -437,6 +441,9 @@ export async function syncSchema(
     if (dbSchema.purchases != null) {
       await ensurePurchaseCostCentsSchema(db);
     }
+    if (dbSchema.commercial_orders != null) {
+      await ensureCommercialNextActionSchema(db);
+    }
     if (dbSchema.compute_vm_project_access != null) {
       await backfillComputeVmProjectAccess(db);
     }
@@ -521,6 +528,13 @@ export async function schemaNeedsSync(
       (await purchaseCostCentsSchemaNeedsSync(db))
     ) {
       dbg("detected missing purchase whole-cent guard");
+      return true;
+    }
+    if (
+      dbSchema.commercial_orders != null &&
+      (await commercialNextActionSchemaNeedsSync(db))
+    ) {
+      dbg("detected missing commercial next-action guard");
       return true;
     }
     dbg("schema matches");

@@ -23,6 +23,7 @@ const SOURCE_MODULES: SourceModule[] = [
   { filename: "admin-db.ts", hubGroup: "adminDb" },
   { filename: "admin-host.ts", hubGroup: "adminHost" },
   { filename: "admin-support.ts", hubGroup: "adminSupport" },
+  { filename: "commercial-orders.ts", hubGroup: "commercialOrders" },
   { filename: "compute.ts", hubGroup: "compute" },
   { filename: "db.ts", hubGroup: "db" },
   { filename: "lro.ts", hubGroup: "lro" },
@@ -44,7 +45,7 @@ const RISKY_EXPORT_PATTERN =
   /^export\s+(?:async\s+)?function\s+(\w+)|^export\s+const\s+(\w+)\s*=\s*(?:reuseInFlight\()?/gm;
 
 const DANGEROUS_RPC_NAME_PATTERN =
-  /^(?:add|admin|apply|approve|archive|assign|backup|begin|bootstrap|cancel|claim|clear|cleanup|create|delete|diagnostic|disable|dismiss|drain|exec|finalize|force|gc|generate|grant|hard|import|increase|issue|leave|logs|mark|merge|move|open|prepare|prune|publish|pull|purchase|purge|query|reconcile|record|release|remove|repair|request|reserve|resize|restart|restore|rehome|review|revoke|rollout|rotate|run|save|scan|send|set|spam|start|stop|sync|terminate|update|upgrade|upsert)/i;
+  /^(?:add|admin|apply|approve|archive|assign|backfill|backup|begin|bootstrap|cancel|claim|clear|cleanup|create|delete|diagnostic|disable|dismiss|drain|end|exec|finalize|force|gc|generate|grant|hard|import|increase|issue|leave|link|logs|mark|merge|move|open|prepare|provision|prune|publish|pull|purchase|purge|query|reconcile|record|release|remove|repair|request|reserve|resize|restart|restore|rehome|review|revise|revoke|rollout|rotate|run|save|scan|send|set|spam|start|stop|sync|terminate|update|upgrade|upsert|void)/i;
 
 function exportedNames(source: string): string[] {
   const names: string[] = [];

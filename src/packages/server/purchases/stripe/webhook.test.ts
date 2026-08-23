@@ -16,6 +16,7 @@ const mockSetUsageSubscription = jest.fn();
 const mockCurrentStripeSite = jest.fn();
 const mockIsValidAccount = jest.fn();
 const mockAdminAlert = jest.fn();
+const mockAcceptCommercialStripeWebhookEvent = jest.fn();
 
 function createWebhookMocks({
   body,
@@ -92,6 +93,11 @@ jest.mock("@cocalc/server/messages/admin-alert", () => ({
   default: (...args: any[]) => mockAdminAlert(...args),
 }));
 
+jest.mock("@cocalc/server/commercial-orders/invoices/stripe", () => ({
+  acceptCommercialStripeWebhookEvent: (...args: any[]) =>
+    mockAcceptCommercialStripeWebhookEvent(...args),
+}));
+
 describe("Stripe webhook processing", () => {
   const stripe = {
     invoices: {
@@ -118,6 +124,7 @@ describe("Stripe webhook processing", () => {
     mockProcessPaymentIntent.mockResolvedValue(101);
     mockCreateCreditFromPaidStripeInvoice.mockResolvedValue(true);
     mockSetUsageSubscription.mockResolvedValue(undefined);
+    mockAcceptCommercialStripeWebhookEvent.mockResolvedValue(false);
     stripe.paymentIntents.retrieve.mockResolvedValue({
       id: "pi_123",
       metadata: {
@@ -185,6 +192,70 @@ describe("Stripe webhook processing", () => {
     expect(mockCreateCreditFromPaidStripeInvoice).toHaveBeenCalledWith(
       expect.objectContaining({ id: "in_123" }),
     );
+  });
+
+  it("queues commercial paid invoices without creating account credit", async () => {
+    mockAcceptCommercialStripeWebhookEvent.mockResolvedValue(true);
+    const { processStripeWebhookEvent } = await import("./webhook");
+
+    await expect(
+      processStripeWebhookEvent({
+        id: "evt_commercial",
+        type: "invoice.paid",
+        data: {
+          object: {
+            id: "in_commercial",
+            metadata: {
+              flow: "commercial_order",
+              commercial_order_id: "co_1",
+              commercial_invoice_id: "ci_1",
+              cocalc_site: "cocalc.ai",
+            },
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      processed: true,
+      type: "invoice.paid",
+      action: "commercial-invoice-queued",
+    });
+
+    expect(stripe.invoices.retrieve).not.toHaveBeenCalled();
+    expect(mockCreateCreditFromPaidStripeInvoice).not.toHaveBeenCalled();
+    expect(mockProcessPaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed instead of crediting malformed commercial invoice metadata", async () => {
+    stripe.invoices.retrieve.mockResolvedValue({
+      id: "in_malformed_commercial",
+      metadata: {
+        flow: "commercial_order",
+        commercial_invoice_id: "ci_1",
+        cocalc_site: "cocalc.ai",
+      },
+      paid: true,
+      total_excluding_tax: 390000,
+      currency: "usd",
+      lines: { data: [] },
+    });
+    const { processStripeWebhookEvent } = await import("./webhook");
+
+    await processStripeWebhookEvent({
+      id: "evt_malformed_commercial",
+      type: "invoice.paid",
+      data: {
+        object: {
+          id: "in_malformed_commercial",
+          metadata: {
+            flow: "commercial_order",
+            commercial_invoice_id: "ci_1",
+            cocalc_site: "cocalc.ai",
+          },
+        },
+      },
+    });
+
+    expect(mockCreateCreditFromPaidStripeInvoice).not.toHaveBeenCalled();
   });
 
   it("records active usage subscriptions", async () => {
