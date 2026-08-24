@@ -564,14 +564,21 @@ export async function putR2ObjectFromBuffer({
   body,
   contentType,
   cacheControl,
+  metadata,
 }: {
   auth: R2ObjectStoreAuth;
   key: string;
   body: Buffer | string;
   contentType?: string;
   cacheControl?: string;
+  metadata?: Record<string, string | number | boolean | undefined>;
 }): Promise<void> {
   const buffer = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  const metadataHeaders: Record<string, string | number | undefined> = {};
+  for (const [name, value] of Object.entries(metadata ?? {})) {
+    if (value == null) continue;
+    metadataHeaders[`x-amz-meta-${name.toLowerCase()}`] = `${value}`;
+  }
   const response = await sendR2Request({
     auth,
     method: "PUT",
@@ -581,6 +588,7 @@ export async function putR2ObjectFromBuffer({
       "content-type": contentType,
       "cache-control": cacheControl,
       "content-length": buffer.length,
+      ...metadataHeaders,
     },
     label: `R2 PUT ${key}`,
   });
