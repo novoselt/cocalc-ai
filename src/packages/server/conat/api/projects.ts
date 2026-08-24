@@ -3431,22 +3431,14 @@ export async function getCourseStudentAccess({
     const claimables = await listClaimableMembershipPackagesForAccount({
       account_id,
     });
-    let matchingSiteLicense: (typeof claimables)[number] | undefined;
-    for (const pkg of claimables) {
-      if (pkg.kind !== "site") {
-        continue;
-      }
-      const pkgTier = await getSeedMembershipTierById({
-        id: pkg.membership_class,
-      });
-      if (
-        pkg.membership_class === requiredMembershipClass ||
-        (pkgTier?.priority ?? 0) >= requiredPriority
-      ) {
-        matchingSiteLicense = pkg;
-        break;
-      }
-    }
+    // Course access must claim the configured pool, not silently replace it
+    // with a higher approval-only pool such as an Instructor membership.
+    const matchingSiteLicense = claimables.find(
+      (pkg) =>
+        pkg.kind === "site" &&
+        !pkg.requires_approval &&
+        pkg.membership_class === requiredMembershipClass,
+    );
     if (matchingSiteLicense) {
       return {
         status: "site-license-claimable",
