@@ -541,9 +541,11 @@ function ReconcilePreviewModal({
 export function ReceivableOrderDetail({
   id,
   onBack,
+  onOpenCustomer,
 }: {
   id: string;
   onBack: () => void;
+  onOpenCustomer?: (id: string) => void;
 }) {
   const api = webapp_client.conat_client.hub.commercialOrders;
   const [order, setOrder] = useState<CommercialOrder | null>(null);
@@ -1278,6 +1280,19 @@ export function ReceivableOrderDetail({
             </Descriptions.Item>
             <Descriptions.Item label="Customer reference">
               {order.customer_reference ?? "Not set"}
+            </Descriptions.Item>
+            <Descriptions.Item label="Customer record">
+              {order.crm_organization_id && onOpenCustomer ? (
+                <Button
+                  type="link"
+                  style={{ height: "auto", padding: 0 }}
+                  onClick={() => onOpenCustomer(order.crm_organization_id!)}
+                >
+                  Open Customer 360
+                </Button>
+              ) : (
+                "Not linked"
+              )}
             </Descriptions.Item>
             <Descriptions.Item label="Stripe customer">
               {order.stripe_customer_id ?? "Not linked"}

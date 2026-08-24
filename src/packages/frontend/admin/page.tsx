@@ -42,6 +42,7 @@ import { AdminDataExplorer } from "./admin-data-explorer";
 import { RetentionAdminOverview } from "./retention-overview";
 import { ActiveUsersMapAdmin } from "./active-users-map";
 import { ReceivablesAdmin } from "./receivables";
+import { CustomersAdmin } from "./customers";
 import {
   getAdminUrlPath,
   normalizeAdminRoute,
@@ -63,6 +64,7 @@ const STAR_HIDDEN_ADMIN_SECTIONS = new Set<string>([
   "sso",
   "admin-purchase",
   "site-licenses",
+  "customers",
   "receivables",
 ]);
 
@@ -141,6 +143,10 @@ export function AdminPage({
     navigate({ kind: "receivables-detail", id });
   }
 
+  function navigateToCustomer(id: string) {
+    navigate({ kind: "customer-detail", id });
+  }
+
   function navigateToNewReceivable() {
     navigate({ kind: "receivables-create" });
   }
@@ -153,6 +159,7 @@ export function AdminPage({
     closeSiteSettings: () => navigate({ kind: "index" }),
     navigateToNewReceivable,
     navigateToReceivable,
+    navigateToCustomer,
     navigateToSection,
   }).filter(
     (section) =>
@@ -168,11 +175,14 @@ export function AdminPage({
   const activeGroupKey =
     activeNavItem?.group == null ? undefined : activeNavItem.group;
   const activeSectionKey =
-    route.kind === "receivables-detail" || route.kind === "receivables-create"
-      ? "receivables"
-      : route.kind === "index"
-        ? route.section
-        : undefined;
+    route.kind === "customer-detail"
+      ? "customers"
+      : route.kind === "receivables-detail" ||
+          route.kind === "receivables-create"
+        ? "receivables"
+        : route.kind === "index"
+          ? route.section
+          : undefined;
   const activeSection = activeSectionKey
     ? sectionByKey.get(activeSectionKey)
     : undefined;
@@ -304,12 +314,22 @@ export function AdminPage({
   }
 
   function renderActiveContent() {
+    if (route.kind === "customer-detail") {
+      return (
+        <CustomersAdmin
+          customerId={route.id}
+          onBack={() => navigateToSection("customers")}
+          onOpenCustomer={navigateToCustomer}
+        />
+      );
+    }
     if (route.kind === "receivables-detail") {
       return (
         <ReceivablesAdmin
           orderId={route.id}
           onBack={() => navigateToSection("receivables")}
           onCreateOrder={navigateToNewReceivable}
+          onOpenCustomer={navigateToCustomer}
           onOpenOrder={navigateToReceivable}
         />
       );
@@ -320,6 +340,7 @@ export function AdminPage({
           creating
           onBack={() => navigateToSection("receivables")}
           onCreateOrder={navigateToNewReceivable}
+          onOpenCustomer={navigateToCustomer}
           onOpenOrder={navigateToReceivable}
         />
       );
@@ -451,11 +472,13 @@ function getAdminSections({
   closeSiteSettings,
   navigateToNewReceivable,
   navigateToReceivable,
+  navigateToCustomer,
   navigateToSection,
 }: {
   closeSiteSettings: () => void;
   navigateToNewReceivable: () => void;
   navigateToReceivable: (id: string) => void;
+  navigateToCustomer: (id: string) => void;
   navigateToSection: (section: AdminSection) => void;
 }): AdminSectionDefinition[] {
   return [
@@ -577,6 +600,23 @@ function getAdminSections({
       component: () => <SsoAdmin />,
     },
     {
+      key: "customers",
+      title: "Customers",
+      description:
+        "Coordinate institutional relationships, pipeline, contacts, and follow-up.",
+      pageTitle: "Customer relationships",
+      pageDescription:
+        "A shared operational view of every institution, decision maker, opportunity, and next action.",
+      icon: "users",
+      group: "commercial",
+      component: () => (
+        <CustomersAdmin
+          onBack={() => navigateToSection("customers")}
+          onOpenCustomer={navigateToCustomer}
+        />
+      ),
+    },
+    {
       key: "receivables",
       title: "Accounts Receivable",
       description:
@@ -590,6 +630,7 @@ function getAdminSections({
         <ReceivablesAdmin
           onBack={() => navigateToSection("receivables")}
           onCreateOrder={navigateToNewReceivable}
+          onOpenCustomer={navigateToCustomer}
           onOpenOrder={navigateToReceivable}
         />
       ),
@@ -733,6 +774,7 @@ function getOrderedNavigationItems(
 }
 
 function getActiveMenuKey(route: AdminRoute): AdminMenuKey {
+  if (route.kind === "customer-detail") return "customers";
   if (
     route.kind === "receivables-detail" ||
     route.kind === "receivables-create"

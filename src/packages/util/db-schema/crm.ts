@@ -1,802 +1,706 @@
 /*
-NOTES:
+ *  This file is part of CoCalc: Copyright (c) 2026 Sagemath, Inc.
+ *  License: MS-RSL - see LICENSE.md for details
+ */
 
-- right now the Table function types.ts also automatically does some
-extra things for all crm_ tables to ensure safety, e.g., ensuring admin.
+import { type FieldSpec, Table } from "./types";
 
-- do NOT use defaults for get.fields!  Those are set by the frontend crm code when creating records.
-  Also, they are not compatible with null-ing fields.
+function required(field: FieldSpec): FieldSpec {
+  return { ...field, not_null: true };
+}
 
-*/
+function requiredWithDefault(field: FieldSpec, pgDefault: string): FieldSpec {
+  return {
+    ...field,
+    not_null: true,
+    pg_default: pgDefault,
+    pg_null_backfill: pgDefault,
+  };
+}
 
-import { FieldSpec, Table } from "./types";
-import { blue, green, red, yellow } from "@ant-design/colors";
+function requiredTimestamp(desc: string): FieldSpec {
+  return requiredWithDefault(
+    { type: "timestamp", pg_type: "TIMESTAMPTZ", desc },
+    "now()",
+  );
+}
 
+function nullableTimestamp(desc: string): FieldSpec {
+  return { type: "timestamp", pg_type: "TIMESTAMPTZ", desc };
+}
+
+function versionField(): FieldSpec {
+  return requiredWithDefault(
+    { type: "integer", desc: "Optimistic concurrency version." },
+    "1",
+  );
+}
+
+// These generic field specifications predate the abandoned CRM editor and are
+// still imported by unrelated operational schemas.
 export const NOTES: FieldSpec = {
   type: "string",
   desc: "Open ended text in markdown about this item.",
-  render: {
-    type: "markdown",
-    editable: true,
-  },
-} as const;
+  render: { type: "markdown", editable: true },
+};
 
 export const ID: FieldSpec = {
   type: "integer",
   desc: "Automatically generated sequential id that uniquely determines this row.",
   pg_type: "SERIAL UNIQUE",
   noCoerce: true,
-} as const;
+};
 
-const TAG_TYPE = `INTEGER[]`;
-
-const TAGS_FIELD: FieldSpec = {
-  type: "array",
-  pg_type: TAG_TYPE,
-  desc: "Tags applied to this record.",
-  render: { type: "tags", editable: true },
-} as const;
-
-const PRORITIES_FIELD: FieldSpec = {
-  type: "string",
-  pg_type: "VARCHAR(30)",
-  desc: "Priority of this record",
-  render: {
-    type: "select",
-    editable: true,
-    options: ["low", "normal", "high", "urgent"],
-    colors: [yellow[5], blue[5], green[5], red[5]],
-    priority: true,
-  },
-} as const;
-
-const STATUS_FIELD: FieldSpec = {
-  type: "string",
-  pg_type: "VARCHAR(30)",
-  desc: "Status of this record",
-  render: {
-    type: "select",
-    editable: true,
-    options: ["new", "open", "pending", "active", "solved"],
-    colors: [yellow[5], red[5], green[5], blue[5], "#888"],
-  },
-} as const;
-
-export const CREATED: FieldSpec = {
-  type: "timestamp",
-  desc: "When the record was created.",
-} as const;
-
-export const LAST_EDITED: FieldSpec = {
-  type: "timestamp",
-  desc: "When this record was last edited.",
-} as const;
-
-const LAST_MODIFIED_BY: FieldSpec = {
-  type: "uuid",
-  desc: "Account that last modified this task.",
-  render: { type: "account" },
-} as const;
-
-const ASSIGNEE: FieldSpec = {
-  type: "uuid",
-  desc: "Account that is responsible for resolving this.",
-  render: {
-    type: "assignee",
-    editable: true,
-  },
-} as const;
-
-Table({
-  name: "crm_people",
-  fields: {
-    id: ID,
-    created: CREATED,
-    last_edited: LAST_EDITED,
-    name: {
-      type: "string",
-      pg_type: "VARCHAR(254)",
-      desc: "The name of this person.",
-      render: {
-        type: "text",
-        maxLength: 254,
-        editable: true,
-      },
-    },
-    email_addresses: {
-      type: "array",
-      pg_type: "VARCHAR(1000)",
-      desc: "Email addresses for this person, separated by commas",
-      render: {
-        type: "text",
-        maxLength: 1000,
-        editable: true,
-      },
-    },
-    account_ids: {
-      title: "Accounts",
-      type: "array",
-      pg_type: "UUID[]",
-      desc: "Array of 0 or more uuid's of CoCalc accounts that this person may have.",
-      render: {
-        type: "accounts",
-        editable: true,
-      },
-    },
-    deleted: {
-      type: "boolean",
-      desc: "True if the person has been deleted.",
-    },
-    notes: NOTES,
-    // https://stackoverflow.com/questions/13837258/what-is-an-appropriate-data-type-to-store-a-timezone
-    timezone: {
-      type: "string",
-      desc: "The person's time zone, e.g., 'Europe/Paris' or 'US/Pacific'.",
-      render: {
-        type: "text",
-        maxLength: 254,
-        editable: true,
-      },
-    },
-    tags: TAGS_FIELD,
-  },
-  rules: {
-    desc: "People",
-    primary_key: "id",
-    user_query: {
-      get: {
-        pg_where: [],
-        admin: true,
-        fields: {
-          id: null,
-          created: null,
-          last_edited: null,
-          email_addresses: null,
-          name: null,
-          account_ids: null,
-          deleted: null,
-          notes: null,
-          tags: null,
-        },
-      },
-      set: {
-        admin: true,
-        fields: {
-          id: true,
-          created: true,
-          last_edited: true,
-          name: true,
-          email_addresses: true,
-          account_ids: true,
-          deleted: true,
-          notes: true,
-          tags: null,
-        },
-        required_fields: {
-          last_edited: true, // TODO: make automatic on any set query
-        },
-      },
-    },
-  },
-});
-
-const ORGANIZATIONS = {
-  type: "array",
-  pg_type: "INTEGER[]",
-  desc: "Zero or more organizations in the Organizations table",
-  render: {
-    type: "organizations",
-    editable: true,
-  },
-} as FieldSpec;
-
-export const CREATED_BY = {
+export const CREATED_BY: FieldSpec = {
   type: "uuid",
   desc: "Account that created this record.",
   render: { type: "account" },
-} as FieldSpec;
+};
 
-const PERSON = {
-  type: "integer",
-  desc: "One person in the People table",
-  render: {
-    type: "person",
-    editable: true,
-  },
-} as FieldSpec;
+// CRM records intentionally have no direct user_query surface. The audited,
+// seed-routed adminCrm service is the only supported read and mutation path.
 
-const PEOPLE = {
-  type: "array",
-  pg_type: "INTEGER[]",
-  desc: "Array of 0 or more people in the People table that are connected with this",
-  render: {
-    type: "people",
-    editable: true,
-  },
-} as FieldSpec;
-
-// TODO: add image -- probably want to use blob table (?) but maybe do like with projects. Not sure.
 Table({
   name: "crm_organizations",
-  fields: {
-    id: ID,
-    created: CREATED,
-    last_edited: LAST_EDITED,
-    name: {
-      type: "string",
-      pg_type: "VARCHAR(254)",
-      desc: "The name of this organization.",
-      render: {
-        type: "text",
-        maxLength: 254,
-        editable: true,
-      },
-    },
-    people: PEOPLE,
-    organizations: {
-      title: "Related Organizations",
-      type: "array",
-      pg_type: "INTEGER[]",
-      desc: "Array of 0 or more organization that are connected with this organization",
-      render: {
-        type: "organizations",
-        editable: true,
-      },
-    },
-    deleted: {
-      type: "boolean",
-      desc: "True if this org has been deleted.",
-    },
-    notes: NOTES,
-    timezone: {
-      type: "string",
-      desc: "The organizations's time zone, e.g., 'Europe/Paris' or 'US/Pacific'.",
-      render: {
-        type: "text",
-        editable: true,
-      },
-    },
-    domain: {
-      type: "string",
-      pg_type: "VARCHAR(254)", // todo -- should this be an array of domain names?
-      desc: "Domain name of this org, e.g., math.washington.edu.",
-      render: {
-        type: "text",
-        editable: true,
-        maxLength: 254,
-      },
-    },
-    tags: TAGS_FIELD,
-  },
   rules: {
-    desc: "Organizations",
     primary_key: "id",
-    user_query: {
-      get: {
-        pg_where: [],
-        admin: true,
-        fields: {
-          id: null,
-          created: null,
-          last_edited: null,
-          name: null,
-          people: null,
-          organizations: null,
-          deleted: null,
-          notes: null,
-          domain: null,
-          tags: null,
-        },
-      },
-      set: {
-        admin: true,
-        fields: {
-          id: true,
-          created: true,
-          last_edited: true,
-          name: true,
-          people: true,
-          organizations: true,
-          deleted: true,
-          notes: true,
-          domain: true,
-          tags: true,
-        },
-        required_fields: {
-          last_edited: true, // TODO: make automatic on any set query
-        },
-      },
+    pg_indexes: [
+      "customer_number",
+      "display_name",
+      "legal_name",
+      "organization_type",
+      "lifecycle_stage",
+      "relationship_owner_account_id",
+      "parent_organization_id",
+      "status",
+      "merged_into_organization_id",
+      "updated_at",
+    ],
+  },
+  fields: {
+    id: { type: "uuid", desc: "Canonical CRM organization id." },
+    customer_number: required({
+      type: "string",
+      desc: "Stable customer display key.",
+      unique: true,
+    }),
+    display_name: required({
+      type: "string",
+      desc: "Customer display name.",
+    }),
+    legal_name: { type: "string", desc: "Optional legal entity name." },
+    aliases: requiredWithDefault(
+      { type: "array", pg_type: "TEXT[]", desc: "Reviewed aliases." },
+      "'{}'::text[]",
+    ),
+    website: { type: "string", desc: "Organization website." },
+    timezone: { type: "string", desc: "IANA timezone." },
+    organization_type: required({
+      type: "string",
+      desc: "Constrained organization type.",
+    }),
+    lifecycle_stage: required({
+      type: "string",
+      desc: "Current customer lifecycle stage.",
+    }),
+    relationship_owner_account_id: {
+      type: "uuid",
+      desc: "CoCalc admin responsible for this customer.",
+      render: { type: "account" },
     },
+    parent_organization_id: {
+      type: "uuid",
+      desc: "Optional parent CRM organization.",
+    },
+    status: requiredWithDefault(
+      { type: "string", desc: "Active, merged, or archived." },
+      "'active'::text",
+    ),
+    merged_into_organization_id: {
+      type: "uuid",
+      desc: "Canonical merge destination.",
+    },
+    created_by_account_id: required({
+      type: "uuid",
+      desc: "Creating admin.",
+      render: { type: "account" },
+    }),
+    updated_by_account_id: required({
+      type: "uuid",
+      desc: "Last updating admin.",
+      render: { type: "account" },
+    }),
+    created_at: requiredTimestamp("Creation time."),
+    updated_at: requiredTimestamp("Last update time."),
+    version: versionField(),
   },
 });
 
 Table({
-  name: "crm_support_tickets",
-  fields: {
-    id: ID,
-    subject: {
-      type: "string",
-      pg_type: "VARCHAR(254)",
-      desc: "Subject of the message. Must be short.",
-      render: {
-        type: "text",
-        maxLength: 254,
-        editable: true,
-      },
-    },
-    created: CREATED,
-    created_by: PERSON,
-    last_edited: LAST_EDITED,
-    last_modified_by: LAST_MODIFIED_BY,
-    assignee: ASSIGNEE,
-    tasks: {
-      title: "Tasks",
-      type: "array",
-      pg_type: "integer[]",
-      desc: "Tasks associated with this support ticket.",
-    },
-    cc: {
-      type: "array",
-      pg_type: "UUID[]",
-      desc: "Zero or more support accounts that care to be contacted about updates to this ticket.",
-    },
-    tags: TAGS_FIELD,
-    priority: PRORITIES_FIELD,
-    status: STATUS_FIELD,
-    type: {
-      type: "string",
-      pg_type: "VARCHAR(30)",
-      desc: "The type of this ticket: question, incident, problem, task, etc.",
-      render: { type: "text", editable: true, maxLength: 30 },
-    },
-  },
+  name: "crm_organization_domains",
   rules: {
-    desc: "Support Tickets",
     primary_key: "id",
-    user_query: {
-      get: {
-        pg_where: [],
-        admin: true,
-        fields: {
-          id: null,
-          subject: null,
-          created: null,
-          created_by: null,
-          last_edited: null,
-          last_modified_by: null,
-          assignee: null,
-          tasks: null,
-          cc: null,
-          tags: null,
-          type: null,
-          priority: null,
-          status: null,
-        },
-      },
-      set: {
-        admin: true,
-        fields: {
-          id: true,
-          subject: true,
-          created: true,
-          last_edited: true,
-          last_modified_by: true,
-          created_by: true,
-          assignee: true,
-          tasks: true,
-          cc: true,
-          tags: true,
-          type: true,
-          priority: true,
-          status: true,
-        },
-        required_fields: {
-          last_edited: true, // TODO: make automatic on any set query
-        },
-      },
-    },
+    pg_indexes: [
+      "organization_id",
+      "normalized_domain",
+      "kind",
+      "state",
+      "updated_at",
+    ],
   },
-});
-
-Table({
-  name: "crm_support_messages",
   fields: {
-    id: ID,
-    ticket_id: {
-      type: "integer",
-      desc: "Support ticket id that this message is connected to.",
-    },
-    created: {
-      type: "timestamp",
-      desc: "When the message was created.  (We may save periodically before actually marking it sent.)",
-    },
-    last_edited: {
-      type: "timestamp",
-      desc: "When this message was actually sent.",
-    },
-    sent_by: PERSON,
-    body: {
+    id: { type: "uuid", desc: "Domain relation id." },
+    organization_id: required({
+      type: "uuid",
+      desc: "CRM organization.",
+    }),
+    normalized_domain: required({
       type: "string",
-      desc: "Actual content of the message.  This is interpretted as markdown.",
-      render: {
-        type: "markdown",
-        editable: true,
-        maxLength: 20000,
-      },
+      desc: "Normalized lower-case ASCII domain.",
+    }),
+    display_domain: required({
+      type: "string",
+      desc: "Reviewed display form.",
+    }),
+    kind: required({
+      type: "string",
+      desc: "Primary, secondary, department, or legacy.",
+    }),
+    state: required({
+      type: "string",
+      desc: "Suggested, verified, rejected, or retired.",
+    }),
+    verification_method: {
+      type: "string",
+      desc: "How ownership was reviewed.",
     },
-    internal: {
-      type: "boolean",
-      desc: "If true, the message is internal and only visible to support staff.",
-      render: {
+    evidence_reference: { type: "string", desc: "Bounded evidence reference." },
+    generic_domain: requiredWithDefault(
+      {
         type: "boolean",
-        editable: true,
+        desc: "Whether this is a disposable or generic domain.",
       },
-    },
+      "false",
+    ),
+    created_by_account_id: required({
+      type: "uuid",
+      desc: "Creating admin.",
+      render: { type: "account" },
+    }),
+    updated_by_account_id: required({
+      type: "uuid",
+      desc: "Last updating admin.",
+      render: { type: "account" },
+    }),
+    created_at: requiredTimestamp("Creation time."),
+    updated_at: requiredTimestamp("Last update time."),
+    verified_at: nullableTimestamp("Verification time."),
+    retired_at: nullableTimestamp("Retirement time."),
+    version: versionField(),
   },
+});
+
+Table({
+  name: "crm_people",
   rules: {
-    desc: "Support Messages",
     primary_key: "id",
-    user_query: {
-      get: {
-        pg_where: [],
-        admin: true,
-        fields: {
-          id: null,
-          ticket_id: null,
-          created: null,
-          last_edited: null,
-          sent_by: null,
-          body: null,
-          internal: null,
-        },
-      },
-      set: {
-        admin: true,
-        fields: {
-          id: true,
-          ticket_id: true,
-          created: true,
-          last_edited: true,
-          sent_by: true,
-          body: true,
-          internal: true,
-        },
-        required_fields: {
-          last_edited: true, // TODO: make automatic on any set query
-        },
-      },
+    pg_indexes: [
+      "display_name",
+      "status",
+      "merged_into_person_id",
+      "updated_at",
+    ],
+  },
+  fields: {
+    id: { type: "uuid", desc: "Canonical CRM person id." },
+    display_name: required({
+      type: "string",
+      desc: "Person display name.",
+    }),
+    timezone: { type: "string", desc: "IANA timezone." },
+    status: requiredWithDefault(
+      { type: "string", desc: "Active, merged, or archived." },
+      "'active'::text",
+    ),
+    merged_into_person_id: {
+      type: "uuid",
+      desc: "Canonical merge destination.",
     },
+    created_by_account_id: required({
+      type: "uuid",
+      desc: "Creating admin.",
+      render: { type: "account" },
+    }),
+    updated_by_account_id: required({
+      type: "uuid",
+      desc: "Last updating admin.",
+      render: { type: "account" },
+    }),
+    created_at: requiredTimestamp("Creation time."),
+    updated_at: requiredTimestamp("Last update time."),
+    version: versionField(),
+  },
+});
+
+Table({
+  name: "crm_person_emails",
+  rules: {
+    primary_key: "id",
+    pg_indexes: ["person_id", "normalized_email", "is_primary"],
+  },
+  fields: {
+    id: { type: "uuid", desc: "Person email relation id." },
+    person_id: required({ type: "uuid", desc: "CRM person." }),
+    email_address: required({
+      type: "string",
+      desc: "Reviewed display email.",
+    }),
+    normalized_email: required({
+      type: "string",
+      desc: "Normalized email identity.",
+    }),
+    kind: requiredWithDefault(
+      { type: "string", desc: "Work, billing, personal, or other." },
+      "'work'::text",
+    ),
+    is_primary: requiredWithDefault(
+      { type: "boolean", desc: "Primary email for this person." },
+      "false",
+    ),
+    verified: requiredWithDefault(
+      { type: "boolean", desc: "Whether the relation was verified." },
+      "false",
+    ),
+    created_at: requiredTimestamp("Creation time."),
+    updated_at: requiredTimestamp("Last update time."),
+    version: versionField(),
+  },
+});
+
+Table({
+  name: "crm_person_accounts",
+  rules: {
+    primary_key: "id",
+    pg_indexes: ["person_id", "account_id", "state"],
+  },
+  fields: {
+    id: { type: "uuid", desc: "Person/account relation id." },
+    person_id: required({ type: "uuid", desc: "CRM person." }),
+    account_id: required({
+      type: "uuid",
+      desc: "CoCalc account.",
+      render: { type: "account" },
+    }),
+    state: requiredWithDefault(
+      {
+        type: "string",
+        desc: "Suggested, verified, rejected, or retired.",
+      },
+      "'suggested'::text",
+    ),
+    evidence_reference: { type: "string", desc: "Bounded evidence reference." },
+    created_at: requiredTimestamp("Creation time."),
+    updated_at: requiredTimestamp("Last update time."),
+    version: versionField(),
+  },
+});
+
+Table({
+  name: "crm_organization_people",
+  rules: {
+    primary_key: "id",
+    pg_indexes: ["organization_id", "person_id", "state"],
+  },
+  fields: {
+    id: { type: "uuid", desc: "Organization/person relation id." },
+    organization_id: required({
+      type: "uuid",
+      desc: "CRM organization.",
+    }),
+    person_id: required({ type: "uuid", desc: "CRM person." }),
+    roles: requiredWithDefault(
+      {
+        type: "array",
+        pg_type: "TEXT[]",
+        desc: "Constrained relationship roles.",
+      },
+      "'{}'::text[]",
+    ),
+    title: { type: "string", desc: "Contact title." },
+    department: { type: "string", desc: "Contact department." },
+    state: requiredWithDefault(
+      { type: "string", desc: "Active, former, or retired." },
+      "'active'::text",
+    ),
+    created_at: requiredTimestamp("Creation time."),
+    updated_at: requiredTimestamp("Last update time."),
+    version: versionField(),
+  },
+});
+
+Table({
+  name: "crm_external_references",
+  rules: {
+    primary_key: "id",
+    pg_indexes: [
+      "organization_id",
+      "person_id",
+      "opportunity_id",
+      "provider",
+      "object_kind",
+      "external_id",
+      "verification_state",
+    ],
+  },
+  fields: {
+    id: { type: "uuid", desc: "External reference id." },
+    organization_id: required({
+      type: "uuid",
+      desc: "CRM organization.",
+    }),
+    person_id: { type: "uuid", desc: "Optional CRM person." },
+    opportunity_id: { type: "uuid", desc: "Optional CRM opportunity." },
+    provider: required({
+      type: "string",
+      desc: "Reviewed external provider.",
+    }),
+    object_kind: required({
+      type: "string",
+      desc: "Constrained external object kind.",
+    }),
+    external_id: required({
+      type: "string",
+      desc: "Stable provider identifier.",
+    }),
+    label: { type: "string", desc: "Redacted display label." },
+    metadata: requiredWithDefault(
+      { type: "map", desc: "Bounded reviewed metadata." },
+      "'{}'::jsonb",
+    ),
+    verification_state: requiredWithDefault(
+      {
+        type: "string",
+        desc: "Suggested, verified, rejected, or retired.",
+      },
+      "'suggested'::text",
+    ),
+    created_by_account_id: required({
+      type: "uuid",
+      desc: "Creating admin.",
+      render: { type: "account" },
+    }),
+    updated_by_account_id: required({
+      type: "uuid",
+      desc: "Last updating admin.",
+      render: { type: "account" },
+    }),
+    created_at: requiredTimestamp("Creation time."),
+    updated_at: requiredTimestamp("Last update time."),
+    version: versionField(),
+  },
+});
+
+Table({
+  name: "crm_opportunities",
+  rules: {
+    primary_key: "id",
+    pg_indexes: [
+      "organization_id",
+      "kind",
+      "stage",
+      "owner_account_id",
+      "expected_close_date",
+      "commercial_order_id",
+      "updated_at",
+    ],
+  },
+  fields: {
+    id: { type: "uuid", desc: "Opportunity id." },
+    organization_id: required({
+      type: "uuid",
+      desc: "CRM organization.",
+    }),
+    name: required({ type: "string", desc: "Short opportunity name." }),
+    kind: required({
+      type: "string",
+      desc: "Constrained opportunity kind.",
+    }),
+    stage: requiredWithDefault(
+      { type: "string", desc: "Validated opportunity stage." },
+      "'discovery'::text",
+    ),
+    owner_account_id: required({
+      type: "uuid",
+      desc: "Responsible admin.",
+      render: { type: "account" },
+    }),
+    expected_value: requiredWithDefault(
+      {
+        type: "number",
+        pg_type: "NUMERIC(20,10)",
+        desc: "Expected commercial value.",
+      },
+      "0",
+    ),
+    currency: requiredWithDefault(
+      { type: "string", desc: "ISO currency." },
+      "'usd'::text",
+    ),
+    expected_close_date: required({
+      type: "timestamp",
+      pg_type: "DATE",
+      desc: "Expected close date.",
+    }),
+    service_starts_at: nullableTimestamp("Expected service start."),
+    service_ends_at: nullableTimestamp("Expected service end."),
+    loss_reason: { type: "string", desc: "Required reason when lost." },
+    commercial_order_id: { type: "uuid", desc: "Won commercial order." },
+    source_zendesk_ticket_ids: requiredWithDefault(
+      {
+        type: "array",
+        pg_type: "INTEGER[]",
+        desc: "Source Zendesk tickets.",
+      },
+      "'{}'::integer[]",
+    ),
+    description: { type: "string", desc: "Bounded internal description." },
+    created_by_account_id: required({
+      type: "uuid",
+      desc: "Creating admin.",
+      render: { type: "account" },
+    }),
+    updated_by_account_id: required({
+      type: "uuid",
+      desc: "Last updating admin.",
+      render: { type: "account" },
+    }),
+    created_at: requiredTimestamp("Creation time."),
+    updated_at: requiredTimestamp("Last update time."),
+    version: versionField(),
   },
 });
 
 Table({
   name: "crm_tasks",
-  fields: {
-    id: ID,
-    subject: {
-      type: "string",
-      pg_type: "VARCHAR(254)",
-      desc: "Short summary of this tasks.",
-      render: {
-        type: "text",
-        maxLength: 254,
-        editable: true,
-      },
-    },
-    due_date: {
-      title: "Due",
-      type: "timestamp",
-      desc: "When this task is due.",
-      render: {
-        type: "timestamp",
-        editable: true,
-      },
-    },
-    created: CREATED,
-    last_edited: LAST_EDITED,
-    closed: {
-      type: "timestamp",
-      title: "When closed",
-      desc: "When the task was marked as done.",
-      render: {
-        type: "timestamp",
-        editable: false,
-      },
-    },
-    done: {
-      type: "boolean",
-      desc: "The task is done.",
-      render: {
-        type: "boolean",
-        editable: true,
-        whenField: "closed",
-      },
-    },
-    status: STATUS_FIELD,
-    progress: {
-      type: "integer",
-      desc: "Progress on this task, as a number from 0 to 100.",
-      render: {
-        type: "percent",
-        editable: true,
-        steps: 5,
-      },
-    },
-    priority: PRORITIES_FIELD,
-    support_ticket: {
-      type: "integer",
-      desc: "Support ticket that this task is connected to, if any.",
-    },
-    people: PEOPLE,
-    organizations: ORGANIZATIONS,
-    created_by: CREATED_BY,
-    last_modified_by: LAST_MODIFIED_BY,
-    assignee: ASSIGNEE,
-    cc: {
-      type: "array",
-      pg_type: "UUID[]",
-      desc: "Zero or more accounts that care to be contacted/notified about updates to this task.",
-    },
-    tags: TAGS_FIELD,
-    description: {
-      type: "string",
-      desc: "Full markdown task description",
-      render: {
-        type: "markdown",
-        editable: true,
-      },
-    },
-  },
   rules: {
-    desc: "Tasks",
     primary_key: "id",
-    user_query: {
-      get: {
-        pg_where: [],
-        admin: true,
-        fields: {
-          id: null,
-          subject: null,
-          due_date: null,
-          created: null,
-          done: null,
-          closed: null,
-          last_edited: null,
-          status: null,
-          progress: null,
-          priority: null,
-          people: null,
-          organizations: null,
-          support_ticket: null,
-          created_by: null,
-          last_modified_by: null,
-          assignee: null,
-          cc: null,
-          tags: null,
-          description: null,
-        },
-      },
-      set: {
-        admin: true,
-        fields: {
-          id: true,
-          subject: true,
-          due_date: true,
-          created: true,
-          done: true,
-          closed: true,
-          last_edited: true,
-          status: true,
-          progress: true,
-          priority: true,
-          people: true,
-          organizations: null,
-          support_ticket: true,
-          created_by: true,
-          last_modified_by: true,
-          assignee: true,
-          cc: true,
-          tags: true,
-          description: true,
-        },
-        required_fields: {
-          last_edited: true, // TODO: make automatic on any set query
-        },
-      },
-    },
+    pg_indexes: [
+      "organization_id",
+      "person_id",
+      "opportunity_id",
+      "commercial_order_id",
+      "zendesk_ticket_id",
+      "type",
+      "state",
+      "assignee_account_id",
+      "due_at",
+      "priority",
+      "updated_at",
+    ],
   },
-});
-
-// Table of all hashtags across our crm system.  Note that these settings
-// are very global.  We may later make a similar table that is scoped to
-// a project, file, user, etc...
-Table({
-  name: "crm_tags",
   fields: {
-    id: ID,
-    name: {
-      title: "Tag",
+    id: { type: "uuid", desc: "Internal CRM task id." },
+    organization_id: required({
+      type: "uuid",
+      desc: "CRM organization.",
+    }),
+    person_id: { type: "uuid", desc: "Optional CRM person." },
+    opportunity_id: { type: "uuid", desc: "Optional CRM opportunity." },
+    commercial_order_id: { type: "uuid", desc: "Optional commercial order." },
+    zendesk_ticket_id: { type: "integer", desc: "Optional Zendesk ticket." },
+    type: required({ type: "string", desc: "Constrained task type." }),
+    state: requiredWithDefault(
+      { type: "string", desc: "Open, waiting, completed, or cancelled." },
+      "'open'::text",
+    ),
+    assignee_account_id: required({
+      type: "uuid",
+      desc: "Responsible admin.",
+      render: { type: "account" },
+    }),
+    due_at: required({
+      type: "timestamp",
+      pg_type: "TIMESTAMPTZ",
+      desc: "Required follow-up deadline.",
+    }),
+    priority: requiredWithDefault(
+      { type: "string", desc: "Low, normal, high, or urgent." },
+      "'normal'::text",
+    ),
+    subject: required({
       type: "string",
-      desc: "The name of the tag.",
-      pg_type: "VARCHAR(30)",
-      render: { type: "text", editable: true, maxLength: 30, tag: true },
-      unique: true,
+      desc: "Short action-oriented subject.",
+    }),
+    details: { type: "string", desc: "Bounded internal details." },
+    created_by_account_id: required({
+      type: "uuid",
+      desc: "Creating admin.",
+      render: { type: "account" },
+    }),
+    updated_by_account_id: required({
+      type: "uuid",
+      desc: "Last updating admin.",
+      render: { type: "account" },
+    }),
+    completed_by_account_id: {
+      type: "uuid",
+      desc: "Completing admin.",
+      render: { type: "account" },
     },
-    icon: {
-      type: "string",
-      desc: "Name of icon to show with tag",
-      pg_type: "VARCHAR(100)", // ???
-      render: { type: "icon", editable: true },
+    cancelled_by_account_id: {
+      type: "uuid",
+      desc: "Cancelling admin.",
+      render: { type: "account" },
     },
-    description: {
-      type: "string",
-      desc: "Description of the tag.",
-      pg_type: "VARCHAR(254)",
-      render: { type: "markdown", editable: true },
-    },
-    color: {
-      type: "string",
-      desc: "color",
-      pg_type: "VARCHAR(30)",
-      render: { type: "color", editable: true },
-    },
-    notes: NOTES,
-    created: CREATED,
-    last_edited: LAST_EDITED,
-    last_modified_by: LAST_MODIFIED_BY,
-  },
-  rules: {
-    desc: "Table of all tags across our crm system.",
-    primary_key: "id",
-    user_query: {
-      get: {
-        admin: true,
-        pg_where: [],
-        fields: {
-          id: null,
-          name: null,
-          icon: null,
-          description: null,
-          notes: null,
-          color: null,
-          created: null,
-          last_edited: null,
-          last_modified_by: null,
-        },
-      },
-      set: {
-        admin: true,
-        fields: {
-          id: true,
-          name: true,
-          icon: true,
-          description: true,
-          notes: true,
-          color: true,
-          created: true,
-          last_edited: true,
-          last_modified_by: true,
-        },
-        required_fields: {
-          last_edited: true, // TODO: make automatic on any set query
-        },
-      },
-    },
+    created_at: requiredTimestamp("Creation time."),
+    updated_at: requiredTimestamp("Last update time."),
+    completed_at: nullableTimestamp("Completion time."),
+    cancelled_at: nullableTimestamp("Cancellation time."),
+    version: versionField(),
   },
 });
 
 Table({
-  name: "crm_leads",
-  fields: {
-    id: ID,
-    created: CREATED,
-    last_edited: LAST_EDITED,
-    people: PEOPLE,
-    deleted: {
-      type: "boolean",
-      desc: "True if the lead has been deleted.",
-    },
-    notes: {
-      type: "string",
-      desc: "Open ended text in markdown about this lead.",
-      render: { type: "markdown", editable: true },
-    },
-    assignee: ASSIGNEE,
-    tags: TAGS_FIELD,
-    status: {
-      type: "string",
-      pg_type: "VARCHAR(30)",
-      desc: "Status of this lead",
-      render: {
-        type: "select",
-        editable: true,
-        options: [
-          "Contact in Future",
-          "Attempted to Contact",
-          "Contacted",
-          "Junk Lead",
-          "Lost Lead",
-          "Not Contacted",
-          "Pre Qualified",
-          "Not Qualified",
-        ],
-        colors: [
-          yellow[5],
-          green[4],
-          green[5],
-          red[5],
-          red[6],
-          yellow[5],
-          blue[5],
-          blue[6],
-        ],
-      },
-    },
-    rating: {
-      type: "string",
-      pg_type: "VARCHAR(30)",
-      desc: "Rating of this lead",
-      render: {
-        type: "select",
-        editable: true,
-        priority: true,
-        options: [
-          "-None-",
-          "Shut Down",
-          "Project Canceled",
-          "Market Failed",
-          "Active",
-          "Acquired",
-        ],
-        colors: [yellow[5], red[4], red[5], red[6], green[5], blue[5]],
-      },
-    },
-    annual_revenue: {
-      type: "number",
-      desc: "Rough estimate of possible annual revenue that could result from this lead.",
-      render: { type: "number", editable: true, format: "money", min: 0 },
-    },
-  },
+  name: "crm_activities",
   rules: {
-    desc: "CRM Leads",
     primary_key: "id",
-    user_query: {
-      get: {
-        pg_where: [],
-        admin: true,
-        fields: {
-          id: null,
-          created: null,
-          last_edited: null,
-          people: null,
-          deleted: null,
-          notes: null,
-          tags: null,
-          assignee: null,
-          status: null,
-          rating: null,
-          annual_revenue: null,
-        },
-      },
-      set: {
-        admin: true,
-        fields: {
-          id: true,
-          created: true,
-          last_edited: true,
-          people: true,
-          deleted: true,
-          notes: true,
-          tags: true,
-          assignee: true,
-          status: true,
-          rating: true,
-          annual_revenue: true,
-        },
-        required_fields: {
-          last_edited: true,
-        },
-      },
+    pg_indexes: [
+      "organization_id",
+      "person_id",
+      "opportunity_id",
+      "task_id",
+      "commercial_order_id",
+      "site_license_id",
+      "zendesk_ticket_id",
+      "kind",
+      "source",
+      "source_id",
+      "occurred_at",
+    ],
+  },
+  fields: {
+    id: { type: "uuid", desc: "Append-only activity id." },
+    organization_id: required({
+      type: "uuid",
+      desc: "CRM organization.",
+    }),
+    person_id: { type: "uuid", desc: "Optional CRM person." },
+    opportunity_id: { type: "uuid", desc: "Optional CRM opportunity." },
+    task_id: { type: "uuid", desc: "Optional CRM task." },
+    commercial_order_id: { type: "uuid", desc: "Optional commercial order." },
+    site_license_id: { type: "uuid", desc: "Optional site license." },
+    zendesk_ticket_id: { type: "integer", desc: "Optional Zendesk ticket." },
+    kind: required({
+      type: "string",
+      desc: "Constrained activity kind.",
+    }),
+    source: required({ type: "string", desc: "Stable activity source." }),
+    source_id: required({
+      type: "string",
+      desc: "Idempotent source identifier.",
+    }),
+    summary: required({
+      type: "string",
+      desc: "Concise internal summary.",
+    }),
+    details: { type: "string", desc: "Bounded details." },
+    actor_account_id: {
+      type: "uuid",
+      desc: "Acting admin.",
+      render: { type: "account" },
     },
+    occurred_at: required({
+      type: "timestamp",
+      pg_type: "TIMESTAMPTZ",
+      desc: "When the activity occurred.",
+    }),
+    supersedes_activity_id: {
+      type: "uuid",
+      desc: "Append-only correction target.",
+    },
+    metadata: requiredWithDefault(
+      { type: "map", desc: "Bounded activity metadata." },
+      "'{}'::jsonb",
+    ),
+    created_at: requiredTimestamp("Ingestion time."),
+  },
+});
+
+Table({
+  name: "crm_metric_snapshots",
+  rules: {
+    primary_key: "id",
+    pg_indexes: ["organization_id", "generated_at", "scope"],
+  },
+  fields: {
+    id: { type: "uuid", desc: "Metric snapshot id." },
+    organization_id: required({
+      type: "uuid",
+      desc: "CRM organization.",
+    }),
+    generated_at: required({
+      type: "timestamp",
+      pg_type: "TIMESTAMPTZ",
+      desc: "Projection generation time.",
+    }),
+    scope: required({
+      type: "string",
+      desc: "Projection scope description.",
+    }),
+    metrics: required({
+      type: "map",
+      desc: "Bounded explainable metrics.",
+    }),
+    provenance: requiredWithDefault(
+      { type: "map", desc: "Metric provenance." },
+      "'{}'::jsonb",
+    ),
+    created_at: requiredTimestamp("Creation time."),
+  },
+});
+
+Table({
+  name: "crm_mutation_events",
+  rules: {
+    primary_key: "id",
+    pg_indexes: [
+      "organization_id",
+      "action",
+      "actor_account_id",
+      "idempotency_key",
+      "created_at",
+    ],
+  },
+  fields: {
+    id: { type: "uuid", desc: "Immutable mutation audit id." },
+    organization_id: { type: "uuid", desc: "Optional CRM organization." },
+    action: required({ type: "string", desc: "Mutation action." }),
+    actor_account_id: required({
+      type: "uuid",
+      desc: "Acting admin.",
+      render: { type: "account" },
+    }),
+    reason: required({
+      type: "string",
+      desc: "Human-readable audit reason.",
+    }),
+    idempotency_key: required({
+      type: "string",
+      desc: "Stable logical mutation key.",
+    }),
+    payload_hash: required({
+      type: "string",
+      desc: "Canonical mutation payload hash.",
+    }),
+    result_type: required({
+      type: "string",
+      desc: "Returned entity type.",
+    }),
+    result_id: { type: "uuid", desc: "Returned entity id." },
+    metadata: requiredWithDefault(
+      { type: "map", desc: "Bounded mutation metadata." },
+      "'{}'::jsonb",
+    ),
+    created_at: requiredTimestamp("Creation time."),
   },
 });

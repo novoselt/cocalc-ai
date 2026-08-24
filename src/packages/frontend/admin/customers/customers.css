@@ -1,0 +1,175 @@
+.crm-shell {
+  --crm-ink: #18332f;
+  --crm-muted: #60736f;
+  --crm-surface: #ffffff;
+  --crm-line: #d8e4df;
+  --crm-accent: #117865;
+  --crm-accent-soft: #e9f5f1;
+  --crm-warm: #f1a65a;
+  color: var(--crm-ink);
+  min-width: 0;
+}
+
+.crm-hero {
+  background:
+    radial-gradient(
+      circle at 92% 10%,
+      rgba(241, 166, 90, 0.28),
+      transparent 28%
+    ),
+    linear-gradient(125deg, #103d35, #176b5c 58%, #2b806d);
+  border-radius: 18px;
+  color: white;
+  overflow: hidden;
+  padding: clamp(20px, 4vw, 38px);
+  position: relative;
+}
+
+.crm-hero::after {
+  background-image: radial-gradient(
+    rgba(255, 255, 255, 0.18) 1px,
+    transparent 1px
+  );
+  background-size: 15px 15px;
+  content: "";
+  inset: 0;
+  opacity: 0.35;
+  pointer-events: none;
+  position: absolute;
+}
+
+.crm-hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+.crm-hero .ant-typography,
+.crm-hero h2.ant-typography {
+  color: white;
+}
+
+.crm-eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.crm-filter-panel {
+  background: linear-gradient(180deg, #fff, #f8fbfa);
+  border: 1px solid var(--crm-line);
+  border-radius: 14px;
+  box-shadow: 0 8px 28px rgba(24, 51, 47, 0.07);
+  padding: 16px;
+}
+
+.crm-summary-grid,
+.crm-record-grid,
+.crm-detail-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.crm-summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.crm-record-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 310px), 1fr));
+}
+
+.crm-detail-grid {
+  align-items: start;
+  grid-template-columns: minmax(0, 1.65fr) minmax(280px, 0.85fr);
+}
+
+.crm-record-card.ant-card {
+  border-color: var(--crm-line);
+  border-radius: 14px;
+  box-shadow: 0 5px 18px rgba(24, 51, 47, 0.05);
+  min-width: 0;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.crm-record-card.ant-card:hover,
+.crm-record-card.ant-card:focus-within {
+  border-color: #80b9ad;
+  box-shadow: 0 12px 30px rgba(24, 51, 47, 0.12);
+  transform: translateY(-2px);
+}
+
+:root[data-animations="off"] .crm-record-card.ant-card {
+  transition: none;
+}
+
+.crm-metric-card.ant-card {
+  background: linear-gradient(145deg, #ffffff, #f4faf7);
+  border-color: var(--crm-line);
+  border-radius: 12px;
+}
+
+.crm-section-card.ant-card {
+  border-color: var(--crm-line);
+  border-radius: 14px;
+  min-width: 0;
+}
+
+.crm-activity-rail {
+  border-left: 2px solid var(--crm-line);
+  margin-left: 7px;
+  padding-left: 18px;
+}
+
+.crm-activity-item {
+  padding: 0 0 18px;
+  position: relative;
+}
+
+.crm-activity-item::before {
+  background: var(--crm-accent);
+  border: 3px solid white;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--crm-line);
+  content: "";
+  height: 11px;
+  left: -24px;
+  position: absolute;
+  top: 4px;
+  width: 11px;
+}
+
+.crm-wrap-anywhere {
+  overflow-wrap: anywhere;
+}
+
+.crm-empty-panel {
+  background: #f7faf9;
+  border: 1px dashed #b8cbc5;
+  border-radius: 12px;
+  padding: 24px;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .crm-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 520px) {
+  .crm-hero {
+    border-radius: 12px;
+  }
+
+  .crm-filter-panel {
+    padding: 12px;
+  }
+
+  .crm-record-grid,
+  .crm-summary-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

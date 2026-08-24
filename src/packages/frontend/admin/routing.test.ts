@@ -59,6 +59,14 @@ describe("admin routing", () => {
     expect(parseAdminRoute("admin/receivables/new")).toEqual({
       kind: "receivables-create",
     });
+    expect(parseAdminRoute("admin/customers")).toEqual({
+      kind: "index",
+      section: "customers",
+    });
+    expect(parseAdminRoute("admin/customers/customer-id")).toEqual({
+      kind: "customer-detail",
+      id: "customer-id",
+    });
     expect(getAdminTargetPath({ kind: "index", section: "user-search" })).toBe(
       "admin/user-search",
     );
@@ -74,6 +82,12 @@ describe("admin routing", () => {
     expect(getAdminTargetPath({ kind: "receivables-create" })).toBe(
       "admin/receivables/new",
     );
+  });
+
+  it("serializes customer detail routes", () => {
+    expect(
+      getAdminTargetPath({ kind: "customer-detail", id: "customer/id" }),
+    ).toBe("admin/customers/customer%2Fid");
   });
 
   it("normalizes immutable admin routes from redux state", () => {

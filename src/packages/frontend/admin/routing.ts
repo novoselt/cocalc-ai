@@ -9,6 +9,7 @@ export type AdminSection =
   | "admin-purchase"
   | "bay-ops"
   | "codex-pools"
+  | "customers"
   | "managed-cpu"
   | "managed-egress"
   | "revenue-analytics"
@@ -33,6 +34,7 @@ const ADMIN_SECTIONS = new Set<AdminSection>([
   "admin-purchase",
   "bay-ops",
   "codex-pools",
+  "customers",
   "managed-cpu",
   "managed-egress",
   "revenue-analytics",
@@ -54,6 +56,7 @@ const ADMIN_SECTIONS = new Set<AdminSection>([
 
 export type AdminRoute =
   | { kind: "index"; section?: AdminSection }
+  | { kind: "customer-detail"; id: string }
   | { kind: "receivables-create" }
   | { kind: "receivables-detail"; id: string }
   | { kind: "news-list" }
@@ -96,6 +99,11 @@ export function parseAdminRoute(
         return { kind: "receivables-create" };
       }
       return { kind: "receivables-detail", id };
+    case "customers":
+      if (!id) {
+        return { kind: "index", section: "customers" };
+      }
+      return { kind: "customer-detail", id };
     default:
       if (ADMIN_SECTIONS.has(section as AdminSection) && id == null) {
         return { kind: "index", section: section as AdminSection };
@@ -139,6 +147,13 @@ export function normalizeAdminRoute(route: AdminRouteLike): AdminRoute {
       }
       return { kind: "index", section: "receivables" };
     }
+    case "customer-detail": {
+      const id = normalized?.["id"];
+      if (typeof id === "string" && id) {
+        return { kind: "customer-detail", id };
+      }
+      return { kind: "index", section: "customers" };
+    }
     case "receivables-create":
       return { kind: "receivables-create" };
     case "index":
@@ -173,6 +188,8 @@ export function getAdminTargetPath(route: AdminRouteLike): string {
       return `admin/receivables/${encodeURIComponent(normalized.id)}`;
     case "receivables-create":
       return "admin/receivables/new";
+    case "customer-detail":
+      return `admin/customers/${encodeURIComponent(normalized.id)}`;
   }
 }
 

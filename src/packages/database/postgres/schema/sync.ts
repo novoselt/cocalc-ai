@@ -30,6 +30,7 @@ import {
 } from "./column-invariants";
 import { getIndexActions, syncTableSchemaIndexes } from "./index-convergence";
 import { backfillComputeVmProjectAccess } from "./compute-vm-project-access";
+import { cleanupLegacyCrmBeforeSchemaSync } from "./crm-legacy-cleanup";
 
 const log = getLogger("db:schema:sync");
 
@@ -402,6 +403,8 @@ export async function syncSchema(
     await applyLegacyRenames(db);
     dbg("dropping any deprecated tables");
     await dropDeprecatedTables(db);
+    dbg("applying guarded legacy CRM cleanup");
+    await cleanupLegacyCrmBeforeSchemaSync(db, dbSchema);
 
     const allTables = await getAllTables(db);
     // dbg("allTables", allTables);

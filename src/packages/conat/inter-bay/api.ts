@@ -2071,6 +2071,12 @@ export interface BayOpsCommercialOrdersRequest {
   payload: Record<string, unknown>;
 }
 
+export interface BayOpsCrmRequest {
+  action: string;
+  actor_account_id: string;
+  payload: Record<string, unknown>;
+}
+
 export interface AuthTokenRequiresRequest {}
 
 export interface AuthTokenRedeemRequest {
@@ -2761,7 +2767,8 @@ export type BayOpsMethod =
   | "record-site-funded-codex-usage"
   | "finish-site-funded-codex-turn"
   | "get-site-funded-codex-status"
-  | "commercial-orders";
+  | "commercial-orders"
+  | "crm";
 export type ProjectCollabInviteMethod =
   | "upsert-inbox"
   | "delete-inbox"
@@ -4459,6 +4466,7 @@ export interface InterBayBayOpsApi {
     opts: BayOpsSiteFundedCodexStatusRequest,
   ) => Promise<SiteFundedCodexStatus>;
   commercialOrders: (opts: BayOpsCommercialOrdersRequest) => Promise<unknown>;
+  crm: (opts: BayOpsCrmRequest) => Promise<unknown>;
 }
 
 export interface InterBayAuthTokenApi {
@@ -10051,6 +10059,10 @@ export function createInterBayBayOpsClient({
     ...serviceClientOptions({ client, timeout }),
     subject: bayOpsSubject({ dest_bay, method: "commercial-orders" }),
   });
+  const crmClient = createServiceClient<Pick<InterBayBayOpsApi, "crm">>({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({ dest_bay, method: "crm" }),
+  });
   return {
     getLoad: async (opts) => await loadClient.getLoad(opts),
     getBackups: async (opts) => await backupsClient.getBackups(opts),
@@ -10130,6 +10142,7 @@ export function createInterBayBayOpsClient({
       await siteFundedCodexStatusClient.getSiteFundedCodexStatus(opts),
     commercialOrders: async (opts) =>
       await commercialOrdersClient.commercialOrders(opts),
+    crm: async (opts) => await crmClient.crm(opts),
   };
 }
 
@@ -10547,6 +10560,14 @@ export function createInterBayBayOpsHandlers({
       subject: bayOpsSubject({ dest_bay: bay_id, method: "commercial-orders" }),
       impl: {
         commercialOrders: async (opts) => await impl.commercialOrders(opts),
+      },
+    }),
+    createServiceHandler<Pick<InterBayBayOpsApi, "crm">>({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({ dest_bay: bay_id, method: "crm" }),
+      impl: {
+        crm: async (opts) => await impl.crm(opts),
       },
     }),
   ];

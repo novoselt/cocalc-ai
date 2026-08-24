@@ -29,6 +29,32 @@ test("createHubApiForContext exposes the commercialOrders hub group", async () =
   ]);
 });
 
+test("createHubApiForContext exposes the adminCrm hub group", async () => {
+  const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
+  const hub = createHubApiForContext(async <T>(name, args = [], timeout) => {
+    calls.push({ name, args, timeout });
+    return { organizations: [], truncated: false, result_bytes: 2 } as T;
+  });
+
+  const result = await hub.adminCrm.listOrganizations({
+    reason: "review customer queue",
+    limit: 25,
+  });
+
+  assert.deepEqual(result, {
+    organizations: [],
+    truncated: false,
+    result_bytes: 2,
+  });
+  assert.deepEqual(calls, [
+    {
+      name: "adminCrm.listOrganizations",
+      args: [{ reason: "review customer queue", limit: 25 }],
+      timeout: undefined,
+    },
+  ]);
+});
+
 test("createHubApiForContext exposes the notifications hub group", async () => {
   const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
   const callByName = async <T>(

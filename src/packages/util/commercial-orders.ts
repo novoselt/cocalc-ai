@@ -137,7 +137,7 @@ export interface CommercialOrderItem {
 export interface CommercialOrderContact {
   id: string;
   commercial_order_id: string;
-  crm_person_id?: number | null;
+  crm_person_id?: string | null;
   role: CommercialContactRole;
   name_snapshot: string;
   email_snapshot: string;
@@ -210,7 +210,7 @@ export interface CommercialOrderEvent {
 export interface CommercialOrder {
   id: string;
   order_number: string;
-  crm_organization_id?: number | null;
+  crm_organization_id?: string | null;
   organization_name: string;
   customer_account_id?: string | null;
   stripe_customer_id?: string | null;

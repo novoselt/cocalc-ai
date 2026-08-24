@@ -52,7 +52,7 @@ Table({
       not_null: true,
       pg_check: "CHECK (btrim(order_number) <> '')",
     },
-    crm_organization_id: { type: "integer" },
+    crm_organization_id: { type: "uuid" },
     organization_name: {
       type: "string",
       not_null: true,
@@ -221,7 +221,7 @@ Table({
   fields: {
     id: { type: "uuid", not_null: true },
     commercial_order_id: { type: "uuid", not_null: true },
-    crm_person_id: { type: "integer" },
+    crm_person_id: { type: "uuid" },
     role: {
       type: "string",
       pg_type: "VARCHAR(32)",

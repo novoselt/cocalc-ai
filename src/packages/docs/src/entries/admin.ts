@@ -9,6 +9,7 @@ import {
   ADMIN_BACKUP_SHARDS_BODY,
   ADMIN_BAY_OPS_BODY,
   ADMIN_CLI_BODY,
+  ADMIN_CRM_BODY,
   ADMIN_MANAGED_EGRESS_BODY,
   ADMIN_MEMBERSHIP_AND_LICENSES_BODY,
   ADMIN_NEWS_BODY,
@@ -162,6 +163,27 @@ export const ADMIN_ENTRIES: DocsEntry[] = [
     summary:
       "Operate the shared commercial-order, invoicing, collection, and site-license fulfillment workflow safely.",
     title: "Operate accounts receivable",
+    visibility: "admin",
+  },
+  {
+    audiences: ["agents", "teams"],
+    body: ADMIN_CRM_BODY.trim(),
+    category: "Admin",
+    id: "admin.crm",
+    image: docsIcon(
+      "/public/docs/collaborators-8ce1955f.webp",
+      "A customer relationship overview joining contacts, opportunities, tasks, and commercial systems",
+    ),
+    lastReviewed: "2026-08-24",
+    noActionReason:
+      "Admin operations runbook; use cocalc admin crm or Admin -> Customers.",
+    searchKeywords:
+      "CRM customer relationship organization institution domain contacts opportunity adoption pilot renewal expansion task timeline Zendesk Stripe commercial orders site licenses customer 360",
+    slug: "admin/crm",
+    status: "ready",
+    summary:
+      "Operate CoCalc's seed-global customer identity, opportunity, follow-up, linking, and Customer 360 workflow safely.",
+    title: "Operate customer relationships",
     visibility: "admin",
   },
   {

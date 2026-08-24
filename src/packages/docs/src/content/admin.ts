@@ -327,6 +327,193 @@ Provider/local currency or amount mismatches fail closed and must be reviewed;
 they are never normalized silently.
 `;
 
+export const ADMIN_CRM_BODY = String.raw`
+## Read this runbook from the CLI
+
+The integrated CRM joins customer identity and internal follow-up without
+replacing Zendesk, Stripe, commercial orders, or site licenses. This runbook is
+packaged in every CoCalc CLI build:
+
+~~~sh
+cocalc docs show admin/crm --include-admin
+cocalc docs search "customer relationship CRM" --include-admin
+cocalc docs skill-context --query "institutional customer CRM" --include-admin
+~~~
+
+The canonical record is a customer organization with a stable number such as
+\`CRM-2026-000123\`. It joins reviewed domains, contacts, CoCalc accounts,
+opportunities, internal tasks, Zendesk ticket references, Stripe customer
+references, commercial orders, site licenses, metrics, and an append-only
+timeline.
+
+## Authority and safety
+
+- CRM records are seed-global. Every bay routes reads and writes to the seed.
+- Admin membership and a human-readable reason are required for every read.
+- Mutations preview by default. A committed mutation requires the preview's
+  \`expected_version\`, a stable idempotency key, \`--commit\`, and fresh auth.
+- Merges, verified domains, external links, exports, and backfill are reviewed
+  operations. Email-domain matches are evidence, not automatic identity.
+- Zendesk owns conversations, Stripe owns provider settlement, commercial
+  orders own accepted terms and fulfillment coordination, and site licenses
+  own entitlements. CRM links those systems; it does not copy their authority.
+- Never put card data, bank credentials, secrets, private keys, or unrestricted
+  provider payloads in notes, evidence, metadata, or audit reasons.
+
+Use browser-approved production authentication when required:
+
+~~~sh
+cocalc auth bootstrap --email <admin-email>
+cocalc auth status --check
+~~~
+
+## Start with search and Customer 360
+
+~~~sh
+cocalc admin crm organizations list --json
+cocalc admin crm organizations search --domain example.edu --json
+cocalc admin crm organizations search --zendesk-ticket 20599 --json
+cocalc admin crm organizations show CRM-2026-000123 --json
+cocalc admin crm activities list CRM-2026-000123 --json
+cocalc admin crm digest --assignee me --json
+cocalc admin crm diagnostics --json
+~~~
+
+Selectors accept customer number, exact customer name, reviewed domain, email,
+and other documented human identifiers. Ambiguous selectors return bounded
+candidates instead of silently choosing a record.
+
+## Preview and commit
+
+Run a mutation once without \`--commit\`. Review the proposed change, warnings,
+\`expected_version\`, and \`idempotency_key\`. Re-run the same command with those
+values and \`--commit\`:
+
+~~~sh
+cocalc admin crm organizations create \
+  --name "Example University" --type university \
+  --owner admin@example.com \
+  --reason "reviewed institutional inquiry" --json
+
+cocalc admin crm organizations create \
+  --name "Example University" --type university \
+  --owner admin@example.com \
+  --reason "reviewed institutional inquiry" \
+  --expected-version 0 --idempotency-key <key-from-preview> --commit --json
+~~~
+
+Retry an uncertain mutation with exactly the same idempotency key and payload.
+Never invent a replacement record after a timeout. A stale optimistic version
+means another operator changed the record; read it again and make a new review.
+
+## Standard institutional workflow
+
+1. Search before creating a customer. Review names, aliases, domains, contacts,
+   Zendesk tickets, orders, and site licenses for duplicates.
+2. Create the customer and assign a relationship owner.
+3. Add institutional domains as \`suggested\`; verify only after reviewing
+   evidence. Generic providers such as Gmail cannot be verified as customer
+   identity domains.
+4. Add contacts and explicitly link their CoCalc accounts and customer roles.
+5. Create an adoption-pilot, site-license, renewal, or expansion opportunity.
+6. Create an explicit task with an assignee and due date for the next action.
+7. Link the relevant Zendesk ticket without copying its thread.
+8. Move the opportunity through the constrained stages. When terms are ready,
+   create the commercial order from the opportunity and continue in Accounts
+   Receivable.
+9. Link the resulting site license and retain important internal context as
+   concise timeline notes.
+
+Representative commands:
+
+~~~sh
+cocalc admin crm domains add CRM-2026-000123 example.edu \
+  --kind primary --reason "domain supplied by procurement"
+cocalc admin crm people create --name "Ada Example" \
+  --organization CRM-2026-000123 --roles billing,procurement \
+  --email ada@example.edu --reason "billing contact supplied by customer"
+cocalc admin crm links add CRM-2026-000123 \
+  --provider zendesk --kind ticket --external-id 20599 --verify \
+  --reason "reviewed institutional inquiry"
+cocalc admin crm opportunities create CRM-2026-000123 \
+  --name "Campus adoption pilot" --kind adoption-pilot \
+  --owner admin@example.com --value 3900 --close-date 2026-09-30 \
+  --reason "customer accepted pilot terms"
+cocalc admin crm tasks create CRM-2026-000123 \
+  --type procurement --assignee admin@example.com \
+  --due 2026-09-01T17:00:00Z --subject "Obtain purchase order" \
+  --reason "procurement follow-up"
+~~~
+
+Run \`cocalc admin crm --help\` and each nested command's help for the full
+command tree. Every admin UI mutation has a CLI equivalent.
+
+## System boundaries
+
+Use Zendesk to reply to customers and manage ticket state. Use Accounts
+Receivable to review terms, generate/send Stripe invoices, record payment, and
+coordinate fulfillment. Use site-license administration for entitlement
+details. CRM tasks represent important internal follow-up but do not replace a
+commercial order's constrained next action.
+
+External references store stable identifiers, a redacted label, and bounded
+metadata only. Current Zendesk details are fetched on demand through the
+support API. Accepted order snapshots and issued invoices are never rewritten
+when a CRM contact or organization changes.
+
+## Duplicate handling and backfill
+
+Customer discovery is candidate-only and preview-first:
+
+~~~sh
+cocalc admin crm backfill --limit 100 --reason "review commercial customer candidates" --json
+cocalc admin crm backfill --candidate <candidate-key> \
+  --reason "reviewed order and license identity" \
+  --expected-version 0 --idempotency-key <key> --commit --json
+~~~
+
+Never merge solely because two contacts share an email domain. A merge rewrites
+relationships and leaves the source as a durable redirect; review the full
+plan and warnings first.
+
+## Diagnostics and rollout
+
+Use the deterministic daily digest for the team's bounded operational handoff:
+
+~~~sh
+cocalc admin crm digest --assignee me --due-within-days 1 \
+  --renewal-within-days 90 --json
+~~~
+
+It reports overdue and near-term CRM tasks, receivables next actions, upcoming
+renewals, open expansion opportunities, and unassigned customers. Pass
+\`--as-of\` when a repeatable historical cutoff is important. Counts are
+explicitly marked as bounded if any section reaches its requested limit. The
+digest does not send email or notifications; it is the source an admin or agent
+uses for a morning review.
+
+The diagnostics queue identifies unowned active customers, overdue tasks,
+opportunities without next tasks, won opportunities without orders, unlinked
+orders/licenses, stale metrics, merge-reference problems, and identity
+conflicts.
+
+The independent site settings are:
+
+| Setting | Effect |
+| --- | --- |
+| \`crm_visible\` | Customer queue, Customer 360, search, timeline, metrics, and diagnostics. |
+| \`crm_mutations_enabled\` | Customer, contact, domain, activity, and relationship mutations. |
+| \`crm_pipeline_mutations_enabled\` | Opportunity and internal follow-up task mutations. |
+| \`crm_zendesk_linking_enabled\` | Reviewed Zendesk ticket and requester links. |
+| \`crm_commercial_integration_enabled\` | Stripe, commercial-order, and site-license links and order creation. |
+| \`crm_metric_projections_enabled\` | Bounded spend, receivables, license, and adoption metrics. |
+| \`crm_exports_enabled\` | Fresh-auth bounded sensitive exports. |
+| \`crm_backfill_enabled\` | Preview and reviewed application of discovery candidates. |
+
+Enable visibility first, then normal mutations, and only then export/backfill.
+Rollback should disable effectful controls while preserving read visibility.
+`;
+
 export const ADMIN_SOFTWARE_COMMAND_BODY = `
 ## What cocalc software is for
 

@@ -113,6 +113,14 @@ export interface Customize {
   commercial_receivables_manual_settlement_enabled?: boolean;
   commercial_receivables_reconciliation_enabled?: boolean;
   commercial_receivables_fulfillment_enabled?: boolean;
+  crm_visible?: boolean;
+  crm_mutations_enabled?: boolean;
+  crm_pipeline_mutations_enabled?: boolean;
+  crm_zendesk_linking_enabled?: boolean;
+  crm_commercial_integration_enabled?: boolean;
+  crm_metric_projections_enabled?: boolean;
+  crm_exports_enabled?: boolean;
+  crm_backfill_enabled?: boolean;
   legacy_migration_page_message?: string;
   dns?: string;
   siteURL?: string;
