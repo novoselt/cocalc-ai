@@ -591,6 +591,7 @@ class AppServerClient {
   private readonly notifications: RpcNotification[] = [];
   private exited = false;
   private exitDetail = "unknown";
+  private exitError?: Error & { stderrTail?: string[] };
 
   constructor(
     private readonly proc: ReturnType<typeof spawn>,
@@ -651,6 +652,7 @@ class AppServerClient {
           `codex app-server exited unexpectedly: ${this.exitDetail}${stderrDetail}`,
       ) as Error & { stderrTail?: string[] };
       err.stderrTail = stderrTail;
+      this.exitError = err;
       for (const [, pending] of this.pendingRequests) {
         if (pending.timer) clearTimeout(pending.timer);
         pending.reject(err);
@@ -688,7 +690,10 @@ class AppServerClient {
 
   request(method: string, params: any = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
     if (this.exited) {
-      throw new Error(`codex app-server already exited: ${this.exitDetail}`);
+      throw (
+        this.exitError ??
+        new Error(`codex app-server already exited: ${this.exitDetail}`)
+      );
     }
     const id = this.nextId;
     this.nextId += 1;
@@ -730,6 +735,12 @@ class AppServerClient {
       const [existing] = this.notifications.splice(existingIndex, 1);
       return Promise.resolve(existing);
     }
+    if (this.exited) {
+      return Promise.reject(
+        this.exitError ??
+          new Error(`codex app-server already exited: ${this.exitDetail}`),
+      );
+    }
     return new Promise<RpcNotification>((resolve, reject) => {
       const waiter: Waiter = {
         matches: (message) => predicate(message),
@@ -754,9 +765,16 @@ class AppServerClient {
     return [...this.stderrTail];
   }
 
+  hasExited(): boolean {
+    return this.exited;
+  }
+
   private send(message: Record<string, any>): void {
     if (this.exited) {
-      throw new Error(`codex app-server already exited: ${this.exitDetail}`);
+      throw (
+        this.exitError ??
+        new Error(`codex app-server already exited: ${this.exitDetail}`)
+      );
     }
     this.proc.stdin?.write(`${JSON.stringify(message)}\n`);
   }
@@ -3252,6 +3270,11 @@ export class CodexAppServerAgent implements AcpAgent {
               return params?.turnId === turnId;
             }, TURN_NOTIFICATION_IDLE_TIMEOUT_MS);
           } catch (err) {
+            // Reconciliation can recover a dropped notification from a live
+            // app-server. It cannot recover a process that has already exited;
+            // retrying here used to leave the UI in "starting" for successive
+            // notification timeouts while the original stderr was hidden.
+            if (client.hasExited()) throw err;
             try {
               const result = await client.request("thread/read", {
                 threadId: actualThreadId,

@@ -46,6 +46,7 @@ import { resolveProjectHostPreferredMasterConatServer } from "../master-conat-se
 import { getProject } from "../sqlite/projects";
 import { startProjectWithAdmission } from "../project-start-admission";
 import { touchProjectLastEdited } from "../last-edited";
+import { projectNetworkPolicyFromRunQuota } from "../network-policy";
 import {
   type CodexAuthRuntime,
   logResolvedCodexAuthRuntime,
@@ -58,6 +59,10 @@ import {
   syncSubscriptionAuthToRegistryIfChanged,
 } from "./codex-auth-registry";
 import { beginSiteFundedCodexTurn } from "./codex-site-metering";
+import {
+  startRestrictedCodexEgressProxySession,
+  type RestrictedCodexEgressProxySession,
+} from "./restricted-egress-proxy";
 import type {
   CodexSiteFundedTurnRequest,
   CodexSiteFundedTurnRuntime,
@@ -112,6 +117,7 @@ const BUILTIN_LAUNCHPAD_SKILLS = ["cocalc"] as const;
 const OPENAI_PROVIDER_BASE_URL = "https://api.openai.com/v1";
 const API_KEY_PROVIDER_ID = "cocalc-openai-api-key";
 const EPHEMERAL_AUTH_STORE_CONFIG = 'cli_auth_credentials_store="ephemeral"';
+const RESPECT_SYSTEM_PROXY_CONFIG = "features.respect_system_proxy=true";
 // Codex 0.120 still marks this under-development and disabled by default.
 // The built-in tool has its own auth/model gates, so enabling the feature flag
 // here does not expose image generation to unsupported auth modes.
@@ -404,11 +410,32 @@ function redactPodmanArgs(args: string[]): string {
     const j = raw.indexOf("=");
     if (j === -1) continue;
     const key = raw.slice(0, j);
-    if (/(KEY|TOKEN|SECRET|PASSWORD)/i.test(key)) {
+    if (/(KEY|TOKEN|SECRET|PASSWORD|PROXY)/i.test(key)) {
       redacted[i + 1] = `${key}=***`;
     }
   }
   return argsJoin(redacted);
+}
+
+function projectNeedsRestrictedCodexEgress(projectId: string): boolean {
+  return (
+    projectNetworkPolicyFromRunQuota(getProject(projectId)?.run_quota) ===
+    "disabled"
+  );
+}
+
+async function addRestrictedCodexEgress({
+  projectId,
+  execEnv,
+}: {
+  projectId: string;
+  execEnv: Record<string, string>;
+}): Promise<RestrictedCodexEgressProxySession | undefined> {
+  if (!projectNeedsRestrictedCodexEgress(projectId)) return;
+  const session = await startRestrictedCodexEgressProxySession();
+  execEnv.HTTPS_PROXY = session.proxyUrl;
+  execEnv.https_proxy = session.proxyUrl;
+  return session;
 }
 
 async function resolveProjectCliBearer({
@@ -1611,6 +1638,7 @@ export async function spawnCodexInProjectContainer({
     `LOGNAME=${DEFAULT_PROJECT_RUNTIME_USER}`,
   ];
   const execEnv = { ...authRuntime.env, ...toStringEnv(extraEnv) };
+  let restrictedEgress: RestrictedCodexEgressProxySession | undefined;
   const cliBearer = await resolveProjectCliBearer({
     projectId,
     accountId,
@@ -1626,16 +1654,38 @@ export async function spawnCodexInProjectContainer({
     // Avoid overriding runtime key selection with an empty per-turn value.
     delete execEnv.OPENAI_API_KEY;
   }
+  try {
+    restrictedEgress = await addRestrictedCodexEgress({
+      projectId,
+      execEnv,
+    });
+  } catch (err) {
+    await release();
+    throw err;
+  }
+  if (restrictedEgress) {
+    // Codex intentionally ignores ambient proxy variables unless this feature
+    // is enabled. The proxy itself only permits authenticated OpenAI tunnels.
+    codexArgs = ["--config", RESPECT_SYSTEM_PROXY_CONFIG, ...codexArgs];
+  }
   for (const key in execEnv) {
     execArgs.push("-e", `${key}=${execEnv[key]}`);
   }
   execArgs.push(info.name, info.codexPath, ...codexArgs);
   logger.debug("codex project: podman exec", redactPodmanArgs(execArgs));
   const launcher = projectPoolPodmanLauncher(projectId);
-  const proc = spawn(launcher.command, [...launcher.argsPrefix, ...execArgs], {
-    stdio: ["pipe", "pipe", "pipe"],
-    env: podmanEnv(),
-  });
+  let proc: ReturnType<typeof spawn>;
+  try {
+    proc = spawn(launcher.command, [...launcher.argsPrefix, ...execArgs], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: podmanEnv(),
+    });
+  } catch (err) {
+    restrictedEgress?.close();
+    await release();
+    throw err;
+  }
+  proc.once("close", () => restrictedEgress?.close());
   proc.on("exit", async () => {
     try {
       if (
@@ -1776,6 +1826,7 @@ async function spawnCodexAppServerInProjectRuntime({
     `LOGNAME=${DEFAULT_PROJECT_RUNTIME_USER}`,
   ];
   const execEnv = initialExecEnv;
+  let restrictedEgress: RestrictedCodexEgressProxySession | undefined;
   if (siteFundedTurn) {
     execEnv.OPENAI_API_KEY = siteFundedTurn.providerToken;
   }
@@ -1820,6 +1871,15 @@ async function spawnCodexAppServerInProjectRuntime({
     runtimeEnv.COCALC_API_URL,
   );
   applyProjectRuntimeCliEnv(runtimeEnv, accountId);
+  try {
+    restrictedEgress = await addRestrictedCodexEgress({
+      projectId,
+      execEnv,
+    });
+  } catch (err) {
+    await cliTokenLease?.close();
+    throw err;
+  }
   for (const key in execEnv) {
     execArgs.push("-e", `${key}=${execEnv[key]}`);
   }
@@ -1846,6 +1906,9 @@ async function spawnCodexAppServerInProjectRuntime({
         provider: API_KEY_PROVIDER_ID,
       },
     );
+  }
+  if (restrictedEgress) {
+    codexArgs.push("--config", RESPECT_SYSTEM_PROXY_CONFIG);
   }
   if (shouldForceEphemeralAppServerAuthStorage(authRuntime)) {
     // Host-managed auth must stay in-process only. Otherwise app-server's
@@ -1876,10 +1939,12 @@ async function spawnCodexAppServerInProjectRuntime({
       env: podmanEnv(),
     });
   } catch (err) {
+    restrictedEgress?.close();
     await cliTokenLease?.close();
     throw err;
   }
   proc.once("close", () => {
+    restrictedEgress?.close();
     void cliTokenLease?.close();
   });
   proc.on("exit", async () => {
