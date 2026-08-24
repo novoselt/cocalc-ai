@@ -77,6 +77,9 @@ interface QuotaBase {
   disk_quota?: number;
   memory_limit?: number;
   memory_request?: number;
+  // Legacy CoCalc.com upper bound in cores. CoCalc.ai's FAIR_CPU_MODE retains
+  // this value for compatibility but schedules with shared_compute_priority
+  // and permits projects to consume otherwise-idle CPU.
   cpu_limit?: number;
   cpu_request?: number;
   privileged?: boolean;
@@ -213,7 +216,9 @@ const BASE_QUOTAS: RQuota = {
   cpu_request: 0, // will hold guaranteed min number of vCPUs as a float from 0 to infinity.
   disk_quota: DEFAULT_QUOTAS.disk_quota,
   memory_limit: DEFAULT_QUOTAS.memory, // upper bound on RAM in MB
-  cpu_limit: DEFAULT_QUOTAS.cores, // upper bound on vCPUs
+  // Legacy CoCalc.com upper bound. FAIR_CPU_MODE does not enforce this as a
+  // hard cap on CoCalc.ai shared project hosts.
+  cpu_limit: DEFAULT_QUOTAS.cores,
   // Retained for compatibility and possible future idle-stop policy.  The
   // current CoCalc-AI project-host deliberately ignores this field.
   idle_timeout: DEFAULT_QUOTAS.mintime,
