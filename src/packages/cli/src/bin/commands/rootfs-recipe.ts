@@ -1489,7 +1489,7 @@ function safeRecipeFilenamePart(value: string): string {
 
 function isRetryableProjectApiError(err: unknown): boolean {
   const message = errorMessage(err);
-  return /socket has been disconnected|socket is disconnected|connection closed|once: .* not emitted before "closed"|timeout of \d+ms waiting for "info"/i.test(
+  return /socket has been disconnected|socket is disconnected|connection closed|once: .* not emitted before "closed"|timeout of \d+ms waiting for "info"|operation has timed out subject:project\./i.test(
     message,
   );
 }

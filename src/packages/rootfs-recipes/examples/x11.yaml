@@ -1,0 +1,125 @@
+version: 1
+name: x11
+
+builder:
+  run_quota:
+    disk_quota: 30000
+
+steps:
+  - uses: cocalc/apt
+    with:
+      upgrade: true
+      packages:
+        - bash
+        - ca-certificates
+        - curl
+        - git
+        - latexmk
+        - less
+        - libatomic1
+        - openssh-client
+        - openssh-sftp-server
+        - procps
+        - python3
+        - python3-pip
+        - python3-pygame
+        - python3-tk
+        - python3-venv
+        - sudo
+        - texlive-fonts-recommended
+        - texlive-latex-base
+        - texlive-latex-recommended
+        - tmux
+        - vim
+        - wget
+
+  - uses: cocalc/jupyter-python
+    with:
+      prefix: /opt/cocalc-jupyter
+      system_site_packages: true
+      install_bash_kernel: true
+      packages:
+        - ipykernel
+        - ipywidgets
+        - jupyterlab
+        - matplotlib
+        - notebook
+        - numpy
+        - pandas
+        - scipy
+        - scikit-learn
+        - sympy
+        - uv
+        - jupyter-console
+
+  - uses: cocalc/graphical-apps
+
+  - uses: cocalc/x11-applications
+    timeout: 3600
+
+verify:
+  - command -v pdflatex
+  - command -v latexmk
+  - command -v jupyter-lab
+  - command -v chromium
+  - command -v cocalc-idle
+  - command -v gimp
+  - command -v inkscape
+  - command -v texstudio
+  - python3 -c 'import idlelib, pygame, tkinter'
+  - test "$(python -c 'import sys; print(sys.prefix)')" = "/opt/cocalc-jupyter"
+  - python -m pip --version | grep -q /opt/cocalc-jupyter
+  - |
+    set -euo pipefail
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"; python -m pip uninstall -y cocalc-x11-pip-smoke >/dev/null 2>&1 || true' EXIT
+    cat >"$tmp/setup.py" <<'PY'
+    from setuptools import setup
+    setup(name="cocalc-x11-pip-smoke", version="0.0.0", py_modules=["cocalc_x11_pip_smoke"])
+    PY
+    echo 'VALUE = "ok"' >"$tmp/cocalc_x11_pip_smoke.py"
+    pip install --no-cache-dir "$tmp"
+    python -c 'import cocalc_x11_pip_smoke; assert cocalc_x11_pip_smoke.VALUE == "ok"'
+    python -m pip uninstall -y cocalc-x11-pip-smoke
+  - |
+    set -euo pipefail
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    cat >"$tmp/smoke.tex" <<'TEX'
+    \documentclass{article}
+    \usepackage{amsmath}
+    \begin{document}
+    CoCalc X11 RootFS: $e^{i\pi}+1=0$.
+    \end{document}
+    TEX
+    cd "$tmp"
+    latexmk -pdf -interaction=nonstopmode -halt-on-error smoke.tex
+    test -s smoke.pdf
+
+publish:
+  label: X11
+  slug: x11
+  description: Browser-streamed Linux graphical applications with Chromium, Python and Jupyter, IDLE, pygame and audio support, graphics and office applications, editors, and basic LaTeX for TeXstudio.
+  family: x11
+  version: "1.0"
+  channel: beta
+  visibility: public
+  content:
+    version: 1
+    title: X11
+    subtitle: Linux graphical applications streamed directly into CoCalc.
+    highlights:
+      - Chromium with browser audio
+      - Python, Jupyter, IDLE, Tkinter, and pygame
+      - GIMP, Inkscape, and Krita
+      - Gnumeric and LibreOffice Calc
+      - Emacs, GVim, and TeXstudio
+      - Basic LaTeX
+  tags:
+    - x11
+    - wayland
+    - graphical-applications
+    - python
+    - jupyter
+    - pygame
+    - latex

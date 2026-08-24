@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import {
   BLIT_APPLICATIONS,
   INSTALL_CHROMIUM_APPLICATION_COMMAND,
+  INSTALL_IDLE_APPLICATION_COMMAND,
   INSTALL_BLIT_APPLICATION_COMMAND,
   LAUNCH_BLIT_APPLICATION_COMMAND,
   parseBlitApplicationAvailability,
@@ -61,6 +62,27 @@ describe("Blit application catalog", () => {
     const syntax = spawnSync("bash", ["-n"], {
       encoding: "utf8",
       input: INSTALL_CHROMIUM_APPLICATION_COMMAND,
+    });
+    expect(syntax.stderr).toBe("");
+    expect(syntax.status).toBe(0);
+  });
+
+  it("installs IDLE for the default Ubuntu Python version", () => {
+    const idle = BLIT_APPLICATIONS.find(({ id }) => id === "idle");
+    expect(idle).toMatchObject({
+      command: ["cocalc-idle"],
+      executable: "cocalc-idle",
+      install: { kind: "script" },
+    });
+    expect(INSTALL_IDLE_APPLICATION_COMMAND).toContain(
+      'package="idle-python$' + '{python_version}"',
+    );
+    expect(INSTALL_IDLE_APPLICATION_COMMAND).toContain(
+      "exec /usr/bin/python3 -m idlelib",
+    );
+    const syntax = spawnSync("bash", ["-n"], {
+      encoding: "utf8",
+      input: INSTALL_IDLE_APPLICATION_COMMAND,
     });
     expect(syntax.stderr).toBe("");
     expect(syntax.status).toBe(0);

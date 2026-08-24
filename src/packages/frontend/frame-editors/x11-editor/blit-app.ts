@@ -13,7 +13,10 @@ export const GRAPHICAL_APPS_PACKAGES = [
   "libegl1",
   "libxcb-cursor0",
   "mesa-vulkan-drivers",
+  "pipewire",
+  "pipewire-pulse",
   "shared-mime-info",
+  "wireplumber",
   "xwayland",
 ] as const;
 

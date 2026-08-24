@@ -473,6 +473,58 @@ describe("PublicFeaturesApp", () => {
     expect(screen.queryByText("Start using CoCalc Linux")).toBeNull();
   });
 
+  it("renders the graphical Linux applications page", () => {
+    render(
+      <PublicFeaturesApp
+        config={{ help_email: "help@example.com", site_name: "Launchpad" }}
+        initialRoute={{ slug: "x11", view: "detail" }}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "Linux graphical applications, directly in your browser.",
+      ),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("heading", {
+        name: "Focus one application, keep every window visible",
+      }),
+    ).not.toBeNull();
+    expect(screen.getByText("PipeWire browser audio")).not.toBeNull();
+    expect(
+      screen.getByText("One persistent graphical display per project"),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Blit" }).getAttribute("href"),
+    ).toBe("https://blit.sh/");
+    expect(
+      screen
+        .getByRole("link", { name: "Graphical applications guide" })
+        .getAttribute("href"),
+    ).toBe("/app-docs/terminal/graphical-applications");
+  });
+
+  it("uses projects as the graphical Linux CTA for authenticated users", () => {
+    render(
+      <PublicFeaturesApp
+        config={{
+          help_email: "help@example.com",
+          is_authenticated: true,
+          site_name: "Launchpad",
+        }}
+        initialRoute={{ slug: "x11", view: "detail" }}
+      />,
+    );
+
+    const projectLinks = screen.getAllByRole("link", { name: "Open projects" });
+    expect(projectLinks.length).toBeGreaterThan(0);
+    for (const link of projectLinks) {
+      expect(link.getAttribute("href")).toBe("/projects");
+    }
+    expect(screen.queryByText("Run graphical applications")).toBeNull();
+  });
+
   it("renders the richer python feature page", () => {
     render(
       <PublicFeaturesApp

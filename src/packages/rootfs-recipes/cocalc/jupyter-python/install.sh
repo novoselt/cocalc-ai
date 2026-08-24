@@ -29,7 +29,11 @@ fi
 
 $SUDO mkdir -p "$prefix"
 $SUDO chown -R "$(id -u):$(id -g)" "$prefix"
-$python -m venv --clear "$prefix"
+venv_args=(--clear)
+if [ "${SYSTEM_SITE_PACKAGES:-false}" = "true" ]; then
+  venv_args+=(--system-site-packages)
+fi
+$python -m venv "${venv_args[@]}" "$prefix"
 "$prefix/bin/pip" install --no-cache-dir --upgrade pip setuptools wheel
 "$prefix/bin/pip" install --no-cache-dir $packages
 

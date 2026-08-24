@@ -141,6 +141,11 @@ Use either of these methods:
 The embedded terminal already has the Wayland and X11 environment variables
 for this graphical session. You do not need to set \`DISPLAY\` there.
 
+The **X11** RootFS includes every launcher application, Python and Jupyter,
+IDLE, Tkinter, pygame, application audio, and basic LaTeX for TeXstudio. Other
+RootFS images can install the graphical prerequisites and individual launcher
+applications on demand.
+
 Chromium needs additional flags in a project container. The Chromium launcher
 adds them automatically. To start it from the embedded terminal, run:
 
@@ -153,6 +158,30 @@ nested namespaces used by Chromium's Linux sandbox. This removes Chromium's
 renderer-level security boundary: a compromised web page could access files
 and processes available to your project user. Only open sites you trust. The
 project container remains isolated from other projects and the project host.
+
+## Play application audio
+
+Blit sends application audio to the browser through a private PipeWire sound
+server inside the project. Applications launched from the embedded terminal or
+from a launcher button inherit the required PulseAudio and PipeWire settings.
+This works with applications such as Chromium and pygame without access to an
+audio device on the project host.
+
+Browser autoplay rules require sound to start muted. Click the musical-note
+control in Blit's status bar and enable **Desktop sound** to hear it. The control
+also lets you mute the session again and select an output device when the
+browser supports output selection.
+
+For example, after installing pygame in the project, run this in the embedded
+graphical terminal:
+
+~~~sh
+python3 -m pygame.examples.aliens
+~~~
+
+If graphical support was installed or upgraded while a session was running,
+CoCalc restarts the shared graphical session so the new audio service is
+available. This closes applications from the old session.
 
 ## Select an application window
 
