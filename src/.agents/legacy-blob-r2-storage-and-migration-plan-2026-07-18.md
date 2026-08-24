@@ -2,13 +2,59 @@
 
 Date: 2026-07-18
 
-Last revised: 2026-07-20 after simplifying the design around the actual use of
-blobs in CoCalc, permanent public images, R2 edge delivery, bay-local upload
-controls, and portable Jupyter notebook attachments.
+Last revised: 2026-08-24 after rechecking the plan against the current
+implementation, the completed Jupyter attachment work, the existing
+`BlobByteStore` seam, and the urgent need to stop serving managed-site public
+image blobs from PostgreSQL and the hub.
 
 Status: proposed implementation plan. The Jupyter live-link/on-disk attachment
-conversion described below has been implemented. R2 blob storage and legacy
-blob migration have not yet been implemented.
+conversion described below has been implemented. The initial PostgreSQL-backed
+`BlobByteStore` abstraction exists, but it is still thin and does not yet
+provide R2 reads, R2 writes, immutable-object metadata, media validation,
+rolling creation limits, a Cloudflare Worker read path, current-corpus
+backfill, or legacy migration.
+
+## 2026-08-24 Review
+
+The core design still fits and should not be reopened unless a concrete product
+requirement changes. The service is intentionally like GitHub issue attachment
+image hosting: authenticated creation, public hash-addressed raster-image
+reads, immutable normal lifetime, no project/account read ACL, no per-read
+database writes, and explicit warnings that blob URLs are not suitable for
+secrets or sensitive personal data.
+
+The implementation should now be split into two independent milestones:
+
+1. Move the current managed-site blob path from PostgreSQL/hub serving to
+   R2/Cloudflare serving. This includes new uploads, generated images,
+   server-side reads, and a backfill of the current cocalc.ai production blob
+   rows, which are expected to be small enough to verify exhaustively.
+2. Migrate selected legacy `cocalc.com` blobs only after milestone 1 is stable
+   in production. The legacy corpus may include millions of objects from a mix
+   of PostgreSQL and `smc-blobs`; it must use a separate operator manifest and
+   must not block the new/current blob storage rollout.
+
+The plan's main adjustment is therefore ordering, not semantics. Do not start
+by solving the entire legacy corpus. First make today's blob service cheap,
+cacheable, and off the hub/database hot path while preserving the existing
+`/blobs/...?...uuid=...` URLs and PostgreSQL fallback mode.
+
+Concrete current-state deltas since the July plan:
+
+- `src/packages/server/blobs/store.ts` now provides a PostgreSQL-backed
+  `BlobByteStore` seam used by save/read helpers.
+- `src/packages/hub/servers/app/blobs.ts` still serves anonymous reads through
+  the hub and PostgreSQL, so the expensive path remains active.
+- `src/packages/hub/servers/app/blob-upload.ts` still accepts generic uploaded
+  file bytes; R2 public rollout must add server-side raster validation or keep
+  non-images on PostgreSQL-only compatibility behavior.
+- `src/packages/server/membership/blob-limits.ts` still enforces total active
+  blob count/bytes by querying the `blobs` table. Keep this during the first
+  R2 rollout as a defensive compatibility limit, then replace it with rolling
+  creation limits in a separate observed step.
+- The 2026-07-18 current-production count of 568 rows is stale. Re-run the
+  inventory query before backfill; the expected order of magnitude is still
+  small enough for exhaustive current-corpus migration.
 
 ## Problem
 
@@ -825,13 +871,20 @@ dependency.
 - Inventory current generic non-image upload callers and choose reject versus
   authenticated compatibility behavior.
 - Inventory current membership quota usage and choose rolling tier limits.
-- Inventory legacy raster candidates and projected R2 cost.
+- Re-run the current cocalc.ai production blob inventory: row count, total
+  bytes, extension/MIME hints, and validated raster versus non-raster split.
+- Inventory legacy raster candidates and projected R2 cost, but do not make
+  legacy completeness a prerequisite for moving current production blobs to R2.
 
 Gate: no unresolved path can silently publish arbitrary active content.
 
-### Phase 1: storage abstraction and bay admission
+### Phase 1: complete storage abstraction and bay admission
 
-- Add `BlobByteStore` with PostgreSQL and R2 implementations.
+- Extend the existing PostgreSQL-backed `BlobByteStore` seam to the full target
+  interface needed by R2: existence/metadata checks, immutable conditional put,
+  trusted content type, SHA-256, byte size, and deterministic key mapping.
+- Add the R2 implementation while keeping PostgreSQL mode as the default
+  fallback for self-hosted deployments and for managed rollback.
 - Add media validation shared by browser, RPC, generated-image, import, and
   migration paths.
 - Add rolling membership upload limits and bounded per-bay emergency counters.
@@ -852,6 +905,8 @@ Gate: staging cost, cache, and security behavior is understood under load.
 
 - Write new verified images to R2 while preserving PostgreSQL bytes.
 - Backfill all current staging image rows.
+- Keep non-raster rows in PostgreSQL-only compatibility mode until a separate
+  authenticated non-image attachment policy exists.
 - Compare bytes, UUID, metadata, and server-side/Jupyter reads exhaustively.
 - Switch staging public reads to Worker/R2.
 
@@ -865,6 +920,8 @@ Gate: no read depends on PostgreSQL for the migrated staging corpus.
 - Backfill and verify the small current production corpus.
 - Canary public reads, then switch all current images to Worker/R2.
 - Keep PostgreSQL bytea intact for rollback.
+- Record exact counts of migrated raster rows, PostgreSQL-only compatibility
+  rows, skipped rows, and failures before starting legacy migration.
 
 Gate: current production images have verified R2 copies and healthy cache/read
 metrics.
@@ -872,6 +929,11 @@ metrics.
 ### Phase 5: legacy pilot
 
 - Build exact source and archived-syncstring inventories.
+- Dump legacy PostgreSQL metadata to a resumable manifest that includes enough
+  source information to reconstruct bytes from PostgreSQL or `smc-blobs`
+  without consulting the serving path.
+- Copy the manifest to production-side operator storage; do not load millions
+  of legacy rows into the live `blobs` serving table as the migration catalog.
 - Migrate a representative pilot across database/GCS/compression/image types.
 - Verify known support-case URLs and restored notebooks.
 - Compare migration output with source bytes and ordinary `.ipynb` saves.
