@@ -368,6 +368,190 @@ public reads.
 
 ## Bucket and Worker Design
 
+### Cloudflare Bootstrap Configuration Plan
+
+The managed blob path depends on Cloudflare features that are easy to
+misconfigure manually: R2 bucket administration, private R2 object access,
+Workers script deployment, Worker routes or custom domains, DNS, and the
+existing tunnel and visitor-location-header settings. The current wizard asks
+admins to create long-lived tokens by following screenshots. That approach was
+acceptable for the initial tunnel/R2 setup, but it does not scale to the
+additional Worker permissions needed for public blob delivery. It also tends
+to produce either underpowered tokens that fail later or overpowered tokens
+that remain stored long term.
+
+Use a one-time bootstrap-token flow as the recommended configuration path.
+Keep manual token entry only as an advanced fallback for operators who already
+understand Cloudflare API permissions.
+
+#### Intended admin experience
+
+1. The admin enters the external domain and CoCalc resource prefix.
+2. The wizard explains, in plain text, that the next Cloudflare token is a
+   temporary bootstrap token, not the token CoCalc will keep.
+3. The admin creates a short-lived Cloudflare token with enough authority to
+   discover the account/zone, create a narrower API token, configure the
+   selected zone, and provision the blob Worker resources.
+4. The admin pastes that bootstrap token into CoCalc.
+5. CoCalc uses it once, from the server, to create a durable least-privilege
+   "CoCalc automation" token scoped to exactly the discovered Cloudflare
+   account and zone.
+6. CoCalc stores only the durable token and derived non-secret configuration.
+7. CoCalc attempts to revoke the bootstrap token immediately after the durable
+   token is created.
+8. The wizard shows exactly what was created, whether the bootstrap token was
+   revoked, and any manual cleanup still required.
+9. The wizard then runs idempotent reconciliation for tunnels, R2 bucket
+   checks, the blob Worker, Worker route/custom domain, DNS, and health tests.
+
+The UI must be explicit that the bootstrap token is powerful and should have a
+very short expiration, for example 15-60 minutes. It must also say that CoCalc
+does not save that token and that the source code for this flow is auditable.
+
+#### Bootstrap token handling and storage rules
+
+The bootstrap token is a sensitive one-time secret with higher privileges than
+the durable token. Treat it as toxic input:
+
+- accept it only from an authenticated site admin with the same fresh-auth
+  requirements used for other dangerous site settings;
+- send it only over the existing authenticated Conat/system API call;
+- keep it only in process memory for the duration of the request or LRO;
+- never write it to site settings, PostgreSQL, logs, LRO payloads, telemetry,
+  browser storage, exception messages, screenshots, or test artifacts;
+- redact request bodies and Cloudflare error details defensively anywhere the
+  token value could be included;
+- do not store it as a fallback if durable-token creation fails;
+- do not continue to use it for ordinary future reconciliation after the
+  durable token exists; and
+- attempt immediate invalidation through Cloudflare's token API when the
+  durable token has been created successfully.
+
+If invalidation fails, the wizard should show the Cloudflare token id when
+available and give a clear instruction to delete the temporary token manually.
+The token secret itself must not be shown again. The configured short
+expiration is the final safety backstop.
+
+#### Durable token scope
+
+Refactor the existing `createDurableTunnelToken` concept into a durable
+`CoCalc Cloudflare automation` token. This token is long-lived enough for
+normal operations but must be much narrower than the bootstrap token.
+
+The durable token should be scoped to:
+
+- the single Cloudflare account that owns the selected zone;
+- the single Cloudflare zone for the configured CoCalc external domain; and
+- only the permission groups needed by enabled CoCalc Cloudflare features.
+
+It should include account-level permissions for Cloudflare Tunnel management,
+R2 bucket administration, Workers script deployment, and optional account
+analytics used by operator diagnostics. It should include zone-level
+permissions for zone read, DNS record management, Worker route or custom-domain
+management, managed request headers, and any zone settings/rules required by
+direct encrypted project-host routing.
+
+It must not include broad billing, organization, user-management, account
+membership, or API-token-management permissions. In particular, the durable
+token should not be able to create or delete more Cloudflare API tokens; that
+capability belongs only to the temporary bootstrap token.
+
+The implementation should discover Cloudflare permission-group ids
+dynamically, as the existing bootstrap code already does, instead of hardcoding
+ids. The wizard should display the resulting human-readable permission names
+before or immediately after creation so admins can audit what CoCalc requested.
+
+Initially, keep R2 S3 object credentials (`r2_access_key_id` and
+`r2_secret_access_key`) as a separate credential class. The Cloudflare REST API
+token can administer buckets and deploy the Worker, but server-side object
+PUT/GET currently uses the S3-compatible R2 credentials. Only fold S3
+credential creation into the bootstrap flow after the implementation verifies a
+Cloudflare API path that returns exactly the needed access key id and secret
+with a narrow bucket/object scope.
+
+#### Site settings shape
+
+The long-term model should be one stored Cloudflare REST automation token, not
+several unrelated tokens with overlapping privileges. To avoid a risky
+settings migration, the implementation can first write the durable token into
+the existing settings that current code reads:
+
+- `project_hosts_cloudflare_tunnel_api_token`;
+- `r2_api_token`, when the durable token includes R2 bucket administration;
+- `project_hosts_cloudflare_tunnel_account_id`;
+- `r2_account_id`;
+- `r2_bucket_prefix`; and
+- `dns`.
+
+Then add a follow-up cleanup that introduces clearer names such as
+`cloudflare_automation_api_token`, `cloudflare_account_id`,
+`cloudflare_zone_id`, `cloudflare_zone_name`, `blob_worker_name`, and
+`blob_worker_public_url`, with compatibility reads from the old settings until
+managed sites have migrated.
+
+Do not store Cloudflare resource ids only in informal notes. The blob Worker
+deployment should have enough durable state to reconcile idempotently, audit
+what exists, and delete or rotate it later without guessing from names alone.
+
+#### Resource reconciliation
+
+After the durable token is stored, CoCalc should provision resources with
+ordinary idempotent "ensure" functions, not with one-shot wizard-only logic:
+
+- ensure the private `<cloudflare-site-prefix>-blobs` R2 bucket exists;
+- ensure `r2.dev` public bucket access is disabled or unused;
+- deploy/update the blob image Worker from the checked-in source;
+- bind the private R2 bucket as the Worker's `BLOBS` binding;
+- create/update a dedicated blob hostname, preferably
+  `blobs.<site-domain>`, instead of a broad route on the main application
+  hostname;
+- create/update the required DNS record, Worker route, or Worker custom
+  domain;
+- set `blob_r2_public_url` only after the Worker URL is reachable; and
+- run a smoke test that writes or locates a known object, reads it through the
+  Worker, and confirms the same-origin `/blobs/...?...uuid=...` route redirects
+  when configured.
+
+A failure after durable-token creation should leave the durable token in place
+and make reconciliation safely retryable. A failure before durable-token
+creation should save no Cloudflare token.
+
+Do not enable a strict `blob_storage_backend=r2` mode merely because the token
+was created. R2 blob serving is ready only after bucket, Worker, routing, and
+server-side read/write health checks all pass. Until then `auto` must choose
+PostgreSQL for writes or keep the previous known-good mode.
+
+#### Admin trust and communication
+
+The wizard should include an expandable "What CoCalc will do with this token"
+summary before submission:
+
+- verify the token with Cloudflare;
+- discover the matching zone and account for the configured domain;
+- enumerate Cloudflare permission groups so a narrow token can be constructed;
+- create one durable CoCalc automation token for this site;
+- optionally enable visitor location headers;
+- provision R2 and Worker resources needed by configured features;
+- attempt to delete the bootstrap token; and
+- store only the durable token and non-secret resource identifiers.
+
+It should also include a "What CoCalc will not do" summary:
+
+- it will not save the bootstrap token;
+- it will not send the token to browsers, project hosts, or user projects;
+- it will not use the bootstrap token after the durable token exists;
+- it will not request access to unrelated Cloudflare zones or accounts; and
+- it will not make the R2 bucket public.
+
+Every success and warning message must distinguish these three credential
+classes clearly:
+
+- the temporary bootstrap Cloudflare API token;
+- the long-lived CoCalc Cloudflare REST automation token; and
+- the R2 S3 access key and secret used for object reads/writes.
+
+Conflating these names is a security and support risk.
+
 ### Bucket provisioning
 
 - Bucket name: `<cloudflare-site-prefix>-blobs`; currently `staging-blobs` and
@@ -790,6 +974,13 @@ dependency.
 - R2 credentials are never sent to browsers or project containers.
 - Read credentials cannot list or write; write credentials cannot administer
   buckets or Cloudflare accounts.
+- Cloudflare bootstrap tokens are one-time admin inputs: they are never stored,
+  logged, returned to the browser, or used after the durable automation token
+  is created.
+- The durable Cloudflare automation token is scoped to the selected account and
+  zone and lacks API-token-management permission.
+- The UI distinguishes temporary bootstrap tokens, durable Cloudflare REST
+  automation tokens, and R2 S3 object credentials.
 - The Worker maps one validated identifier to one fixed prefix and cannot act
   as a general R2 proxy.
 - Canonical cache keys ignore attacker-controlled filenames and irrelevant
@@ -841,6 +1032,26 @@ dependency.
 - Short negative caching does not conceal a newly uploaded object beyond its
   configured duration.
 - Worker exposes no listing, metadata, or write behavior.
+
+### Cloudflare bootstrap and Worker provisioning
+
+- Bootstrap-token submission requires site-admin fresh auth.
+- Bootstrap token values are not persisted in site settings, logs, LRO records,
+  browser state, telemetry, or errors.
+- Durable-token creation requests only the expected account and zone resources.
+- Durable-token permission groups include Worker, R2 bucket, tunnel, DNS, and
+  required zone-settings access, but exclude API-token-management permissions.
+- Bootstrap-token invalidation is attempted after durable-token creation.
+- Invalidation failure returns a warning with the token id when available but
+  never returns the bootstrap token secret.
+- Durable-token creation failure saves no bootstrap token and does not enable
+  R2 blob serving.
+- Resource reconciliation is idempotent across existing bucket, existing
+  Worker, existing route/custom domain, and repeated wizard runs.
+- `blob_r2_public_url` is saved only after the Worker endpoint passes a smoke
+  test.
+- Partial Cloudflare configuration leaves `auto` mode on PostgreSQL rather
+  than silently writing new blobs to a broken R2 path.
 
 ### Jupyter and application semantics
 
@@ -894,12 +1105,20 @@ Gate: focused tests cover every producer and multibay authorization path.
 
 ### Phase 2: staging bucket and Worker
 
+- Replace the screenshot/manual-token Cloudflare wizard with the recommended
+  bootstrap-token flow and an advanced manual fallback.
+- Extend durable-token creation to include the Worker and Worker-route
+  permissions needed for public blob delivery.
+- Add an idempotent server-side Cloudflare blob Worker reconciliation API that
+  can be called from the wizard and from operator tooling.
 - Provision the private staging Standard R2 bucket.
 - Deploy the canonical read Worker, caching, WAF/rate rules, and health checks.
 - Exercise cold/warm reads at representative sizes and malformed/miss load.
 - Confirm no public bucket/list/write path exists.
 
-Gate: staging cost, cache, and security behavior is understood under load.
+Gate: the wizard creates and stores only the durable token, the bootstrap token
+is invalidated or explicitly flagged for manual deletion, and staging cost,
+cache, and security behavior is understood under load.
 
 ### Phase 3: dual-write current staging data
 
