@@ -223,6 +223,12 @@ verify:
   - jupyter kernelspec list | grep -qi sagemath
   - jupyter kernelspec list | grep -qi julia
   - jupyter kernelspec list | grep -qi ir
+  - >-
+    python3 -c 'import json; from pathlib import Path;
+    kernels = Path("/usr/local/share/jupyter/kernels");
+    expected = ["/usr/local/sage/sage", "-python"];
+    assert json.loads((kernels / "sagemath/kernel.json").read_text())["argv"][:2] == expected;
+    assert json.loads((kernels / "python3/kernel.json").read_text())["argv"][:2] == expected'
 
 publish:
   label: CoCalc Legacy Compatibility
