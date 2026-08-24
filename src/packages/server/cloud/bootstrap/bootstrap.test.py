@@ -963,6 +963,7 @@ class BootstrapStateFilesTest(unittest.TestCase):
     def test_writes_split_state_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
+            lifecycle_export_dir = Path(tmpdir) / "public-lifecycle"
             cfg = replace(
                 cfg,
                 conat_url="https://hub.example.invalid/conat/master-token",
@@ -972,6 +973,7 @@ class BootstrapStateFilesTest(unittest.TestCase):
                 project_host_bundle=replace(
                     cfg.project_host_bundle,
                     root="/opt/cocalc/project-host/bundles",
+                    version="project-host-version",
                 ),
                 project_bundle=replace(
                     cfg.project_bundle,
@@ -983,11 +985,14 @@ class BootstrapStateFilesTest(unittest.TestCase):
                 ),
             )
             original_resolve = bootstrap.resolve_runtime_user_identity
+            original_export_dir = bootstrap.BOOTSTRAP_LIFECYCLE_EXPORT_DIR
             try:
                 bootstrap.resolve_runtime_user_identity = lambda _cfg: (2000, 2000)
+                bootstrap.BOOTSTRAP_LIFECYCLE_EXPORT_DIR = lifecycle_export_dir
                 bootstrap.write_bootstrap_state_files(cfg)
             finally:
                 bootstrap.resolve_runtime_user_identity = original_resolve
+                bootstrap.BOOTSTRAP_LIFECYCLE_EXPORT_DIR = original_export_dir
 
             facts = json.loads(
                 (Path(cfg.bootstrap_dir) / "bootstrap-host-facts.json").read_text(
@@ -1001,6 +1006,16 @@ class BootstrapStateFilesTest(unittest.TestCase):
             )
             state = json.loads(
                 (Path(cfg.bootstrap_dir) / "bootstrap-state.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            public_desired = json.loads(
+                (lifecycle_export_dir / "bootstrap-desired-state.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            public_state = json.loads(
+                (lifecycle_export_dir / "bootstrap-state.json").read_text(
                     encoding="utf-8"
                 )
             )
@@ -1040,6 +1055,26 @@ class BootstrapStateFilesTest(unittest.TestCase):
             )
             self.assertEqual(state["runtime_user_contract"]["user"], "missing-runtime-user")
             self.assertIn("installed", state)
+            self.assertNotIn("bootstrap_connection", public_desired)
+            self.assertNotIn("env_lines", public_desired)
+            self.assertNotIn("bootstrap-secret", json.dumps(public_desired))
+            self.assertEqual(
+                public_desired["project_host_bundle"],
+                {
+                    "root": "/opt/cocalc/project-host/bundles",
+                    "version": "project-host-version",
+                },
+            )
+            self.assertEqual(
+                public_state["runtime_user_contract"]["user"],
+                "missing-runtime-user",
+            )
+            self.assertEqual(lifecycle_export_dir.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(
+                (lifecycle_export_dir / "bootstrap-state.json").stat().st_mode
+                & 0o777,
+                0o644,
+            )
 
 
 class BootstrapRuntimeUserContractTest(unittest.TestCase):

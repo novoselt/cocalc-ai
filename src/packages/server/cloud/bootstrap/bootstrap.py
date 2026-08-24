@@ -44,6 +44,7 @@ from typing import Any
 STATE_SCHEMA_VERSION = 1
 HELPER_SCHEMA_VERSION = "20260814-v44"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
+BOOTSTRAP_LIFECYCLE_EXPORT_DIR = Path("/var/lib/cocalc/bootstrap-lifecycle")
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
 CLOUDFLARED_DEB_SHA256 = {
@@ -1842,6 +1843,90 @@ def write_bootstrap_state_files(cfg: BootstrapConfig) -> None:
     json_write_atomic(bootstrap_desired_state_path(cfg), build_desired_state(cfg))
     state = refresh_installed_state(cfg, json_load(bootstrap_state_path(cfg)))
     json_write_atomic(bootstrap_state_path(cfg), state)
+    write_bootstrap_lifecycle_export(cfg)
+
+
+def _selected_fields(source: dict[str, Any], fields: list[str]) -> dict[str, Any]:
+    return {field: source[field] for field in fields if field in source}
+
+
+def write_bootstrap_lifecycle_export(cfg: BootstrapConfig) -> None:
+    """Publish only the non-secret state needed by project-host heartbeats."""
+    desired = json_load(bootstrap_desired_state_path(cfg))
+    installed = json_load(bootstrap_state_path(cfg))
+    facts = json_load(bootstrap_host_facts_path(cfg))
+    public_desired = _selected_fields(
+        desired,
+        [
+            "schema_version",
+            "recorded_at",
+            "helper_schema_version",
+            "runtime_wrapper_version",
+            "runtime_user_contract",
+        ],
+    )
+    public_desired["bootstrap"] = _selected_fields(
+        desired.get("bootstrap") or {}, ["selector", "url", "sha256"]
+    )
+    for key in (
+        "project_host_bundle",
+        "project_bundle",
+        "tools_bundle",
+        "container_runtime_bundle",
+    ):
+        fields = ["version"]
+        if key == "project_host_bundle":
+            fields.append("root")
+        public_desired[key] = _selected_fields(desired.get(key) or {}, fields)
+    public_desired["cloudflared"] = _selected_fields(
+        desired.get("cloudflared") or {}, ["enabled"]
+    )
+
+    public_installed = _selected_fields(
+        installed,
+        [
+            "schema_version",
+            "recorded_at",
+            "helper_schema_version",
+            "runtime_wrapper_version",
+            "runtime_user_contract",
+            "installed",
+            "current_operation",
+            "last_error",
+            "last_provision_started_at",
+            "last_provision_finished_at",
+            "last_provision_result",
+            "last_reconcile_started_at",
+            "last_reconcile_finished_at",
+            "last_reconcile_result",
+            "provisioned",
+        ],
+    )
+    public_installed["bootstrap"] = _selected_fields(
+        installed.get("bootstrap") or {}, ["selector", "url", "sha256"]
+    )
+    public_facts = _selected_fields(
+        facts,
+        [
+            "schema_version",
+            "recorded_at",
+            "bootstrap_root",
+            "project_host_bundle_root",
+        ],
+    )
+
+    export_dir = BOOTSTRAP_LIFECYCLE_EXPORT_DIR
+    export_dir.mkdir(parents=True, exist_ok=True)
+    export_dir.chmod(0o755)
+    exports = {
+        "bootstrap-desired-state.json": public_desired,
+        "bootstrap-state.json": public_installed,
+        "bootstrap-host-facts.json": public_facts,
+    }
+    for name, payload in exports.items():
+        path = export_dir / name
+        json_write_atomic(path, payload)
+        path.chmod(0o644)
 
 
 def record_operation_start(cfg: BootstrapConfig, operation: str) -> None:
@@ -1852,6 +1937,7 @@ def record_operation_start(cfg: BootstrapConfig, operation: str) -> None:
     state["current_operation"] = operation
     state["last_error"] = None
     json_write_atomic(bootstrap_state_path(cfg), state)
+    write_bootstrap_lifecycle_export(cfg)
 
 
 def record_operation_success(cfg: BootstrapConfig, operation: str) -> None:
@@ -1863,6 +1949,7 @@ def record_operation_success(cfg: BootstrapConfig, operation: str) -> None:
     if operation == "provision":
         state["provisioned"] = True
     json_write_atomic(bootstrap_state_path(cfg), state)
+    write_bootstrap_lifecycle_export(cfg)
 
 
 def record_operation_failure(cfg: BootstrapConfig, operation: str, error: str) -> None:
@@ -1872,6 +1959,7 @@ def record_operation_failure(cfg: BootstrapConfig, operation: str, error: str) -
     state["current_operation"] = None
     state["last_error"] = error
     json_write_atomic(bootstrap_state_path(cfg), state)
+    write_bootstrap_lifecycle_export(cfg)
 
 
 def log_line(cfg: BootstrapConfig, message: str) -> None:
@@ -7911,6 +7999,9 @@ def write_env(cfg: BootstrapConfig, image_size_gb: int) -> None:
         run_best_effort(cfg, ["chown", f"{cfg.ssh_user}:{cfg.ssh_user}", runtime_dir], "chown runtime dir")
         env_assignments["COCALC_PODMAN_RUNTIME_DIR"] = runtime_dir
     env_assignments["COCALC_BTRFS_ROOT_RESERVE_GB"] = str(compute_root_reserve_gb(cfg))
+    env_assignments["COCALC_PROJECT_HOST_BOOTSTRAP_DIR"] = str(
+        BOOTSTRAP_LIFECYCLE_EXPORT_DIR
+    )
     env_assignments.setdefault(
         "COCALC_PROJECT_POOL_CGROUP",
         existing_env.get(

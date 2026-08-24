@@ -8,6 +8,9 @@ export function projectHostBootstrapDirCandidates(): string[] {
   if (explicitDir) {
     candidates.add(explicitDir);
   }
+  // The root-owned bootstrap state contains credentials. Bootstrap publishes
+  // an allowlisted lifecycle view here for the unprivileged host process.
+  candidates.add("/var/lib/cocalc/bootstrap-lifecycle");
   const home = `${process.env.HOME ?? ""}`.trim();
   if (home) {
     candidates.add(join(home, "cocalc-host", "bootstrap"));
