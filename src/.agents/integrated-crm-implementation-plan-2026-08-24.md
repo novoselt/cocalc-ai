@@ -51,8 +51,8 @@ the systems that already manage it.
 
 ## Legacy CRM Decision
 
-The existing CRM implementation is unused and should not constrain the new
-design.
+The existing CRM implementation was never deployed as a working product on
+CoCalc.ai and must be deleted rather than migrated or preserved.
 
 The current schema in `packages/util/db-schema/crm.ts` includes:
 
@@ -65,34 +65,39 @@ The current schema in `packages/util/db-schema/crm.ts` includes:
 - `crm_leads`
 
 The `.cocalc-crm` editor under
-`packages/frontend/frame-editors/crm-editor` is also unused. It exposes generic
-database-table editing through a collaborative file and contains the beginning
-of an internal Zendesk replacement. That is not the desired security,
-authority, or workflow model.
+`packages/frontend/frame-editors/crm-editor` is likewise unused. It exposes
+generic database-table editing through a collaborative file and contains the
+beginning of an internal Zendesk replacement. That is not the desired
+security, authority, or workflow model.
 
-Required cleanup:
+Production was checked on 2026-08-24 using audited exact-count queries. All
+seven legacy tables contain zero rows, and the existing receivables columns
+`commercial_orders.crm_organization_id` and
+`commercial_order_contacts.crm_person_id` contain zero non-null references.
+The corresponding production audit records are
+`2b7be29e-d3b8-440d-9e01-969ac8dace1a` and
+`6c64bbba-540b-444c-948f-d7c50a5e640d`. There is therefore no legacy customer
+data or ID mapping to preserve.
 
-1. Inventory row counts, references, and recent writes for every legacy
-   `crm_*` table in staging and production.
-2. Export any nonempty legacy data to a restricted administrative archive
-   before destructive migration.
-3. Remove `crm_support_tickets` and `crm_support_messages`. Zendesk replaces
-   their intended function.
-4. Remove `crm_leads`. Replace it with the constrained opportunity model in
-   this plan.
-5. Remove the old `crm_tasks` and `crm_tags` implementations. Recreate only the
-   narrower task model described below; defer tagging until there is a reviewed
-   taxonomy with a concrete operational use.
-6. Rebuild `crm_organizations` and `crm_people` around normalized data rather
-   than editable arrays. Preserve useful rows through an explicit ID mapping if
-   the inventory finds real data.
-7. Remove the `.cocalc-crm` file type, registration, editor, query helpers,
+Delete the old implementation directly:
+
+1. Remove the `.cocalc-crm` file type, registration, editor, query helpers,
    views, and legacy direct `user_query` mutation surface.
-8. Remove obsolete schema render types that are used only by the legacy CRM
-   editor after dependency analysis confirms they have no other callers.
+2. Remove the seven legacy table definitions, ownership entries, and code
+   paths that reference them.
+3. Drop the seven empty legacy tables. Create the new normalized
+   `crm_organizations`, `crm_people`, and `crm_tasks` tables cleanly rather than
+   performing in-place conversion or introducing temporary v2 tables.
+4. Remove the unused integer CRM reference columns from commercial orders and
+   contacts, replacing them with reviewed UUID references when the new CRM
+   integration is added.
+5. Remove obsolete schema render types used only by the old editor after a
+   dependency check confirms there are no other callers.
 
-Do not silently drop nonempty tables. The cleanup migration must report what it
-found and either migrate, archive, or stop for human review.
+This deletion applies only to the seven business tables listed above and the
+old editor. Other schemas and read models whose names begin with `crm_`, such
+as `crm_accounts`, `crm_projects`, `crm_purchases`, and `crm_retention`, are not
+part of the abandoned CRM and must not be removed.
 
 ## Goals
 
@@ -108,7 +113,8 @@ found and either migrate, archive, or stop for human review.
 - Provide a purpose-built Customer 360 admin page.
 - Provide complete, stable, machine-readable CLI coverage.
 - Work correctly in one-bay Launchpad and multibay Rocket.
-- Make migration, retries, and external-system linking safe and idempotent.
+- Make rollout, retries, customer backfill, and external-system linking safe
+  and idempotent.
 
 ## Non-Goals
 
@@ -426,7 +432,7 @@ Mutation methods should include:
 - append internal note, call, or meeting activity
 - link/unlink Zendesk, Stripe, account, order, and site-license references
 - create a commercial order from an opportunity
-- preview and apply reviewed backfill
+- preview and apply reviewed customer discovery/backfill
 
 All methods must use explicit request/response types from
 `packages/conat/hub/api`. Reads and mutations route by seed ownership rather
@@ -505,7 +511,7 @@ cocalc admin crm opportunities create CRM-2026-000123 \
 - All writes require fresh authentication in the first release. This can be
   relaxed only after an operation-specific security review.
 - Merges, domain verification/transfer, external-reference changes, archival,
-  exports, and backfill always require fresh authentication.
+  exports, and customer backfill always require fresh authentication.
 - Impersonated sessions may not access CRM APIs.
 - Mutations use optimistic versions, idempotency keys, and append-only audit
   events.
@@ -549,38 +555,22 @@ a Zendesk ticket or site license, adding a task/note, and reviewing a duplicate
 merge. Use searchable account, person, organization, and license selectors;
 never expose raw UUID text inputs as the normal workflow.
 
-## Migration And Backfill
+## Legacy Removal And Customer Backfill
 
-### Legacy Inventory
+### Legacy Removal
 
-Add a dry-run inventory command before changing schemas:
+The production verification described in **Legacy CRM Decision** is
+conclusive: the abandoned editor has no data to migrate. Remove its code and
+drop its empty tables before creating the new normalized schema. Do not add
+parallel v2 tables, an integer-to-UUID map, an archive, a compatibility layer,
+or a retention window for the unused implementation.
 
-```sh
-cocalc admin crm migration inventory --json
-```
+The cleanup database migration must be idempotent and narrowly name the seven
+tables being removed. The new CRM schema then creates its UUID-based tables
+under their final canonical names. Receivables integration adds new UUID
+foreign keys directly; it does not convert the unused integer columns.
 
-It reports table counts, recent writes, cross-table references, invalid rows,
-and commercial-order references to legacy CRM IDs. It must run in staging and
-production and be attached to the migration review.
-
-### Schema Transition
-
-Use parallel v2 tables and an explicit ID map rather than destructive in-place
-type conversion:
-
-1. Create the normalized schema with UUID identifiers.
-2. Migrate valid legacy organizations and people when present.
-3. Record old integer to new UUID mappings.
-4. Update commercial-order organization/contact references through the map.
-5. Validate referential integrity and compare source/destination counts.
-6. Switch service reads and writes to the new schema.
-7. Keep old tables read-only for one release window.
-8. Export and drop obsolete tables and remove compatibility code.
-
-If inventory confirms zero useful rows, the same process records that fact and
-uses an empty mapping rather than relying on an assumption.
-
-### Business-System Backfill
+### Business-System Customer Backfill
 
 Backfill is preview-first and produces candidates, not automatic identity
 merges. Candidate sources include:
@@ -627,16 +617,20 @@ auth workflow.
 
 ## Rollout Plan
 
-### Phase 0: Inventory And Contracts
+### Phase 0: Legacy Removal And Contracts
 
-- Inventory legacy CRM data and consumers.
+- Delete the old `.cocalc-crm` editor, file registration, generic query code,
+  and the seven empty legacy table definitions.
+- Drop the seven empty production tables and remove the unused integer CRM
+  columns from receivables.
+- Confirm unrelated `crm_*` reporting schemas remain intact.
 - Finalize the domain model and ownership classification.
 - Define Conat types and stable CLI JSON schemas.
 - Add packaged admin documentation and feature flags.
-- Record migration and rollback procedures.
+- Record rollout and rollback procedures for the new implementation.
 
-Exit criterion: reviewed inventory proves every legacy table and caller has an
-explicit migrate, archive, or delete disposition.
+Exit criterion: no production code references the abandoned editor or seven
+legacy tables, and the unrelated `crm_*` schemas still pass their tests.
 
 ### Phase 1: Schema, Service, And CLI
 
@@ -645,7 +639,7 @@ explicit migrate, archive, or delete disposition.
 - Implement complete CLI reads and preview-first mutations.
 - Add fresh-auth, idempotency, optimistic concurrency, redaction, and audit
   tests.
-- Add migration inventory and diagnostics commands.
+- Add customer discovery/backfill and diagnostics commands.
 
 Exit criterion: an agent can perform all core organization, people,
 opportunity, task, note, and linking workflows from CLI without UI or raw SQL.
@@ -661,7 +655,7 @@ opportunity, task, note, and linking workflows from CLI without UI or raw SQL.
 Exit criterion: CLI and UI expose equivalent operations backed by the same API,
 and a customer page answers the primary operational questions.
 
-### Phase 3: Backfill And Production Rollout
+### Phase 3: Customer Backfill And Production Rollout
 
 - Run candidate backfill in staging and review every merge class.
 - Validate multibay routing and projection behavior.
@@ -672,18 +666,7 @@ and a customer page answers the primary operational questions.
 Exit criterion: new institutional tickets and commercial orders are linked to
 canonical customers, and diagnostics contain no unexplained critical gaps.
 
-### Phase 4: Legacy Removal
-
-- Make the old `.cocalc-crm` editor and schema writes unavailable.
-- Export and drop obsolete support, message, lead, task, and tag tables.
-- Remove the old file editor and direct query/mutation code.
-- Rename or swap v2 organization/person tables into their canonical names.
-- Remove migration compatibility after the retention window.
-
-Exit criterion: no production code references the old editor or removed tables,
-and the schema ownership audit passes.
-
-### Phase 5: Operational Refinement
+### Phase 4: Operational Refinement
 
 - Add renewal and expansion queues.
 - Add deterministic follow-up reminders and daily digests.
@@ -731,14 +714,17 @@ and the schema ownership audit passes.
 - Restart/rehome bays during reads and idempotent retries.
 - Verify Customer 360 never performs unbounded synchronous cross-bay scans.
 
-### Migration Tests
+### Legacy Removal And Backfill Tests
 
-- Empty legacy tables.
-- Nonempty valid legacy tables.
-- Invalid and conflicting legacy rows.
-- Commercial orders referencing legacy integer IDs.
-- Interrupted migration and safe restart.
-- Rollback before and after service cutover.
+- The cleanup removes exactly the seven abandoned tables and is idempotent.
+- Unrelated `crm_*` schemas and read models remain available.
+- No `.cocalc-crm` editor or direct legacy mutation route remains registered.
+- New CRM UUID references integrate with commercial orders without legacy
+  integer conversion.
+- Customer discovery/backfill preview is deterministic, bounded, and safely
+  restartable.
+- Re-running a committed backfill batch does not duplicate customers, people,
+  links, opportunities, tasks, or activities.
 
 ### End-To-End Agent Acceptance
 
@@ -767,13 +753,12 @@ Use independent site settings for:
 - Zendesk linking
 - receivables/site-license integration
 - metric projections
-- migration/backfill
-- legacy editor read-only compatibility
+- customer discovery/backfill
 
 All effectful flags default off. Rollback disables writes and integrations while
-leaving read-only visibility and diagnostics available. Dropping legacy tables
-is a separate release step after the rollback window, not part of initial
-enablement.
+leaving read-only visibility and diagnostics available. Removal of the unused
+legacy editor and empty tables is permanent cleanup and does not require a
+compatibility or rollback mode.
 
 ## Definition Of Done
 
@@ -790,7 +775,6 @@ The CRM is complete when:
 - writes are preview-first, idempotent, versioned, fresh-authenticated, and
   audited;
 - customer search and Customer 360 are bounded and multibay-correct;
-- migration diagnostics account for every legacy CRM row;
 - the unused Zendesk replacement, generic CRM tables, and `.cocalc-crm` editor
   are removed;
 - packaged admin documentation explains normal operation and recovery;
