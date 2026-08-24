@@ -130,6 +130,104 @@ part of the abandoned CRM and must not be removed.
 - Store card details, bank credentials, secrets, or unrestricted provider
   payloads.
 
+## Explicitly Deferred CRM Functionality
+
+CoCalc is a small company. The first release should be operationally
+complete for that team, not imitate the feature surface of an enterprise CRM.
+The following categories are deliberately deferred until actual usage creates
+a concrete need.
+
+Deferred does not mean that baseline security is optional. Admin checks,
+allowlisted agent capabilities, fresh authentication for sensitive actions,
+bounded PII access, optimistic concurrency, and immutable audit events are
+required from the first release.
+
+### Enterprise RBAC And Organizational Administration
+
+Do not build sales territories, reporting hierarchies, department-specific CRM
+roles, record ownership teams, field-level permissions, approval matrices,
+delegated administration, CRM-specific SSO/SCIM provisioning, or separate
+read/write/export roles. Initially, CRM access is limited to CoCalc admins and
+explicitly authorized agents through the operation-level capability and audit
+model in this plan.
+
+Revisit finer-grained CRM IAM only if CoCalc adds materially different internal
+roles, outside contractors, or a larger sales/support organization. Avoid
+inventing a generalized policy language before that need exists.
+
+### Marketing Automation And Acquisition
+
+Do not build bulk-email delivery, campaign composition, contact segmentation,
+drip sequences, lead nurturing, social-media management, landing-page builders,
+A/B campaign tooling, or a marketing consent platform. Customer-facing support
+communication remains in Zendesk.
+
+The likely first marketing extension is Google Ads funnel attribution. After
+the CRM core is reliable, add a narrow, provider-adapted acquisition model that
+can preserve first-party landing/referrer data, campaign parameters, supported
+advertising click identifiers, and timestamps as immutable acquisition touches.
+Define a small reviewed funnel such as account creation, verified activation,
+institutional inquiry, qualified opportunity, won order, and collected payment.
+
+Attribution must retain raw provenance and support simple first-touch and
+last-touch views rather than overwriting one canonical source. Linking an
+anonymous touch to a person, account, organization, or opportunity requires
+reviewable evidence. Uploading conversion events to Google Ads is a later,
+separate integration requiring privacy, retention, consent, and security
+review; it must never include support-thread contents or unrestricted customer
+PII.
+
+### Sales Automation, CPQ, And Contracts
+
+Defer territory and quota management, commissions, incentive compensation,
+weighted sales forecasting, automatic lead scoring, sales sequences, complex
+product catalogs, pricing-rule engines, configurable quote generation,
+proposal templates, e-signatures, contract lifecycle management, and automated
+renewal negotiation. Opportunities and commercial orders provide the required
+pipeline-to-fulfillment boundary without becoming a full CPQ or contract
+platform.
+
+### Communications And Personal Productivity
+
+Defer inbox synchronization, sending email from the CRM, calendar and meeting
+synchronization, meeting scheduling, telephony, call recording, transcription,
+conversation intelligence, and employee activity surveillance. Store bounded
+manual interaction summaries and external references instead of copying entire
+mailboxes or calendars.
+
+### Customer Success And Service Management
+
+Defer automated onboarding journeys, customer-success playbooks, health scores,
+churn prediction, NPS/CSAT surveys, success plans, SLA management, escalation
+engines, and a customer portal. Zendesk remains the support system, while CRM
+tasks can represent the small number of important human follow-ups.
+
+### Customization And Workflow Platforms
+
+Defer arbitrary custom objects, user-defined fields, formula languages,
+no-code workflow builders, generalized triggers, arbitrary webhooks, plugin
+marketplaces, and customer-specific screen layouts. Add constrained fields,
+states, and integrations only when they correspond to a reviewed CoCalc
+business process and are fully usable through the CLI.
+
+### Enrichment, Intelligence, And Advanced Analytics
+
+Defer third-party contact/firmographic enrichment, purchased lead lists,
+automatic relationship inference, autonomous customer merging, predictive deal
+scoring, AI-written outbound messages, generalized recommendation engines,
+enterprise data-warehouse synchronization, and executive BI suites. Initial
+analytics should remain explainable: pipeline state, historical spend,
+adoption, tasks, receivables, and bounded acquisition attribution with explicit
+provenance.
+
+### ERP, Accounting, And Partner Management
+
+Defer general-ledger accounting, accounts payable, tax calculation, revenue
+recognition, expense management, inventory, reseller/channel management,
+partner portals, and vendor-management workflows. Stripe and commercial orders
+retain their defined authority, and external accounting integration should be
+added only when the operational need and system of record are clear.
+
 ## Authority And Multibay Ownership
 
 CRM records are cluster-global business records. They must be seed-authoritative
@@ -780,3 +878,4 @@ The CRM is complete when:
 - packaged admin documentation explains normal operation and recovery;
 - staging and Lite end-to-end tests demonstrate ticket-to-customer-to-order-to-
   invoice-to-license continuity.
+
