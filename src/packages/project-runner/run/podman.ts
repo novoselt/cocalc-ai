@@ -1887,6 +1887,18 @@ async function pastaHostAliasDefaultAddr(
   return addr || undefined;
 }
 
+export async function resolveHostContainersInternalAddress(
+  selectedNetwork: string,
+): Promise<string | undefined> {
+  if (selectedNetwork.startsWith("--network=pasta")) {
+    return await pastaHostAliasDefaultAddr(selectedNetwork);
+  }
+  if (selectedNetwork.startsWith("--network=slirp4netns")) {
+    return slirpConatHost();
+  }
+  return undefined;
+}
+
 function replaceUrlHostname(value: string, hostname: string): string {
   try {
     const url = new URL(value);
@@ -2311,7 +2323,7 @@ async function startUnlocked({
       const resolvedPastaConatHost =
         explicitPastaConatHost ??
         (conatUsesDefaultHostAlias
-          ? await pastaHostAliasDefaultAddr(selectedNetwork)
+          ? await resolveHostContainersInternalAddress(selectedNetwork)
           : undefined);
       if (resolvedPastaConatHost && conatUsesDefaultHostAlias) {
         env.CONAT_SERVER = replaceUrlHostname(

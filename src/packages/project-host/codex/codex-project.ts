@@ -36,6 +36,7 @@ import {
   networkArgument,
   podmanRuntimeArgs,
   projectPoolPodmanLauncher,
+  resolveHostContainersInternalAddress,
   resolveSharedScratchMount,
   verifyProjectContainerInPool,
 } from "@cocalc/project-runner/run/podman";
@@ -1344,7 +1345,15 @@ async function ensureContainer({
     "--user",
     `${DEFAULT_PROJECT_RUNTIME_UID}:${DEFAULT_PROJECT_RUNTIME_GID}`,
   );
-  args.push(networkArgument());
+  const selectedNetwork = networkArgument();
+  args.push(selectedNetwork);
+  const hostAliasAddress =
+    await resolveHostContainersInternalAddress(selectedNetwork);
+  if (hostAliasAddress) {
+    // Network-disabled projects still reach the authenticated, host-local
+    // Codex proxy. Their blocked DNS cannot resolve this Podman alias itself.
+    args.push("--add-host", `host.containers.internal:${hostAliasAddress}`);
+  }
   if (hasGpu) {
     args.push("--device", "nvidia.com/gpu=all");
     args.push("--security-opt", "label=disable");

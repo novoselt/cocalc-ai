@@ -17,6 +17,9 @@ const startRestrictedCodexEgressProxySessionMock = jest.fn(async () => ({
     "http://cocalc-codex:restricted-token@host.containers.internal:43128",
   close: restrictedEgressCloseMock,
 }));
+const resolveHostContainersInternalAddressMock = jest.fn(
+  async () => "10.206.0.1",
+);
 const podmanEnvMock = jest.fn(() => ({
   XDG_RUNTIME_DIR: "/tmp/cocalc-podman-runtime",
   CONTAINERS_CGROUP_MANAGER: "cgroupfs",
@@ -65,6 +68,8 @@ jest.mock("@cocalc/project-runner/run/podman", () => ({
     command: "podman",
     argsPrefix: [],
   })),
+  resolveHostContainersInternalAddress: (...args: any[]) =>
+    resolveHostContainersInternalAddressMock(...args),
   resolveSharedScratchMount: jest.fn(async () => undefined),
   verifyProjectContainerInPool: jest.fn(async () => undefined),
 }));
@@ -193,6 +198,7 @@ describe("initCodexProjectRunner", () => {
     });
     restrictedEgressCloseMock.mockReset();
     startRestrictedCodexEgressProxySessionMock.mockClear();
+    resolveHostContainersInternalAddressMock.mockClear();
     hubApi.hosts.issueProjectHostAgentAuthToken.mockReset();
     hubApi.hosts.issueProjectHostAgentAuthToken.mockResolvedValue({
       token: "issued-project-host-token",
@@ -386,6 +392,78 @@ describe("initCodexProjectRunner", () => {
 
     proc.emit("close", 0, null);
     expect(restrictedEgressCloseMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds a resolvable host alias to a newly created Codex container", async () => {
+    const proc = new FakeProc();
+    spawnMock.mockReturnValue(proc);
+    execFileMock.mockImplementation((_cmd, args, _opts, cb) => {
+      const name = `${args.at(-1) ?? ""}`;
+      if (args[0] === "inspect" && name.startsWith("project-")) {
+        cb(null, "true\n", "");
+        return;
+      }
+      if (args[0] === "container" && args[1] === "exists") {
+        cb(Object.assign(new Error("no such container"), { code: 1 }), "", "");
+        return;
+      }
+      cb(null, "", "");
+    });
+    const tmp = await mkTempDir("codex-project-host-alias-test-");
+    const bin = path.join(tmp, "bin");
+    await fs.mkdir(bin, { recursive: true });
+    await fs.writeFile(path.join(bin, "codex"), "");
+    const home = path.join(tmp, "home");
+    await fs.mkdir(home, { recursive: true });
+    const imageFile = path.join(tmp, "image-name.txt");
+    await fs.writeFile(imageFile, "buildpack-deps:noble-scm\n");
+    filesystem.localPath.mockResolvedValue({ home, scratch: undefined });
+    jest
+      .requireMock("@cocalc/project-runner/run/rootfs")
+      .getImageNamePath.mockReturnValue(imageFile);
+    jest
+      .requireMock("@cocalc/project-runner/run/rootfs")
+      .mount.mockResolvedValue(path.join(tmp, "rootfs"));
+    jest
+      .requireMock("@cocalc/project-runner/run/env")
+      .getEnvironment.mockResolvedValue({});
+    jest
+      .requireMock("@cocalc/backend/podman")
+      .mountArg.mockImplementation(
+        ({ source, target }) => `--volume=${source}:${target}`,
+      );
+    auth.resolveCodexAuthRuntime.mockResolvedValue({
+      source: "account-api-key",
+      contextId: "host-alias-test",
+      env: { OPENAI_API_KEY: "secret-key" },
+    });
+    process.env.COCALC_BIN_PATH = bin;
+
+    const { initCodexProjectRunner } = await import("./codex/codex-project");
+    initCodexProjectRunner();
+    await getCodexProjectSpawner()!.spawnCodexExec!({
+      projectId: "77777777-7777-4777-8777-777777777777",
+      accountId: "00000000-0000-4000-8000-000000000001",
+      cwd: "/home/user",
+      args: ["login", "--device-auth"],
+    });
+
+    expect(resolveHostContainersInternalAddressMock).toHaveBeenCalledWith(
+      "--network=pasta:--map-gw",
+    );
+    const runCall = execFileMock.mock.calls.find(
+      ([, args]) => args[0] === "run",
+    );
+    expect(runCall).toBeDefined();
+    expect(runCall![1]).toEqual(
+      expect.arrayContaining([
+        "--network=pasta:--map-gw",
+        "--add-host",
+        "host.containers.internal:10.206.0.1",
+      ]),
+    );
+
+    proc.emit("close", 0, null);
   });
 
   it("uses runtime account id to issue the CLI agent bearer", async () => {
