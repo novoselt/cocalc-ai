@@ -3942,6 +3942,8 @@ PROJECT_STORAGE_WORKER_MEMORY_MAX="$((2 * 1024 * 1024 * 1024))"
 PROJECT_STORAGE_WORKER_MEMORY_HIGH="$((1 * 1024 * 1024 * 1024))"
 PROJECT_PROCESS_OOM_SCORE_ADJ="500"
 RUNTIME_USER="__RUNTIME_USER__"
+CONTAINER_RUNTIME_CURRENT="/opt/cocalc/container-runtime/current"
+CONTAINER_RUNTIME_REQUIRED="__CONTAINER_RUNTIME_REQUIRED__"
 PROJECT_LEAF_POOL_HEADROOM_BYTES="$((2 * 1024 * 1024 * 1024))"
 MIN_PROJECT_LEAF_MEMORY_MAX_BYTES="$((512 * 1024 * 1024))"
 PROJECT_PASTA_NOFILE_LIMIT="4096"
@@ -3985,6 +3987,47 @@ deny() {
   local detail="$2"
   echo "SECURITY_DENY code=${code} detail=${detail}" >&2
   exit 2
+}
+
+run_rootfs_podman_as_user() {
+  local podman_user="$1"
+  local runtime_uid runtime_dir podman_bin
+  local -a runtime_env podman_prefix=()
+  shift
+  if [ "$podman_user" != "$RUNTIME_USER" ]; then
+    deny "rootfs-podman-user-mismatch" "$podman_user"
+  fi
+  runtime_uid="$(id -u -- "$podman_user")"
+  runtime_dir="/mnt/cocalc/data/tmp/cocalc-podman-runtime-${runtime_uid}"
+  runtime_env=(
+    "XDG_RUNTIME_DIR=${runtime_dir}"
+    "COCALC_PODMAN_RUNTIME_DIR=${runtime_dir}"
+    "CONTAINERS_CGROUP_MANAGER=cgroupfs"
+  )
+  if [ -x "${CONTAINER_RUNTIME_CURRENT}/bin/podman" ]; then
+    podman_bin="${CONTAINER_RUNTIME_CURRENT}/bin/podman"
+    runtime_env+=(
+      "CONTAINERS_CONF_OVERRIDE=${CONTAINER_RUNTIME_CURRENT}/etc/containers/containers.conf"
+      "PATH=${CONTAINER_RUNTIME_CURRENT}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    )
+  elif [ "$CONTAINER_RUNTIME_REQUIRED" = "1" ]; then
+    deny "managed-podman-missing" "${CONTAINER_RUNTIME_CURRENT}/bin/podman"
+  elif [ -x /usr/bin/podman ]; then
+    # Legacy bootstrap payloads without a managed runtime remain supported.
+    podman_bin="/usr/bin/podman"
+  else
+    deny "podman-missing" "/usr/bin/podman"
+  fi
+  # Ubuntu grants unprivileged user namespaces to Podman via this profile.
+  # The managed binary is under /opt, so enter the profile explicitly.
+  if [ -x /usr/bin/aa-exec ] && \
+     grep -q '^podman ' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+    podman_prefix=(/usr/bin/aa-exec -p podman --)
+  fi
+  /usr/bin/sudo -u "$podman_user" -H /usr/bin/env \
+    "${runtime_env[@]}" \
+    "${podman_prefix[@]}" \
+    "$podman_bin" "$@"
 }
 
 maintain_privileged_rustic_cache() {
@@ -7088,8 +7131,10 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
     : >"$rootfs/run/.containerenv"
     chmod 0644 "$rootfs/run/.containerenv" || true
     if [ "$skip_ownership_bridge" = false ]; then
-      /usr/bin/sudo -u "$podman_user" -H bash -lc "cd ~ && /usr/bin/podman unshare cat /proc/self/uid_map" >"$rewrite_uid_map_file"
-      /usr/bin/sudo -u "$podman_user" -H bash -lc "cd ~ && /usr/bin/podman unshare cat /proc/self/gid_map" >"$rewrite_gid_map_file"
+      run_rootfs_podman_as_user "$podman_user" \
+        unshare cat /proc/self/uid_map >"$rewrite_uid_map_file"
+      run_rootfs_podman_as_user "$podman_user" \
+        unshare cat /proc/self/gid_map >"$rewrite_gid_map_file"
       /usr/bin/python3 "$remap_rootfs_ids_script" \
         "to-canonical" \
         "$rootfs" \
@@ -7107,21 +7152,19 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
         "$rewrite_gid_map_file" \
         "$ownership_source"
       normalize_runtime_package_state_rootfs
-      fix_setid_runtime_helpers_escaped="$(printf '%q' "$fix_setid_runtime_helpers_script")"
-      /usr/bin/sudo -u "$podman_user" -H bash -lc "
-          cd ~ &&
-          /usr/bin/podman run --rm --network host \
-            --userns=keep-id:uid=2001,gid=2001 \
-            --user 0:0 \
-            --workdir / \
-            -e HOME=/root \
-            -e USER=root \
-            -e LOGNAME=root \
-            -e COCALC_RUNTIME_UID='2001' \
-            -e COCALC_RUNTIME_GID='2001' \
-            --security-opt label=disable \
-            --rootfs '$rootfs' '$shell_path' -lc $fix_setid_runtime_helpers_escaped
-        " >/dev/null
+      run_rootfs_podman_as_user "$podman_user" \
+        run --rm --network host \
+          --userns=keep-id:uid=2001,gid=2001 \
+          --user 0:0 \
+          --workdir / \
+          -e HOME=/root \
+          -e USER=root \
+          -e LOGNAME=root \
+          -e COCALC_RUNTIME_UID=2001 \
+          -e COCALC_RUNTIME_GID=2001 \
+          --security-opt label=disable \
+          --rootfs "$rootfs" "$shell_path" -lc \
+          "$fix_setid_runtime_helpers_script" >/dev/null
     fi
     normalize_result="$(printf '{"ok":true,"distro_family":"%s","package_manager":"%s","shell":"%s","glibc":true,"sudo_present":%s,"ca_certificates_present":%s}\n' \
       "$distro_family" "$package_manager" "$shell_path" "$sudo_present" "$ca_certificates_present")"
@@ -7690,6 +7733,10 @@ esac
         "__PROJECT_POOL_CGROUP__", DEFAULT_PROJECT_POOL_CGROUP
     )
     storage_wrapper = storage_wrapper.replace("__RUNTIME_USER__", cfg.ssh_user)
+    storage_wrapper = storage_wrapper.replace(
+        "__CONTAINER_RUNTIME_REQUIRED__",
+        "1" if cfg.container_runtime_bundle is not None else "0",
+    )
     wrappers = {
         "/usr/local/libexec/cocalc-runtime-storage-path-helper": RUNTIME_STORAGE_PATH_HELPER,
         "/usr/local/libexec/cocalc-project-io-policy": PROJECT_IO_POLICY_HELPER,

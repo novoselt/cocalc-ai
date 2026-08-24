@@ -2248,7 +2248,12 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            cfg = make_cfg(tmpdir)
+            cfg = replace(
+                make_cfg(tmpdir),
+                container_runtime_bundle=bootstrap.BundleSpec(
+                    "", None, "", "", "", ""
+                ),
+            )
             captured: dict[str, str] = {}
 
             original_text_write_atomic = bootstrap.text_write_atomic
@@ -2991,7 +2996,25 @@ reserve_project_startup_io_capacity
             self.assertIn('scratch_target_gib="${1:-}"', script)
             self.assertIn('blockdev --getsize64 "$scratch_parent"', script)
             self.assertIn("shared-scratch-grow-incomplete", script)
-            self.assertIn("podman unshare cat /proc/self/uid_map", script)
+            self.assertIn(
+                'unshare cat /proc/self/uid_map >"$rewrite_uid_map_file"',
+                script,
+            )
+            self.assertIn("run_rootfs_podman_as_user()", script)
+            self.assertIn('CONTAINER_RUNTIME_REQUIRED="1"', script)
+            self.assertIn(
+                'podman_bin="${CONTAINER_RUNTIME_CURRENT}/bin/podman"',
+                script,
+            )
+            self.assertIn(
+                '"CONTAINERS_CONF_OVERRIDE=${CONTAINER_RUNTIME_CURRENT}/etc/containers/containers.conf"',
+                script,
+            )
+            self.assertIn('podman_prefix=(/usr/bin/aa-exec -p podman --)', script)
+            self.assertNotIn(
+                'bash -lc "cd ~ && /usr/bin/podman unshare', script
+            )
+            self.assertNotIn("/usr/bin/podman run --rm", script)
             self.assertIn('"to-canonical"', script)
             self.assertIn('"to-host"', script)
             self.assertIn("reverse_keep_id", script)
