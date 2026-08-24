@@ -13,7 +13,7 @@ High-level responsibilities:
   6) Fetch + verify bundles/tools and unpack them into cocalc-host paths.
   7) Install Node via nvm, write wrapper + helper scripts.
   8) Optional cloudflared setup, GPU setup, and autostart cron.
-  9) Start project-host, re-enable unattended upgrades, mark bootstrap done.
+  9) Start project-host, enable managed security updates, mark bootstrap done.
 """
 
 from __future__ import annotations
@@ -77,6 +77,7 @@ PROJECT_HOST_RUNTIME_SUBID_RANGES = (
 )
 APT_RETRIES = 5
 APT_ACQUIRE_TIMEOUT_S = 60
+APT_LOCK_TIMEOUT_S = 120
 APT_UPDATE_TIMEOUT_S = 180
 APT_INSTALL_TIMEOUT_S = 600
 RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S = 10
@@ -91,6 +92,13 @@ PODMAN_STALE_BOOT_ERROR_PATTERNS = (
     re.compile(r"invalid internal status", re.IGNORECASE),
 )
 NODE_RUNTIME_APT_PACKAGES = ("libatomic1",)
+AUTOMATIC_SECURITY_UPDATES_CONFIG = """// Managed by CoCalc project-host bootstrap.
+// CoCalc's own systemd timer runs unattended-upgrade; disable the distro's
+// overlapping periodic scheduler.
+APT::Periodic::Enable "0";
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::SyslogEnable "true";
+"""
 GCE_UBUNTU_MIRROR_RE = re.compile(
     r"https?://[A-Za-z0-9.-]*gce(?:\.clouds)?\.archive\.ubuntu\.com/ubuntu/?"
 )
@@ -2003,12 +2011,22 @@ def compute_image_size(cfg: BootstrapConfig) -> int:
 
 
 def disable_unattended(cfg: BootstrapConfig) -> None:
-    log_line(cfg, "bootstrap: disabling unattended upgrades")
-    run_best_effort(cfg, ["systemctl", "stop", "apt-daily.service", "apt-daily-upgrade.service", "unattended-upgrades.service"], "stop unattended-upgrades")
-    run_best_effort(cfg, ["systemctl", "stop", "apt-daily.timer", "apt-daily-upgrade.timer"], "stop apt timers")
-    run_best_effort(cfg, ["pkill", "-9", "apt-get"], "kill apt-get")
-    run_best_effort(cfg, ["pkill", "-f", "-9", "unattended-upgrade"], "kill unattended-upgrade")
-    run_best_effort(cfg, ["apt-get", "remove", "-y", "unattended-upgrades"], "remove unattended-upgrades")
+    log_line(cfg, "bootstrap: pausing automatic apt activity")
+    run_best_effort(
+        cfg,
+        [
+            "systemctl",
+            "stop",
+            "apt-daily.timer",
+            "apt-daily-upgrade.timer",
+            "apt-daily.service",
+            "apt-daily-upgrade.service",
+            "cocalc-security-updates.timer",
+            "cocalc-security-updates.service",
+        ],
+        "stop automatic apt timers and services",
+        timeout=APT_LOCK_TIMEOUT_S,
+    )
 
 
 def apt_run(cfg: BootstrapConfig, args: list[str], desc: str, retries: int, timeout: int) -> None:
@@ -2078,6 +2096,8 @@ def apt_update_install(cfg: BootstrapConfig) -> None:
         f"Acquire::https::Timeout={APT_ACQUIRE_TIMEOUT_S}",
         "-o",
         f"Acquire::ftp::Timeout={APT_ACQUIRE_TIMEOUT_S}",
+        "-o",
+        f"DPkg::Lock::Timeout={APT_LOCK_TIMEOUT_S}",
     ]
     apt_run(
         cfg,
@@ -2099,6 +2119,184 @@ def apt_update_install(cfg: BootstrapConfig) -> None:
         retries=APT_RETRIES,
         timeout=APT_INSTALL_TIMEOUT_S,
     )
+
+
+def ensure_automatic_security_updates(
+    cfg: BootstrapConfig,
+    *,
+    config_path: Path = Path("/etc/apt/apt.conf.d/52cocalc-periodic"),
+    helper_path: Path = Path("/usr/local/sbin/cocalc-security-update"),
+    service_path: Path = Path(
+        "/etc/systemd/system/cocalc-security-updates.service"
+    ),
+    timer_path: Path = Path("/etc/systemd/system/cocalc-security-updates.timer"),
+    status_dir: Path = Path("/var/lib/cocalc/security-updates"),
+) -> None:
+    log_line(cfg, "bootstrap: configuring automatic security updates")
+    reconcile_gce_ubuntu_apt_sources(cfg)
+    apt_opts = [
+        "-y",
+        "-o",
+        "Acquire::ForceIPv4=true",
+        "-o",
+        f"Acquire::Retries={APT_RETRIES}",
+        "-o",
+        f"Acquire::http::Timeout={APT_ACQUIRE_TIMEOUT_S}",
+        "-o",
+        f"Acquire::https::Timeout={APT_ACQUIRE_TIMEOUT_S}",
+        "-o",
+        f"Acquire::ftp::Timeout={APT_ACQUIRE_TIMEOUT_S}",
+        "-o",
+        f"DPkg::Lock::Timeout={APT_LOCK_TIMEOUT_S}",
+    ]
+    apt_run(
+        cfg,
+        ["apt-get", *apt_opts, "update"],
+        "apt-get update for automatic security updates",
+        retries=APT_RETRIES,
+        timeout=APT_UPDATE_TIMEOUT_S,
+    )
+    apt_run(
+        cfg,
+        [
+            "apt-get",
+            *apt_opts,
+            "--no-install-recommends",
+            "install",
+            "unattended-upgrades",
+        ],
+        "install unattended-upgrades",
+        retries=APT_RETRIES,
+        timeout=APT_INSTALL_TIMEOUT_S,
+    )
+    if shutil.which("unattended-upgrade") is None:
+        raise RuntimeError("unattended-upgrade executable is missing after install")
+    text_write_atomic(config_path, AUTOMATIC_SECURITY_UPDATES_CONFIG)
+    status_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(status_dir, 0o755)
+    status_dir_shell = shlex.quote(str(status_dir))
+    helper = f"""#!/usr/bin/env bash
+set -euo pipefail
+umask 022
+
+STATUS_DIR={status_dir_shell}
+STATUS_FILE="$STATUS_DIR/status.json"
+LOCK_FILE=/run/lock/cocalc-security-updates.lock
+
+mkdir -p "$STATUS_DIR"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  exit 0
+fi
+
+STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+write_status() {{
+  local result="$1" exit_code="$2" finished_at tmp
+  finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  tmp="$(mktemp "$STATUS_DIR/.status.XXXXXX")"
+  printf '{{\n  "schema": "cocalc-security-updates-v1",\n  "result": "%s",\n  "exit_code": %s,\n  "started_at": "%s",\n  "finished_at": "%s"\n}}\n' \
+    "$result" "$exit_code" "$STARTED_AT" "$finished_at" >"$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$STATUS_FILE"
+}}
+record_failure() {{
+  local exit_code="$?"
+  set +e
+  write_status failed "$exit_code"
+}}
+trap record_failure EXIT
+
+write_status running 0
+export DEBIAN_FRONTEND=noninteractive
+apt-get -y \
+  -o Acquire::ForceIPv4=true \
+  -o Acquire::Retries={APT_RETRIES} \
+  -o Acquire::http::Timeout={APT_ACQUIRE_TIMEOUT_S} \
+  -o Acquire::https::Timeout={APT_ACQUIRE_TIMEOUT_S} \
+  -o Acquire::ftp::Timeout={APT_ACQUIRE_TIMEOUT_S} \
+  -o DPkg::Lock::Timeout={APT_LOCK_TIMEOUT_S} \
+  update
+unattended-upgrade --verbose
+write_status ok 0
+trap - EXIT
+"""
+    text_write_atomic(helper_path, helper, default_mode=0o755)
+    os.chmod(helper_path, 0o755)
+    service = f"""[Unit]
+Description=Install CoCalc project-host security updates
+Wants=network-online.target
+After=network-online.target
+ConditionPathIsExecutable={helper_path}
+
+[Service]
+Type=oneshot
+ExecStart={helper_path}
+TimeoutStartSec=45min
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+CPUWeight=10
+IOWeight=10
+UMask=0022
+"""
+    timer = """[Unit]
+Description=Daily CoCalc project-host security updates
+
+[Timer]
+OnCalendar=*-*-* 05:00:00 UTC
+RandomizedDelaySec=3h
+FixedRandomDelay=true
+Persistent=true
+AccuracySec=1min
+Unit=cocalc-security-updates.service
+
+[Install]
+WantedBy=timers.target
+"""
+    text_write_atomic(service_path, service)
+    text_write_atomic(timer_path, timer)
+    run_cmd(
+        cfg,
+        ["systemctl", "daemon-reload"],
+        "reload systemd security update units",
+        timeout=30,
+    )
+    run_cmd(
+        cfg,
+        [
+            "systemctl",
+            "disable",
+            "--now",
+            "apt-daily.timer",
+            "apt-daily-upgrade.timer",
+        ],
+        "disable distro automatic apt timers",
+        timeout=APT_LOCK_TIMEOUT_S,
+    )
+    run_cmd(
+        cfg,
+        [
+            "systemctl",
+            "enable",
+            "--now",
+            "cocalc-security-updates.timer",
+        ],
+        "enable managed security update timer",
+        timeout=APT_LOCK_TIMEOUT_S,
+    )
+    for timer in ("cocalc-security-updates.timer",):
+        run_cmd(
+            cfg,
+            ["systemctl", "is-enabled", timer],
+            f"verify {timer} enabled",
+            timeout=30,
+        )
+        run_cmd(
+            cfg,
+            ["systemctl", "is-active", timer],
+            f"verify {timer} active",
+            timeout=30,
+        )
 
 
 def node_major_version(node_version: str) -> int:
@@ -10445,11 +10643,6 @@ def start_project_host(cfg: BootstrapConfig) -> None:
     raise RuntimeError(f"project-host start failed with exit code {result.returncode}")
 
 
-def reenable_unattended(cfg: BootstrapConfig) -> None:
-    run_best_effort(cfg, ["apt-get", "install", "-y", "unattended-upgrades"], "install unattended-upgrades")
-    run_best_effort(cfg, ["systemctl", "enable", "--now", "apt-daily.timer", "apt-daily-upgrade.timer", "unattended-upgrades.service"], "enable unattended-upgrades")
-
-
 def touch_paths(paths: list[str]) -> None:
     for path in paths:
         try:
@@ -10501,6 +10694,7 @@ def run_reconcile(cfg: BootstrapConfig) -> int:
     try:
         ensure_runtime_user(cfg)
         ensure_bootstrap_paths(cfg)
+        ensure_automatic_security_updates(cfg)
         configure_kernel_module_hardening(cfg)
         configure_kernel_key_limits(cfg)
         configure_inotify_limits(cfg)
@@ -10604,7 +10798,6 @@ def run_bootstrap(cfg: BootstrapConfig) -> int:
     report_bootstrap_status(cfg, "running", "Starting project-host services")
     start_project_host(cfg)
     report_bootstrap_status(cfg, "running", "Finalizing bootstrap")
-    reenable_unattended(cfg)
     touch_paths(cfg.bootstrap_done_paths)
     write_bootstrap_state_files(cfg)
     log_line(cfg, "bootstrap: completed successfully")
