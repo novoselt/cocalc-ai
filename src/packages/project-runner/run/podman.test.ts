@@ -135,6 +135,7 @@ import {
   reconcileProjectCgroup,
   reconcileProjectNetworkLimits,
   refreshProjectSecretsHostPath,
+  resolveHostContainersInternalAddress,
   podmanRuntimeArgs,
   redactConfigurationForLog,
   start,
@@ -160,6 +161,34 @@ describe("project-runner Podman runtime selection", () => {
       mockConfiguredContainerRuntimeCurrent.mockReturnValue(undefined);
       await rm(current, { recursive: true, force: true });
     }
+  });
+});
+
+describe("project-runner Podman host alias resolution", () => {
+  afterEach(() => {
+    delete process.env.COCALC_PROJECT_RUNNER_PASTA_HOST_ALIAS_ADDR;
+    delete process.env.COCALC_PROJECT_RUNNER_SLIRP_CONAT_HOST;
+  });
+
+  it("resolves the configured pasta host address", async () => {
+    process.env.COCALC_PROJECT_RUNNER_PASTA_HOST_ALIAS_ADDR = "10.206.0.1";
+    await expect(
+      resolveHostContainersInternalAddress("--network=pasta:--map-gw"),
+    ).resolves.toBe("10.206.0.1");
+  });
+
+  it("resolves the slirp host gateway", async () => {
+    await expect(
+      resolveHostContainersInternalAddress(
+        "--network=slirp4netns:allow_host_loopback=true",
+      ),
+    ).resolves.toBe("10.0.2.2");
+  });
+
+  it("does not expose a host alias without container networking", async () => {
+    await expect(
+      resolveHostContainersInternalAddress("--network=none"),
+    ).resolves.toBeUndefined();
   });
 });
 

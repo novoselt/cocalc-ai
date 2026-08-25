@@ -963,6 +963,7 @@ class BootstrapStateFilesTest(unittest.TestCase):
     def test_writes_split_state_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
+            lifecycle_export_dir = Path(tmpdir) / "public-lifecycle"
             cfg = replace(
                 cfg,
                 conat_url="https://hub.example.invalid/conat/master-token",
@@ -972,6 +973,7 @@ class BootstrapStateFilesTest(unittest.TestCase):
                 project_host_bundle=replace(
                     cfg.project_host_bundle,
                     root="/opt/cocalc/project-host/bundles",
+                    version="project-host-version",
                 ),
                 project_bundle=replace(
                     cfg.project_bundle,
@@ -983,11 +985,14 @@ class BootstrapStateFilesTest(unittest.TestCase):
                 ),
             )
             original_resolve = bootstrap.resolve_runtime_user_identity
+            original_export_dir = bootstrap.BOOTSTRAP_LIFECYCLE_EXPORT_DIR
             try:
                 bootstrap.resolve_runtime_user_identity = lambda _cfg: (2000, 2000)
+                bootstrap.BOOTSTRAP_LIFECYCLE_EXPORT_DIR = lifecycle_export_dir
                 bootstrap.write_bootstrap_state_files(cfg)
             finally:
                 bootstrap.resolve_runtime_user_identity = original_resolve
+                bootstrap.BOOTSTRAP_LIFECYCLE_EXPORT_DIR = original_export_dir
 
             facts = json.loads(
                 (Path(cfg.bootstrap_dir) / "bootstrap-host-facts.json").read_text(
@@ -1001,6 +1006,16 @@ class BootstrapStateFilesTest(unittest.TestCase):
             )
             state = json.loads(
                 (Path(cfg.bootstrap_dir) / "bootstrap-state.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            public_desired = json.loads(
+                (lifecycle_export_dir / "bootstrap-desired-state.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            public_state = json.loads(
+                (lifecycle_export_dir / "bootstrap-state.json").read_text(
                     encoding="utf-8"
                 )
             )
@@ -1040,6 +1055,26 @@ class BootstrapStateFilesTest(unittest.TestCase):
             )
             self.assertEqual(state["runtime_user_contract"]["user"], "missing-runtime-user")
             self.assertIn("installed", state)
+            self.assertNotIn("bootstrap_connection", public_desired)
+            self.assertNotIn("env_lines", public_desired)
+            self.assertNotIn("bootstrap-secret", json.dumps(public_desired))
+            self.assertEqual(
+                public_desired["project_host_bundle"],
+                {
+                    "root": "/opt/cocalc/project-host/bundles",
+                    "version": "project-host-version",
+                },
+            )
+            self.assertEqual(
+                public_state["runtime_user_contract"]["user"],
+                "missing-runtime-user",
+            )
+            self.assertEqual(lifecycle_export_dir.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(
+                (lifecycle_export_dir / "bootstrap-state.json").stat().st_mode
+                & 0o777,
+                0o644,
+            )
 
 
 class BootstrapRuntimeUserContractTest(unittest.TestCase):
@@ -2213,7 +2248,12 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            cfg = make_cfg(tmpdir)
+            cfg = replace(
+                make_cfg(tmpdir),
+                container_runtime_bundle=bootstrap.BundleSpec(
+                    "", None, "", "", "", ""
+                ),
+            )
             captured: dict[str, str] = {}
 
             original_text_write_atomic = bootstrap.text_write_atomic
@@ -2956,7 +2996,25 @@ reserve_project_startup_io_capacity
             self.assertIn('scratch_target_gib="${1:-}"', script)
             self.assertIn('blockdev --getsize64 "$scratch_parent"', script)
             self.assertIn("shared-scratch-grow-incomplete", script)
-            self.assertIn("podman unshare cat /proc/self/uid_map", script)
+            self.assertIn(
+                'unshare cat /proc/self/uid_map >"$rewrite_uid_map_file"',
+                script,
+            )
+            self.assertIn("run_rootfs_podman_as_user()", script)
+            self.assertIn('CONTAINER_RUNTIME_REQUIRED="1"', script)
+            self.assertIn(
+                'podman_bin="${CONTAINER_RUNTIME_CURRENT}/bin/podman"',
+                script,
+            )
+            self.assertIn(
+                '"CONTAINERS_CONF_OVERRIDE=${CONTAINER_RUNTIME_CURRENT}/etc/containers/containers.conf"',
+                script,
+            )
+            self.assertIn('podman_prefix=(/usr/bin/aa-exec -p podman --)', script)
+            self.assertNotIn(
+                'bash -lc "cd ~ && /usr/bin/podman unshare', script
+            )
+            self.assertNotIn("/usr/bin/podman run --rm", script)
             self.assertIn('"to-canonical"', script)
             self.assertIn('"to-host"', script)
             self.assertIn("reverse_keep_id", script)
@@ -4795,6 +4853,7 @@ class BootstrapModesTest(unittest.TestCase):
 
             patch("ensure_runtime_user", lambda _cfg: None)
             patch("ensure_bootstrap_paths", lambda _cfg: None)
+            patch("ensure_automatic_security_updates", lambda _cfg: None)
             patch("compute_image_size", lambda _cfg: 10)
             patch("configure_kernel_module_hardening", lambda _cfg: None)
             patch("configure_kernel_key_limits", lambda _cfg: None)
@@ -4947,6 +5006,127 @@ devices:
 
 
 class AptBootstrapTest(unittest.TestCase):
+    def test_disable_unattended_only_stops_automatic_apt_units(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            recorded = []
+            original_run_best_effort = bootstrap.run_best_effort
+            try:
+                bootstrap.run_best_effort = (
+                    lambda _cfg, args, desc, **kwargs: recorded.append(
+                        (args, desc, kwargs)
+                    )
+                )
+                bootstrap.disable_unattended(cfg)
+            finally:
+                bootstrap.run_best_effort = original_run_best_effort
+
+            self.assertEqual(len(recorded), 1)
+            self.assertEqual(recorded[0][0][0:2], ["systemctl", "stop"])
+            self.assertEqual(recorded[0][2]["timeout"], bootstrap.APT_LOCK_TIMEOUT_S)
+            flattened = " ".join(recorded[0][0])
+            self.assertNotIn("pkill", flattened)
+            self.assertNotIn("remove", flattened)
+
+    def test_ensure_automatic_security_updates_is_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            config_path = Path(tmpdir) / "52cocalc-periodic"
+            helper_path = Path(tmpdir) / "cocalc-security-update"
+            service_path = Path(tmpdir) / "cocalc-security-updates.service"
+            timer_path = Path(tmpdir) / "cocalc-security-updates.timer"
+            status_dir = Path(tmpdir) / "security-update-status"
+            recorded = []
+            originals = {
+                "apt_run": bootstrap.apt_run,
+                "run_cmd": bootstrap.run_cmd,
+                "reconcile": bootstrap.reconcile_gce_ubuntu_apt_sources,
+                "which": bootstrap.shutil.which,
+            }
+            try:
+                bootstrap.reconcile_gce_ubuntu_apt_sources = (
+                    lambda _cfg: recorded.append(("reconcile",))
+                )
+                bootstrap.apt_run = (
+                    lambda _cfg, args, desc, retries, timeout: recorded.append(
+                        ("apt", args, desc, retries, timeout)
+                    )
+                )
+                bootstrap.run_cmd = (
+                    lambda _cfg, args, desc, **kwargs: recorded.append(
+                        ("command", args, desc, kwargs)
+                    )
+                    or subprocess.CompletedProcess(args, 0, stdout="")
+                )
+                bootstrap.shutil.which = lambda command: (
+                    "/usr/bin/unattended-upgrade"
+                    if command == "unattended-upgrade"
+                    else None
+                )
+                bootstrap.ensure_automatic_security_updates(
+                    cfg,
+                    config_path=config_path,
+                    helper_path=helper_path,
+                    service_path=service_path,
+                    timer_path=timer_path,
+                    status_dir=status_dir,
+                )
+            finally:
+                bootstrap.apt_run = originals["apt_run"]
+                bootstrap.run_cmd = originals["run_cmd"]
+                bootstrap.reconcile_gce_ubuntu_apt_sources = originals["reconcile"]
+                bootstrap.shutil.which = originals["which"]
+
+            self.assertEqual(recorded[0], ("reconcile",))
+            apt_calls = [entry for entry in recorded if entry[0] == "apt"]
+            self.assertEqual(len(apt_calls), 2)
+            self.assertEqual(apt_calls[0][1][-1], "update")
+            self.assertEqual(apt_calls[1][1][-2:], ["install", "unattended-upgrades"])
+            self.assertIn(
+                f"DPkg::Lock::Timeout={bootstrap.APT_LOCK_TIMEOUT_S}",
+                apt_calls[0][1],
+            )
+            self.assertEqual(
+                config_path.read_text(encoding="utf-8"),
+                bootstrap.AUTOMATIC_SECURITY_UPDATES_CONFIG,
+            )
+            self.assertTrue(helper_path.stat().st_mode & 0o100)
+            self.assertIn("unattended-upgrade --verbose", helper_path.read_text())
+            subprocess.run(["bash", "-n", str(helper_path)], check=True)
+            self.assertIn(
+                str(status_dir),
+                helper_path.read_text(),
+            )
+            self.assertIn(
+                f"ExecStart={helper_path}",
+                service_path.read_text(),
+            )
+            self.assertIn("FixedRandomDelay=true", timer_path.read_text())
+            command_args = [entry[1] for entry in recorded if entry[0] == "command"]
+            self.assertIn(
+                [
+                    "systemctl",
+                    "disable",
+                    "--now",
+                    "apt-daily.timer",
+                    "apt-daily-upgrade.timer",
+                ],
+                command_args,
+            )
+            self.assertIn(
+                [
+                    "systemctl",
+                    "enable",
+                    "--now",
+                    "cocalc-security-updates.timer",
+                ],
+                command_args,
+            )
+            self.assertIn(
+                ["systemctl", "is-active", "cocalc-security-updates.timer"],
+                command_args,
+            )
+
     def test_reconcile_gce_ubuntu_apt_sources_rewrites_security_to_gce_mirror(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
@@ -5035,6 +5215,8 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
                         f"Acquire::https::Timeout={bootstrap.APT_ACQUIRE_TIMEOUT_S}",
                         "-o",
                         f"Acquire::ftp::Timeout={bootstrap.APT_ACQUIRE_TIMEOUT_S}",
+                        "-o",
+                        f"DPkg::Lock::Timeout={bootstrap.APT_LOCK_TIMEOUT_S}",
                         "update",
                     ],
                     "apt-get update",
@@ -5058,6 +5240,8 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
                         f"Acquire::https::Timeout={bootstrap.APT_ACQUIRE_TIMEOUT_S}",
                         "-o",
                         f"Acquire::ftp::Timeout={bootstrap.APT_ACQUIRE_TIMEOUT_S}",
+                        "-o",
+                        f"DPkg::Lock::Timeout={bootstrap.APT_LOCK_TIMEOUT_S}",
                         "--no-install-recommends",
                         "install",
                         "curl",

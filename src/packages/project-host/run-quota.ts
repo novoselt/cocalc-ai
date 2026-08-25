@@ -63,6 +63,10 @@ export function runnerConfigFromQuota(
   if (Number.isFinite(cpuPriority) && cpuPriority >= 0) {
     limits.cpu_priority = Math.floor(cpuPriority);
   }
+  // Preserve the legacy CoCalc.com hard-core limit in Configuration for
+  // compatibility with non-fair runners. CoCalc.ai shared hosts run with
+  // FAIR_CPU_MODE, where podmanLimits ignores `cpu`, leaves cpu.max unlimited,
+  // and uses cpu_priority for proportional scheduling under contention.
   if (run_quota.cpu_limit != null) {
     limits.cpu = run_quota.cpu_limit;
   }

@@ -44,6 +44,16 @@ describe("syncSubscriptionAuthToRegistryIfChanged", () => {
     return dir;
   }
 
+  function authPayload(accessToken: string, lastRefresh?: string): string {
+    return JSON.stringify({
+      tokens: {
+        access_token: accessToken,
+        account_id: "chatgpt-account",
+      },
+      ...(lastRefresh ? { last_refresh: lastRefresh } : {}),
+    });
+  }
+
   beforeEach(() => {
     tempDirs = [];
     callHubMock.mockReset();
@@ -58,9 +68,25 @@ describe("syncSubscriptionAuthToRegistryIfChanged", () => {
     }
   });
 
+  it("refuses to upload an auth placeholder as a credential", async () => {
+    const root = mkTempDir("cocalc-auth-placeholder-");
+    writeFileSync(path.join(root, "auth.json"), "{}\n");
+    const { pushSubscriptionAuthToRegistry } =
+      await import("./codex/codex-auth-registry");
+
+    await expect(
+      pushSubscriptionAuthToRegistry({
+        projectId: "project-placeholder",
+        accountId: "account-placeholder",
+        codexHome: root,
+      }),
+    ).resolves.toEqual({ ok: false });
+    expect(callHubMock).not.toHaveBeenCalled();
+  });
+
   it("pushes local auth once and skips unchanged content", async () => {
     const root = mkTempDir("cocalc-auth-sync-");
-    writeFileSync(path.join(root, "auth.json"), '{"token":"one"}\n');
+    writeFileSync(path.join(root, "auth.json"), authPayload("one"));
 
     callHubMock.mockImplementation(async ({ name }) =>
       name === "hosts.upsertExternalCredential" ? { id: "cred-1" } : undefined,
@@ -95,7 +121,7 @@ describe("syncSubscriptionAuthToRegistryIfChanged", () => {
   it("pushes again after auth.json changes", async () => {
     const root = mkTempDir("cocalc-auth-sync-");
     const authPath = path.join(root, "auth.json");
-    writeFileSync(authPath, '{"token":"one"}\n');
+    writeFileSync(authPath, authPayload("one"));
 
     callHubMock.mockImplementation(async ({ name }) =>
       name === "hosts.upsertExternalCredential" ? { id: "cred-1" } : undefined,
@@ -109,7 +135,7 @@ describe("syncSubscriptionAuthToRegistryIfChanged", () => {
       codexHome: root,
     });
     await new Promise((resolve) => setTimeout(resolve, 5));
-    writeFileSync(authPath, '{"token":"two"}\n');
+    writeFileSync(authPath, authPayload("two"));
     await expect(
       syncSubscriptionAuthToRegistryIfChanged({
         projectId: "project-2",
@@ -126,10 +152,7 @@ describe("syncSubscriptionAuthToRegistryIfChanged", () => {
 
   it("does not rewrite identical registry auth", async () => {
     const root = mkTempDir("cocalc-auth-sync-");
-    const payload = JSON.stringify({
-      tokens: { access_token: "same" },
-      last_refresh: "2026-08-22T00:00:00.000Z",
-    });
+    const payload = authPayload("same", "2026-08-22T00:00:00.000Z");
     writeFileSync(path.join(root, "auth.json"), payload);
     callHubMock.mockResolvedValue({ id: "cred-1", payload });
     const { syncSubscriptionAuthToRegistryIfChanged } =
@@ -155,14 +178,11 @@ describe("syncSubscriptionAuthToRegistryIfChanged", () => {
   it("keeps newer registry auth instead of overwriting it", async () => {
     const root = mkTempDir("cocalc-auth-sync-");
     const authPath = path.join(root, "auth.json");
-    const localPayload = JSON.stringify({
-      tokens: { access_token: "local-old" },
-      last_refresh: "2026-08-21T00:00:00.000Z",
-    });
-    const registryPayload = JSON.stringify({
-      tokens: { access_token: "registry-new" },
-      last_refresh: "2026-08-22T00:00:00.000Z",
-    });
+    const localPayload = authPayload("local-old", "2026-08-21T00:00:00.000Z");
+    const registryPayload = authPayload(
+      "registry-new",
+      "2026-08-22T00:00:00.000Z",
+    );
     writeFileSync(authPath, localPayload);
     callHubMock.mockResolvedValue({ id: "cred-1", payload: registryPayload });
     const { syncSubscriptionAuthToRegistryIfChanged } =

@@ -72,6 +72,13 @@ describe("codex device auth", () => {
       await import("./codex/codex-device-auth");
 
     const started = await startCodexDeviceAuth("project-1", "account-1");
+    expect(spawnCodexInProjectContainerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        execOnlyEnv: {
+          CODEX_HOME: "/run/cocalc/codex-subscription",
+        },
+      }),
+    );
     proc.emit("exit", 0, null);
 
     expect(getCodexDeviceAuthStatus(started.id)).toMatchObject({

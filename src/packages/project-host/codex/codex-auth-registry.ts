@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import getLogger from "@cocalc/backend/logger";
 import callHub from "@cocalc/conat/hub/call-hub";
+import { codexAuthJsonToAppServerLogin } from "@cocalc/ai/acp";
 import { getMasterConatClient } from "../master-conat-client";
 import { getLocalHostId } from "../sqlite/hosts";
 import { ensureCodexCredentialsStoreFile } from "./codex-auth";
@@ -206,7 +207,11 @@ export async function pushSubscriptionAuthToRegistry({
     return { ok: false };
   }
   const payload = content ?? (await readLocalAuth(codexHome));
-  if (!payload) {
+  if (!payload || !codexAuthJsonToAppServerLogin(payload)) {
+    logger.warn("refusing to sync unusable subscription auth", {
+      projectId,
+      accountId,
+    });
     return { ok: false };
   }
   try {

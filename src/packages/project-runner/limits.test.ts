@@ -116,6 +116,15 @@ describe("podmanLimits memory pressure controls", () => {
     },
   );
 
+  it("does not turn the legacy CoCalc.com CPU limit into a fair-mode cap", async () => {
+    const { podmanLimits, projectCgroupLimitsFromPodmanArgs } =
+      await import("./run/limits");
+    const args = await podmanLimits({ cpu: 1, cpu_priority: 2 });
+
+    expect(args).toEqual(["--cpu-shares=4096"]);
+    expect(projectCgroupLimitsFromPodmanArgs(args).cpu_max_quota).toBe("max");
+  });
+
   it("translates Podman limits into cgroup-v2 leaf controls", async () => {
     getContainerSwapSizeMb.mockResolvedValue(200);
     const {

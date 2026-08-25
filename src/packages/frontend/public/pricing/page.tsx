@@ -102,7 +102,7 @@ export default function PricingPage({
         <Alert
           showIcon
           style={{ maxWidth: 720 }}
-          title="AI integration included; AI usage requires your ChatGPT plan or API key."
+          title="Codex with Luna Medium is included for everyone at no cost, with higher limits on paid plans. Connect your ChatGPT plan or API key to use additional models."
           type="info"
         />
         <Flex gap={12} wrap>
