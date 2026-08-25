@@ -148,8 +148,10 @@ export default function Code({
       if (actions.in_undo_mode() && element.str == getValueRef.current?.()) {
         return;
       }
-      // Use inner measurement for shrink (outerRef can't shrink in focused mode).
-      const h = focused ? measureHeightInner() : measureHeight();
+      // Always measure the inner div for shrink: the outer div is floored at
+      // element.h (minHeight/height 100% against the fixed-height parent from
+      // position.tsx), so outer.scrollHeight can never report a smaller box.
+      const h = measureHeightInner();
       if (h != null && Math.abs(h - elementHRef.current) > 2) {
         actions.setElement({ obj: { id: element.id, h }, commit: !focused });
       }
@@ -169,12 +171,14 @@ export default function Code({
         // ResizeObserver and the cell grows without bound.
         shrink.cancel();
         actions.setElement({ obj: { id: element.id, h }, commit: !focused });
-      } else if (!focused && h < elementHRef.current - 2) {
-        // Shrink with a delay to avoid oscillation.
-        // Only shrink when unfocused -- in focused mode, outerRef has
-        // height:100% so scrollHeight can't drop, and using the inner
-        // measurement causes oscillation. Shrink happens on blur.
-        shrink();
+      } else if (!focused) {
+        // Shrink with a delay to avoid oscillation, and only when unfocused --
+        // shrinking a focused cell fights the editor and oscillates.
+        // Measured on the inner div for the reason given in shrink() above.
+        const inner = measureHeightInner();
+        if (inner != null && inner < elementHRef.current - 2) {
+          shrink();
+        }
       }
     };
 
@@ -224,7 +228,10 @@ export default function Code({
           : { minHeight: "100%", height: "auto", overflowY: "visible" }),
       }}
     >
-      <div ref={divRef}>
+      {/* flow-root establishes a block formatting context so the InputPrompt's
+          margin-top is contained rather than collapsing out of this div; that
+          is what makes divRef.scrollHeight an accurate content measurement. */}
+      <div ref={divRef} style={{ display: "flow-root" }}>
         {!hideInput && <InputPrompt element={element} />}
         {renderInput()}
         {!hideOutput && element.data?.output && (
