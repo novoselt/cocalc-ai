@@ -8,6 +8,7 @@ import {
   DEFAULT_SITE_FUNDED_CODEX_POLICY,
   getSiteFundedCodexPrice,
   microusdToUsageUnits,
+  SITE_FUNDED_CODEX_MAX_REQUEST_BODY_BYTES,
   siteFundedCodexFinalRequestHeadroomMicrousd,
   siteFundedCodexMaxRequestBodyBytes,
   usdToMicrousd,
@@ -104,7 +105,9 @@ describe("site-funded Codex accounting", () => {
       contextWindowTokens: 10_000,
       maxOutputTokensPerRequest: 1_000,
     };
-    expect(siteFundedCodexMaxRequestBodyBytes(policy)).toBe(80_000);
-    expect(siteFundedCodexFinalRequestHeadroomMicrousd(policy)).toBe(23_248);
+    expect(siteFundedCodexMaxRequestBodyBytes(policy)).toBe(
+      SITE_FUNDED_CODEX_MAX_REQUEST_BODY_BYTES,
+    );
+    expect(siteFundedCodexFinalRequestHeadroomMicrousd(policy)).toBe(5_748);
   });
 });
