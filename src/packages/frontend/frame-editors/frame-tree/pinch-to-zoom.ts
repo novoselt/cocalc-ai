@@ -10,7 +10,13 @@ size for the visible canvas, instead of zooming the whole page itself.
 
 */
 
-import { MutableRefObject, useEffect, useMemo, useRef } from "react";
+import {
+  MutableRefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+} from "react";
 import { useFrameContext } from "./frame-context";
 import { usePinch } from "@use-gesture/react";
 import { throttle } from "lodash";
@@ -91,23 +97,46 @@ export default function usePinchToZoom({
 }) {
   const { actions, id } = useFrameContext();
 
-  const saveThrottled = useMemo(() => {
-    if (disabled) return () => {};
-    return throttle((fontSize, first) => {
-      if (onZoom != null) {
-        onZoom({ fontSize, first });
-        return;
-      }
-      actions.set_font_size(id, fontSize);
-    }, throttleMs);
-  }, [id]);
+  // These are read through refs so the throttled callback below can stay
+  // stable across renders without going stale. Baking `disabled` or `onZoom`
+  // into a `useMemo` keyed only on `id` meant a hook that first mounted while
+  // disabled kept a no-op save forever, even once it was enabled again.
+  const onZoomRef = useRef(onZoom);
+  onZoomRef.current = onZoom;
+  const actionsRef = useRef(actions);
+  actionsRef.current = actions;
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
 
-  const save = useMemo(() => {
-    if (disabled) return () => {};
-    return (fontSize, first) => {
-      saveThrottled(fontSize, first);
+  const saveThrottled = useMemo(
+    () =>
+      throttle((fontSize: number, first?: boolean) => {
+        if (disabledRef.current) return;
+        const onZoomNow = onZoomRef.current;
+        if (onZoomNow != null) {
+          onZoomNow({ fontSize, first });
+          return;
+        }
+        actionsRef.current.set_font_size(id, fontSize);
+      }, throttleMs),
+    [id, throttleMs],
+  );
+
+  // Drop any pending trailing call when the throttle is replaced or the hook
+  // unmounts, so a stale zoom cannot land after teardown.
+  useEffect(() => {
+    return () => {
+      saveThrottled.cancel();
     };
-  }, [id]);
+  }, [saveThrottled]);
+
+  const save = useCallback(
+    (fontSize: number, first?: boolean) => {
+      if (disabledRef.current) return;
+      saveThrottled(fontSize, first);
+    },
+    [saveThrottled],
+  );
 
   const lastOffsetRef = useRef<number>(100);
 
