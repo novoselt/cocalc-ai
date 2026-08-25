@@ -35,7 +35,12 @@ import {
   FreshAuthModal,
   useFreshAuthAction,
 } from "@cocalc/frontend/auth/fresh-auth";
-import { ErrorDisplay, Icon, TimeAgo } from "@cocalc/frontend/components";
+import {
+  ErrorDisplay,
+  Icon,
+  type IconName,
+  TimeAgo,
+} from "@cocalc/frontend/components";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { COMMERCIAL_NEXT_ACTIONS } from "@cocalc/util/commercial-orders";
 import {
@@ -1322,14 +1327,14 @@ function SectionHeader({
 }: {
   action?: string;
   children: string;
-  icon: string;
+  icon: IconName;
   onAction?: () => void;
 }) {
   return (
     <Flex align="center" gap={8} justify="space-between" wrap>
       <Title level={4} style={{ margin: 0 }}>
         <Icon
-          name={icon as any}
+          name={icon}
           style={{ color: COLORS.FEATURE_TEAL, marginRight: 8 }}
         />
         {children}
@@ -1930,7 +1935,7 @@ function CustomerDetail({
             className="crm-section-card"
             style={{ borderColor: COLORS.GRAY_L }}
           >
-            <SectionHeader icon="shield-alt">Record controls</SectionHeader>
+            <SectionHeader icon="lock">Record controls</SectionHeader>
             <Divider />
             <Flex vertical gap={8}>
               <Button
