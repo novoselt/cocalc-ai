@@ -36,8 +36,13 @@ export default function Text(props: Props) {
             !props.focused || mode == "markdown" ? "hidden" : undefined,
         },
         modeSwitchStyle: {
-          top: "-82px",
-          left: "-18px",
+          // absolute: the wrapper in mode-switch.tsx is position:relative, so
+          // without this the control is only shifted visually while still
+          // reserving its original strip of space above the text.
+          position: "absolute",
+          top: "-50px",
+          right: 0,
+          zIndex: 10,
         },
         placeholder: props.element.data?.placeholder ?? PLACEHOLDER,
         noVfill: true,
@@ -167,8 +172,7 @@ function EditText({
       const height = Math.max(
         (elt.getBoundingClientRect()?.height ?? 0) / canvasScale +
           2 * PADDING +
-          2 +
-          15,
+          2,
         MIN_HEIGHT,
       );
       actions.setElement({
