@@ -215,6 +215,11 @@ describe("receivable order detail", () => {
     render(<ReceivableOrderDetail id={order.id} onBack={jest.fn()} />);
 
     expect(
+      await screen.findByRole("heading", { name: order.organization_name }),
+    ).toBeVisible();
+    expect(screen.getByText(order.order_number)).toBeVisible();
+    expect(screen.getByLabelText("Commercial order summary")).toBeVisible();
+    expect(
       await screen.findByText(
         "Service is provisioned, but collection is not complete",
       ),
@@ -321,10 +326,10 @@ describe("receivable order detail", () => {
     render(<ReceivableOrderDetail id={order.id} onBack={jest.fn()} />);
 
     await waitFor(() =>
-      expect(screen.getAllByTitle(accountId)).toHaveLength(2),
+      expect(screen.getAllByTitle(accountId)).toHaveLength(3),
     );
     const identities = screen.getAllByTitle(accountId);
-    expect(identities).toHaveLength(2);
+    expect(identities).toHaveLength(3);
     expect(
       identities.every((identity) => identity.textContent === "William Stein"),
     ).toBe(true);
@@ -408,7 +413,7 @@ describe("receivable order detail", () => {
 
     expect(
       await screen.findByRole("heading", {
-        name: `${order.order_number}: ${order.organization_name}`,
+        name: order.organization_name,
       }),
     ).toBeVisible();
     expect(

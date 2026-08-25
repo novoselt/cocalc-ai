@@ -110,6 +110,34 @@ describe("receivables queue", () => {
     listAssignees.mockResolvedValue([]);
   });
 
+  it("presents the queue with commercial context and primary actions", async () => {
+    const onCreateOrder = jest.fn();
+    render(
+      <ReceivablesQueue
+        onCreateOrder={onCreateOrder}
+        onOpenOrder={jest.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Every invoice, payment, and promise in one queue",
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "Operations runbook" }),
+    ).toHaveAttribute("href", "/app-docs/admin/accounts-receivable");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create commercial order" }),
+    );
+    expect(onCreateOrder).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText("Accounts receivable summary"),
+      ).toBeVisible(),
+    );
+  });
+
   it("requires reviewed fresh authentication before retrying a dead-letter event", async () => {
     render(
       <ReceivablesQueue onCreateOrder={jest.fn()} onOpenOrder={jest.fn()} />,

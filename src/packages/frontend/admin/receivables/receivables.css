@@ -1,0 +1,137 @@
+.receivables-shell {
+  --receivables-ink: #18332f;
+  --receivables-muted: #60736f;
+  --receivables-line: #d8e4df;
+  --receivables-accent: #117865;
+  --receivables-warm: #f1a65a;
+  color: var(--receivables-ink);
+  min-width: 0;
+}
+
+.receivables-hero {
+  background:
+    radial-gradient(
+      circle at 92% 10%,
+      rgba(241, 166, 90, 0.28),
+      transparent 28%
+    ),
+    linear-gradient(125deg, #103d35, #176b5c 58%, #2b806d);
+  border-radius: 18px;
+  color: white;
+  overflow: hidden;
+  padding: clamp(20px, 4vw, 38px);
+  position: relative;
+}
+
+.receivables-hero::after {
+  background-image: radial-gradient(
+    rgba(255, 255, 255, 0.18) 1px,
+    transparent 1px
+  );
+  background-size: 15px 15px;
+  content: "";
+  inset: 0;
+  opacity: 0.35;
+  pointer-events: none;
+  position: absolute;
+}
+
+.receivables-hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+.receivables-hero .ant-typography,
+.receivables-hero h2.ant-typography {
+  color: white;
+}
+
+.receivables-hero .ant-tag .ant-typography {
+  color: inherit;
+}
+
+.receivables-hero-copy {
+  max-width: 760px;
+}
+
+.receivables-eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.receivables-summary-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.receivables-detail-summary-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+.receivables-metric-card.ant-card {
+  background: linear-gradient(145deg, #ffffff, #f4faf7);
+  border-color: var(--receivables-line);
+  border-radius: 12px;
+  min-width: 0;
+}
+
+.receivables-metric-card .ant-statistic-content {
+  color: var(--receivables-ink);
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.receivables-metric-icon {
+  flex: 0 0 auto;
+  font-size: 20px;
+  margin-top: 4px;
+}
+
+.receivables-metric-detail {
+  color: var(--receivables-muted);
+  display: block;
+  margin-top: 3px;
+}
+
+.receivables-order-metric-value {
+  color: var(--receivables-ink);
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.25;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+
+.receivables-filter-card.ant-card {
+  background: linear-gradient(180deg, #ffffff, #f8fbfa);
+  border-color: var(--receivables-line);
+  border-radius: 14px;
+  box-shadow: 0 8px 28px rgba(24, 51, 47, 0.07);
+  min-width: 0;
+}
+
+.receivables-section-card.ant-card {
+  border-color: var(--receivables-line);
+  border-radius: 14px;
+  min-width: 0;
+}
+
+@media (max-width: 520px) {
+  .receivables-hero {
+    border-radius: 12px;
+  }
+
+  .receivables-summary-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .receivables-detail-summary-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
