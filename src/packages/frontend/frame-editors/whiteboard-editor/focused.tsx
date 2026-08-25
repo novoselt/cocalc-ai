@@ -68,6 +68,7 @@ interface Props {
   multi?: boolean;
   setSnapLines?: (lines: SnapLine[]) => void;
   snapEnabled?: boolean;
+  gridEnabled?: boolean;
 }
 
 export default function Focused({
@@ -82,6 +83,7 @@ export default function Focused({
   multi,
   setSnapLines,
   snapEnabled,
+  gridEnabled,
 }: Props) {
   const frame = useFrameContext();
   const editFocus = frame.desc.get("editFocus");
@@ -119,13 +121,19 @@ export default function Focused({
         return;
       }
 
-      // Build the rect of the element(s) being moved at their current drag position
+      // Build the rect of the element(s) being moved at their current drag position.
+      // For a multi-selection `element` is the synthetic "selection" rect built
+      // in canvas.tsx, whose w/h are deliberately `xMax - xMin + 1` so the
+      // selection border has somewhere to draw. Snapping against those inflated
+      // bounds would leave right/bottom alignment a unit short and centre
+      // alignment half a unit off, so drop that padding again here.
       const pos = getPosition(element);
+      const isSelectionRect = element.type === "selection";
       const movingRect = {
         x: pos.x + data.x,
         y: pos.y + data.y,
-        w: pos.w,
-        h: pos.h,
+        w: isSelectionRect ? Math.max(pos.w - 1, 0) : pos.w,
+        h: isSelectionRect ? Math.max(pos.h - 1, 0) : pos.h,
       };
 
       // Get other elements (not being moved)
@@ -140,6 +148,7 @@ export default function Focused({
         otherElements,
         pageRect,
         canvasScale,
+        gridEnabled,
       });
 
       snapRef.current = { dx: result.dx, dy: result.dy };
@@ -150,6 +159,7 @@ export default function Focused({
       selectedElements,
       allElements,
       snapEnabled,
+      gridEnabled,
       setSnapLines,
       canvasScale,
     ],

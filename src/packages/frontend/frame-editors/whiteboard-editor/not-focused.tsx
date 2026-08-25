@@ -25,6 +25,7 @@ interface Props {
   allElements?: Element[];
   setSnapLines?: (lines: SnapLine[]) => void;
   snapEnabled?: boolean;
+  gridEnabled?: boolean;
 }
 
 export default function NotFocused({
@@ -40,6 +41,7 @@ export default function NotFocused({
   allElements,
   setSnapLines,
   snapEnabled,
+  gridEnabled,
 }: Props) {
   const { id } = element;
   const nodeRef = useRef<any>({});
@@ -76,11 +78,12 @@ export default function NotFocused({
         otherElements,
         pageRect,
         canvasScale,
+        gridEnabled,
       });
       snapRef.current = { dx: result.dx, dy: result.dy };
       setSnapLines?.(result.lines);
     },
-    [element, allElements, snapEnabled, setSnapLines, canvasScale],
+    [element, allElements, snapEnabled, gridEnabled, setSnapLines, canvasScale],
   );
 
   // Right after dragging, we ignore the onClick so the object doesn't get selected:

@@ -104,7 +104,9 @@ describe("computeSnap alignment", () => {
     });
     expect(result.dx).toBe(0);
     expect(
-      result.lines.some((l) => l.orientation === "vertical" && l.position === 0),
+      result.lines.some(
+        (l) => l.orientation === "vertical" && l.position === 0,
+      ),
     ).toBe(true);
   });
 
@@ -149,11 +151,13 @@ describe("computeSnap alignment", () => {
 
 describe("computeSnap grid transitions", () => {
   // No other elements, so any snap must come from the grid.
+  // gridEnabled mirrors canvas.tsx, which draws <Grid> only for whiteboards.
   it("snaps to the major grid below 200% zoom", () => {
     const { dx } = computeSnap({
       movingRect: rect(GRID_MAJOR + 3, 0),
       otherElements: [],
       canvasScale: 1,
+      gridEnabled: true,
     });
     expect(dx).toBe(-3);
   });
@@ -163,6 +167,7 @@ describe("computeSnap grid transitions", () => {
       movingRect: rect(GRID_MINOR + 1, 0),
       otherElements: [],
       canvasScale: 1,
+      gridEnabled: true,
     });
     expect(dx).toBe(0);
   });
@@ -172,6 +177,7 @@ describe("computeSnap grid transitions", () => {
       movingRect: rect(GRID_MINOR + 1, 0),
       otherElements: [],
       canvasScale: 2,
+      gridEnabled: true,
     });
     expect(dx).toBe(-1);
   });
@@ -180,7 +186,40 @@ describe("computeSnap grid transitions", () => {
     const { dx } = computeSnap({
       movingRect: rect(GRID_MAJOR + 3, 0),
       otherElements: [],
+      gridEnabled: true,
     });
     expect(dx).toBe(0);
+  });
+
+  it("does no grid snapping where no grid is drawn, e.g. slides", () => {
+    const { dx, lines } = computeSnap({
+      movingRect: rect(GRID_MAJOR + 3, 0),
+      otherElements: [],
+      canvasScale: 1,
+    });
+    expect(dx).toBe(0);
+    expect(lines).toHaveLength(0);
+  });
+
+  it("still snaps to page border and centre without a grid", () => {
+    // What alignment on a slide is actually about.
+    const page = { x: 0, y: 0, w: 1000, h: 600 };
+    expect(
+      computeSnap({
+        movingRect: rect(3, 300),
+        otherElements: [],
+        pageRect: page,
+        canvasScale: 1,
+      }).dx,
+    ).toBe(-3);
+    // centre axis of the page is x=500; a 50-wide rect centred there sits at 475
+    expect(
+      computeSnap({
+        movingRect: rect(478, 300),
+        otherElements: [],
+        pageRect: page,
+        canvasScale: 1,
+      }).dx,
+    ).toBe(-3);
   });
 });

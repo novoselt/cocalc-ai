@@ -181,6 +181,9 @@ export default function Canvas({
 
   const [snapLines, setSnapLines] = useState<SnapLine[]>([]);
   const snapEnabled = frame.desc.get("snapToAlignment") !== false; // default on
+  // Same condition that decides whether <Grid> is rendered below, so we never
+  // snap to grid lines the user cannot see.
+  const gridEnabled = mainFrameType == "whiteboard";
 
   const backgroundDivRef = useRef<any>(null);
 
@@ -720,6 +723,7 @@ export default function Canvas({
           cursors={cursors?.[id]}
           setSnapLines={setSnapLines}
           snapEnabled={snapEnabled}
+          gridEnabled={gridEnabled}
         >
           {elt}
         </Focused>
@@ -747,6 +751,7 @@ export default function Canvas({
             allElements={elements}
             setSnapLines={setSnapLines}
             snapEnabled={snapEnabled}
+            gridEnabled={gridEnabled}
             onDrag={() => {
               // dragging element cancels any selection in progress.
               mousePath.current = null;
@@ -817,6 +822,7 @@ export default function Canvas({
         multi={multi}
         setSnapLines={setSnapLines}
         snapEnabled={snapEnabled}
+        gridEnabled={gridEnabled}
       >
         {!isAllEdges && (
           <RenderElt element={element} canvasScale={canvasScale} focused />

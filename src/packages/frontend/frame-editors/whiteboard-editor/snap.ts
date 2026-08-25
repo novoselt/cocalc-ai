@@ -59,19 +59,24 @@ export function computeSnap({
   otherElements,
   pageRect,
   canvasScale,
+  gridEnabled,
 }: {
   movingRect: Rect;
   otherElements: Element[];
   pageRect?: Rect; // the slide/page boundary, if any
   canvasScale?: number; // current zoom level; used for grid snapping
+  gridEnabled?: boolean; // whether a background grid is actually drawn
 }): SnapResult {
   const targets = collectSnapTargets(otherElements, pageRect);
 
   // Add grid snap targets around the moving element's neighborhood.
   // Major grid lines (100px) always; minor (20px) only when zoomed in past 200%.
+  // Only when a grid is really on screen. Slides draw no grid, so snapping to
+  // invisible 100/20-unit lines there would just fight the page border, page
+  // centre and element targets, which is what alignment on a slide is about.
   const gridStep =
     canvasScale != null && canvasScale >= 2 ? GRID_MINOR : GRID_MAJOR;
-  if (canvasScale != null) {
+  if (gridEnabled && canvasScale != null) {
     addGridTargets(targets, movingRect, gridStep);
   }
 
@@ -87,55 +92,79 @@ export function computeSnap({
   const movingYPoints = [movingTop, movingCenterY, movingBottom];
 
   const threshold = snapThreshold(canvasScale);
-  let bestDx = Infinity;
-  let bestDy = Infinity;
-  const matchedVertical: { target: number; movingVal: number }[] = [];
-  const matchedHorizontal: { target: number; movingVal: number }[] = [];
+
+  // Collect every candidate within tolerance, keeping the *signed* adjustment.
+  // Two targets can sit the same distance away on opposite sides; only one of
+  // them ends up applied, so guides have to be filtered by signed delta rather
+  // than by distance, or we draw a guide on a line nothing snapped to.
+  interface Candidate {
+    target: number;
+    movingVal: number;
+    delta: number;
+  }
+  const verticalCandidates: Candidate[] = [];
+  const horizontalCandidates: Candidate[] = [];
 
   for (const target of targets) {
     if (target.orientation === "vertical") {
       for (const mx of movingXPoints) {
-        const dist = Math.abs(mx - target.position);
-        if (dist < threshold) {
-          if (dist < Math.abs(bestDx)) {
-            bestDx = target.position - mx;
-            matchedVertical.length = 0;
-            matchedVertical.push({
-              target: target.position,
-              movingVal: mx,
-            });
-          } else if (Math.abs(dist - Math.abs(bestDx)) < 0.5) {
-            matchedVertical.push({
-              target: target.position,
-              movingVal: mx,
-            });
-          }
+        const delta = target.position - mx;
+        if (Math.abs(delta) < threshold) {
+          verticalCandidates.push({
+            target: target.position,
+            movingVal: mx,
+            delta,
+          });
         }
       }
     } else {
       for (const my of movingYPoints) {
-        const dist = Math.abs(my - target.position);
-        if (dist < threshold) {
-          if (dist < Math.abs(bestDy)) {
-            bestDy = target.position - my;
-            matchedHorizontal.length = 0;
-            matchedHorizontal.push({
-              target: target.position,
-              movingVal: my,
-            });
-          } else if (Math.abs(dist - Math.abs(bestDy)) < 0.5) {
-            matchedHorizontal.push({
-              target: target.position,
-              movingVal: my,
-            });
-          }
+        const delta = target.position - my;
+        if (Math.abs(delta) < threshold) {
+          horizontalCandidates.push({
+            target: target.position,
+            movingVal: my,
+            delta,
+          });
         }
       }
     }
   }
 
-  const dx = Math.abs(bestDx) < threshold ? bestDx : 0;
-  const dy = Math.abs(bestDy) < threshold ? bestDy : 0;
+  function chooseDelta(candidates: Candidate[]): number {
+    let best = 0;
+    let bestDist = Infinity;
+    for (const c of candidates) {
+      const dist = Math.abs(c.delta);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = c.delta;
+      }
+    }
+    return best;
+  }
+
+  // Keep only guides describing the adjustment actually applied, at most one
+  // per target coordinate. Without the dedup, a board where many elements
+  // share an edge coordinate emits one entry per element, and each entry then
+  // rescans every element to compute its extent -- quadratic per drag event,
+  // for a stack of identical guide lines.
+  function matchingGuides(candidates: Candidate[], delta: number): Candidate[] {
+    const seen = new Set<number>();
+    const out: Candidate[] = [];
+    for (const c of candidates) {
+      if (Math.abs(c.delta - delta) >= 0.5) continue;
+      if (seen.has(c.target)) continue;
+      seen.add(c.target);
+      out.push(c);
+    }
+    return out;
+  }
+
+  const dx = chooseDelta(verticalCandidates);
+  const dy = chooseDelta(horizontalCandidates);
+  const matchedVertical = matchingGuides(verticalCandidates, dx);
+  const matchedHorizontal = matchingGuides(horizontalCandidates, dy);
 
   // Build guide lines
   const lines: SnapLine[] = [];
