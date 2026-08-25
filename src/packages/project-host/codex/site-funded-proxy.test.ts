@@ -3,9 +3,10 @@
  *  License: MS-RSL – see https://github.com/sagemathinc/cocalc-ai/blob/master/LICENSE.md
  */
 
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import {
   DEFAULT_SITE_FUNDED_CODEX_POLICY,
+  SITE_FUNDED_CODEX_MAX_REQUEST_BODY_BYTES,
   type SiteFundedCodexReservation,
   type SiteFundedCodexUsageEvent,
 } from "@cocalc/util/ai/site-funded-codex";
@@ -100,6 +101,7 @@ describe("site-funded Codex provider proxy", () => {
       "host.containers.internal",
       "127.0.0.1",
     );
+    const imageData = "A".repeat(2 * 1024 * 1024);
     const result = await fetch(`${localUrl}/responses`, {
       method: "POST",
       headers: {
@@ -115,9 +117,18 @@ describe("site-funded Codex provider proxy", () => {
         background: true,
         store: true,
         tools: [{ type: "function", name: "shell" }],
-        // This is intentionally larger than the old byte-based pseudo-token
-        // cap. Codex context management, not JSON byte length, owns compaction.
-        input: "x".repeat(200_000),
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "analyze this image" },
+              {
+                type: "input_image",
+                image_url: `data:image/png;base64,${imageData}`,
+              },
+            ],
+          },
+        ],
       }),
     });
     expect(result.status).toBe(200);
@@ -134,6 +145,9 @@ describe("site-funded Codex provider proxy", () => {
     });
     expect(upstreamBody.max_output_tokens).toBeGreaterThan(0);
     expect(upstreamBody.max_output_tokens).toBeLessThanOrEqual(32_000);
+    expect(upstreamBody.input[0].content[1].image_url).toHaveLength(
+      "data:image/png;base64,".length + imageData.length,
+    );
     expect(events).toEqual([
       expect.objectContaining({
         reservationId: session.reservationId,
@@ -384,15 +398,9 @@ describe("site-funded Codex provider proxy", () => {
     session.close();
   });
 
-  it("rejects provider-side context references and oversized requests", async () => {
-    const limited = reservation();
-    limited.policy = {
-      ...limited.policy,
-      contextWindowTokens: 100,
-      autoCompactTokenLimit: 75,
-    };
+  it("rejects provider-side context references and requests beyond the safety cap", async () => {
     const session = await startSiteFundedCodexProxySession({
-      reservation: limited,
+      reservation: reservation(),
       apiKey: "real-site-key",
       upstreamBaseUrl: "http://127.0.0.1:1/v1",
       onUsage: async () => {},
@@ -429,7 +437,28 @@ describe("site-funded Codex provider proxy", () => {
         })
       ).status,
     ).toBe(403);
-    expect((await request({ input: "x".repeat(1_000) })).status).toBe(413);
+    const oversizedStatus = await new Promise<number | undefined>(
+      (resolve, reject) => {
+        const req = httpRequest(
+          `${localUrl}/responses`,
+          {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${session.token}`,
+              "content-type": "application/json",
+              "content-length": SITE_FUNDED_CODEX_MAX_REQUEST_BODY_BYTES + 1,
+            },
+          },
+          (response) => {
+            response.resume();
+            response.on("end", () => resolve(response.statusCode));
+          },
+        );
+        req.on("error", reject);
+        req.end();
+      },
+    );
+    expect(oversizedStatus).toBe(413);
     session.close();
   });
 

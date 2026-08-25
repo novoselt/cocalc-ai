@@ -29,7 +29,13 @@ Any code running inside the project can read mounted secrets. This is intentiona
 
 The project-host temporarily has decrypted secret values in memory while starting a project and writes plaintext files into a private host runtime directory. This is acceptable for the current runtime model, but it means host root or a compromised project-host process can read secrets.
 
-The mounted secret files are static for the lifetime of a running container. Users must restart the project after set, delete, or copy operations for the runtime mount to reflect changes.
+Set, delete, and copy operations refresh the mounted files of a running project
+without restarting it. The refresh validates the existing read-only mount and
+atomically replaces or removes secret pathnames. A program that already read
+and cached a value, including one held through an open file descriptor, may
+still need its own reload. A stopped project receives the latest secret set at
+its next start, while a failed live refresh is reported as pending and can be
+retried.
 
 ## Validation Added
 

@@ -98,15 +98,24 @@ async function readBody(
   request: IncomingMessage,
   maxBytes: number,
 ): Promise<Buffer> {
+  const tooLarge = () =>
+    Object.assign(
+      new Error(
+        `provider request exceeds CoCalc's ${Math.floor(maxBytes / 1024 / 1024)} MiB safety limit; resize or reduce graphical inputs`,
+      ),
+      { statusCode: 413 },
+    );
+  const contentLength = Number(request.headers["content-length"]);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw tooLarge();
+  }
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.length;
     if (size > maxBytes) {
-      throw Object.assign(new Error("provider request body is too large"), {
-        statusCode: 413,
-      });
+      throw tooLarge();
     }
     chunks.push(buffer);
   }

@@ -6,9 +6,11 @@
 import Decimal from "decimal.js-light";
 
 export const MICROUSD_PER_USD = 1_000_000;
-export const SITE_FUNDED_CODEX_POLICY_VERSION = 4;
+export const SITE_FUNDED_CODEX_POLICY_VERSION = 5;
 export const SITE_FUNDED_CODEX_PRICE_VERSION = "openai-2026-07-30";
-export const SITE_FUNDED_CODEX_REQUEST_BYTES_PER_CONTEXT_TOKEN = 8;
+// Provider requests can contain base64 images, so HTTP bytes do not map to
+// context tokens. Keep an independent host-memory safety limit instead.
+export const SITE_FUNDED_CODEX_MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
 export const SITE_FUNDED_CODEX_PROVIDER_INPUT_OVERHEAD_TOKENS = 8_192;
 
 export type SiteFundedCodexPolicy = {
@@ -339,22 +341,16 @@ export function computeSiteFundedCodexRequestCost({
 }
 
 export function siteFundedCodexMaxRequestBodyBytes(
-  policy: SiteFundedCodexPolicy,
+  _policy: SiteFundedCodexPolicy,
 ): number {
-  const bytes =
-    policy.contextWindowTokens *
-    SITE_FUNDED_CODEX_REQUEST_BYTES_PER_CONTEXT_TOKEN;
-  if (!Number.isSafeInteger(bytes) || bytes <= 0) {
-    throw new Error("site-funded Codex request body limit is invalid");
-  }
-  return bytes;
+  return SITE_FUNDED_CODEX_MAX_REQUEST_BODY_BYTES;
 }
 
 export function siteFundedCodexFinalRequestHeadroomMicrousd(
   policy: SiteFundedCodexPolicy,
 ): number {
   const inputTokens =
-    siteFundedCodexMaxRequestBodyBytes(policy) +
+    policy.contextWindowTokens +
     SITE_FUNDED_CODEX_PROVIDER_INPUT_OVERHEAD_TOKENS;
   return computeSiteFundedCodexRequestCost({
     model: policy.model,

@@ -3751,6 +3751,9 @@ describe("CodexAppServerAgent", () => {
       "write/append/replace methods save to disk by default",
     );
     expect(turnStartParams?.input?.[0]?.text).toContain(
+      "Project secret changes apply immediately to running projects",
+    );
+    expect(turnStartParams?.input?.[0]?.text).toContain(
       "browser files --project-id",
     );
   });

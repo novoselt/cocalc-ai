@@ -336,7 +336,7 @@ Expected:
 - logs show no missing/invalid key errors.
 - encrypted site settings can be read.
 - project backup repository secrets can be used.
-- project secrets mount correctly after project restart.
+- a newly started test project mounts its configured secrets correctly.
 
 ## Fail-Closed Test
 
