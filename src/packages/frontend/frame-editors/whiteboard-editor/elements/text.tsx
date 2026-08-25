@@ -259,6 +259,9 @@ function EditText({
       {...(mouseClickDrag ?? {})}
       style={{
         ...getStyle(element),
+        // Must match getFullStyle in text-static: keeps the editor's content
+        // box the same width as the rendered view's.
+        boxSizing: "border-box",
         padding: `${PADDING}px`,
         height: "100%",
       }}
