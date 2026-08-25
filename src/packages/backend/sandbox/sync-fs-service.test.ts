@@ -1,4 +1,10 @@
-import { mkdtempSync, writeFileSync, rmSync, utimesSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+  rmSync,
+  utimesSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { EventEmitter, once } from "events";
@@ -727,6 +733,56 @@ describe("SyncFsService", () => {
     // cache would publish an insertion of the entire file and duplicate it.
     expect(fake.messages.length).toBe(1);
     expect((svc as any).store.get(path)).toBeUndefined();
+    svc.close();
+  }, 10_000);
+
+  it("does not publish empty content when the disk read fails", async () => {
+    const path = join(dir, "read-error.slides");
+    mkdirSync(path);
+
+    const fake = new FakeAStream([
+      { mesg: { time: legacyPatchId(100), parents: [], version: 1 }, seq: 1 },
+    ]);
+    const svc = new SyncFsService();
+    svc.on("error", () => undefined);
+    (svc as any).getPatchWriter = async () => fake;
+    (svc as any).loadDocViaSyncDoc = async () => "complete document";
+
+    const initialized = await (svc as any).initPath(path, {
+      project_id: "p-read-error",
+      syncPath: "read-error.slides",
+    });
+
+    expect(initialized).toBe(false);
+    expect(fake.messages).toHaveLength(1);
+    expect((svc as any).store.get(path)).toMatchObject({
+      content: "complete document",
+      deleted: false,
+    });
+    svc.close();
+  }, 10_000);
+
+  it("does not infer a delete when the file is missing on init", async () => {
+    const path = join(dir, "missing.slides");
+    const fake = new FakeAStream([
+      { mesg: { time: legacyPatchId(100), parents: [], version: 1 }, seq: 1 },
+    ]);
+    const svc = new SyncFsService();
+    svc.on("error", () => undefined);
+    (svc as any).getPatchWriter = async () => fake;
+    (svc as any).loadDocViaSyncDoc = async () => "complete document";
+
+    const initialized = await (svc as any).initPath(path, {
+      project_id: "p-missing",
+      syncPath: "missing.slides",
+    });
+
+    expect(initialized).toBe(false);
+    expect(fake.messages).toHaveLength(1);
+    expect((svc as any).store.get(path)).toMatchObject({
+      content: "complete document",
+      deleted: false,
+    });
     svc.close();
   }, 10_000);
 

@@ -18,6 +18,25 @@ describe("SyncFsWatchStore", () => {
     store.close();
   });
 
+  it("does not turn a read failure into empty content", async () => {
+    const store = new SyncFsWatchStore();
+    store.setContent("read-error.slides", "complete document");
+    const err: NodeJS.ErrnoException = new Error("temporary read failure");
+    err.code = "EIO";
+
+    await expect(
+      store.handleExternalChange("read-error.slides", async () => {
+        throw err;
+      }),
+    ).rejects.toBe(err);
+
+    expect(store.get("read-error.slides")).toMatchObject({
+      content: "complete document",
+      deleted: false,
+    });
+    store.close();
+  });
+
   it("marks deletes without throwing", () => {
     const store = new SyncFsWatchStore();
     store.setContent("b.txt", "data");

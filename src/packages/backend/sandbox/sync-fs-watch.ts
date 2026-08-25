@@ -234,18 +234,8 @@ export class SyncFsWatchStore {
     deleted = false,
     codec?: DocCodec,
   ): Promise<ExternalChange> {
-    let current;
-    if (deleted) {
-      current = "";
-    } else {
-      try {
-        current = await loader();
-      } catch {
-        // file doesn't exist
-        deleted = true;
-        current = "";
-      }
-    }
+    // Only an explicit unlink event may turn the baseline into a deletion.
+    const current = deleted ? "" : await loader();
     const currentHash = this.sha(current);
     const prev = this.get(path);
 
