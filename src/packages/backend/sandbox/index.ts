@@ -63,7 +63,7 @@ import {
   statSync,
   writeFile as writeFileFdCallback,
 } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { move } from "fs-extra";
 import { exists } from "@cocalc/backend/misc/async-utils-node";
 import nodePath, { basename, dirname, join, posix } from "node:path";
@@ -2523,6 +2523,77 @@ export class SandboxedFilesystem {
     );
   };
 
+  private async writeFileAtomically(
+    path: string,
+    targetPath: string,
+    data: string | Buffer,
+  ): Promise<void> {
+    // Sync-fs watches the destination, so never expose a truncate/write gap.
+    let existingMode: number | undefined;
+    try {
+      existingMode = (await stat(targetPath)).mode & 0o7777;
+    } catch (err: any) {
+      if (err?.code !== "ENOENT") {
+        throw err;
+      }
+    }
+
+    const tempPath = join(
+      dirname(path),
+      `.${basename(path)}.tmp.${process.pid}.${randomUUID()}`,
+    );
+    let tempCreated = false;
+    try {
+      const openWriteFd = await this.openAt2WriteWithRetry({
+        path: tempPath,
+        create: true,
+        truncate: true,
+        append: false,
+        mode: existingMode ?? 0o666,
+      });
+      if (openWriteFd != null) {
+        tempCreated = true;
+        try {
+          await writeFileByFd(openWriteFd, data);
+        } finally {
+          try {
+            await closeFd(openWriteFd);
+          } catch {}
+        }
+      } else {
+        const { handle } = await this.openVerifiedHandle({
+          path: tempPath,
+          flags: constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+          mode: existingMode ?? 0o666,
+        });
+        tempCreated = true;
+        try {
+          await handle.writeFile(data);
+        } finally {
+          await handle.close();
+        }
+      }
+      if (existingMode != null) {
+        await this.chmod(tempPath, existingMode);
+      }
+      await this.rename(tempPath, path);
+      tempCreated = false;
+    } finally {
+      if (tempCreated) {
+        try {
+          await this.unlink(tempPath);
+        } catch (err: any) {
+          if (err?.code !== "ENOENT") {
+            logger.warn("unable to remove atomic write temporary file", {
+              path: tempPath,
+              err: String(err),
+            });
+          }
+        }
+      }
+    }
+  }
+
   writeFile = async (
     path: string,
     data: string | Buffer | PatchWriteRequest,
@@ -2631,32 +2702,36 @@ export class SandboxedFilesystem {
         throw err;
       }
       const encoded = Buffer.from(patched, normalizedEncoding);
-      const openWriteFd = await this.openAt2WriteWithRetry({
-        path,
-        create: false,
-        truncate: true,
-        append: false,
-        mode: 0o666,
-        missingAsEtagMismatch: true,
-      });
-      if (openWriteFd != null) {
-        try {
-          await writeFileByFd(openWriteFd, encoded);
-        } finally {
-          try {
-            await closeFd(openWriteFd);
-          } catch {}
-        }
+      if (saveLast === true) {
+        await this.writeFileAtomically(path, p, encoded);
       } else {
-        const { handle } = await this.openVerifiedHandle({
+        const openWriteFd = await this.openAt2WriteWithRetry({
           path,
-          flags: constants.O_RDWR,
+          create: false,
+          truncate: true,
+          append: false,
+          mode: 0o666,
+          missingAsEtagMismatch: true,
         });
-        try {
-          await handle.truncate(0);
-          await handle.write(encoded, 0, encoded.length, 0);
-        } finally {
-          await handle.close();
+        if (openWriteFd != null) {
+          try {
+            await writeFileByFd(openWriteFd, encoded);
+          } finally {
+            try {
+              await closeFd(openWriteFd);
+            } catch {}
+          }
+        } else {
+          const { handle } = await this.openVerifiedHandle({
+            path,
+            flags: constants.O_RDWR,
+          });
+          try {
+            await handle.truncate(0);
+            await handle.write(encoded, 0, encoded.length, 0);
+          } finally {
+            await handle.close();
+          }
         }
       }
       if (saveLast) {
@@ -2668,9 +2743,14 @@ export class SandboxedFilesystem {
       }
       return;
     }
-    if (saveLast && typeof data == "string") {
-      this.lastOnDisk.set(p, data);
-      this.lastOnDiskHash.set(`${p}-${sha1(data)}`, true);
+    if (saveLast === true) {
+      await this.writeFileAtomically(path, p, data);
+      if (typeof data === "string") {
+        this.lastOnDisk.set(p, data);
+        this.lastOnDiskHash.set(`${p}-${sha1(data)}`, true);
+        void this.notifySyncFsLocalWrite(path, data);
+      }
+      return;
     }
     const openWriteFd = await this.openAt2WriteWithRetry({
       path,
@@ -2686,9 +2766,6 @@ export class SandboxedFilesystem {
         try {
           await closeFd(openWriteFd);
         } catch {}
-      }
-      if (saveLast === true && typeof data === "string") {
-        void this.notifySyncFsLocalWrite(path, data);
       }
       return;
     }
@@ -2736,9 +2813,6 @@ export class SandboxedFilesystem {
         });
         await writeToHandle(handle);
       }
-    }
-    if (saveLast === true && typeof data === "string") {
-      void this.notifySyncFsLocalWrite(path, data);
     }
   };
 
