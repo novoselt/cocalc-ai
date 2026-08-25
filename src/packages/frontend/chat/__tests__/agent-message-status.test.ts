@@ -8,6 +8,7 @@ import {
   AttachedSteerStatusList,
   describeLastActivity,
   reconcileAvailableSubagentEvents,
+  resolveActivityDurationLabel,
   resolveLiveRunStartMs,
   STALE_ACTIVITY_MS,
 } from "../agent-message-status";
@@ -59,6 +60,17 @@ describe("describeLastActivity", () => {
       ageMs: undefined,
       stale: false,
     });
+  });
+
+  it("derives a completed duration from activity after restart recovery", () => {
+    expect(
+      resolveActivityDurationLabel({
+        generating: false,
+        durationLabel: "",
+        runStartMs: 1_000,
+        lastActivityAtMs: 66_000,
+      }),
+    ).toBe("1:05");
   });
 
   it("shows awaiting activity before the first backend event", () => {

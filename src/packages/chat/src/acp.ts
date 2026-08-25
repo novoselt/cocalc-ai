@@ -605,6 +605,7 @@ export function getLiveResponseBlocks(
         kind: "agent-boundary";
         time?: number;
         seq: number;
+        strength: "hard" | "soft";
       }
     | {
         kind: "guidance";
@@ -636,7 +637,8 @@ export function getLiveResponseBlocks(
           },
         ];
       }
-      if (!isAgentMessageBoundaryEvent(evt)) {
+      const boundaryStrength = agentMessageBoundaryStrength(evt);
+      if (boundaryStrength == null) {
         return [];
       }
       return [
@@ -644,6 +646,7 @@ export function getLiveResponseBlocks(
           kind: "agent-boundary" as const,
           time: evt?.time,
           seq: evt?.seq ?? 0,
+          strength: boundaryStrength,
         },
       ];
     }),
@@ -680,6 +683,9 @@ export function getLiveResponseBlocks(
   let latestFullSourceEvent: object | undefined;
   let activeSegmentBaseText: string | undefined;
   let pendingGuidanceSplitBaseText: string | undefined;
+  let pendingAgentBoundary:
+    | { baseText: string | undefined; strength: "hard" | "soft" }
+    | undefined;
 
   for (const item of timeline) {
     if (item.kind === "guidance") {
@@ -695,9 +701,29 @@ export function getLiveResponseBlocks(
     }
 
     if (item.kind === "agent-boundary") {
-      pendingGuidanceSplitBaseText = latestFullText;
+      if (pendingAgentBoundary == null || item.strength === "hard") {
+        pendingAgentBoundary = {
+          baseText: latestFullText,
+          strength: item.strength,
+        };
+      }
       activeSegmentBaseText = undefined;
       continue;
+    }
+
+    if (pendingAgentBoundary != null) {
+      // Terminal, file, reasoning, and usage events can arrive between chunks
+      // of one app-server agentMessage. A raw delta remains part of that same
+      // message; only an ACP status/finalizer is a definite item boundary.
+      // Snapshot events retain the legacy soft-boundary behavior.
+      if (
+        pendingAgentBoundary.strength === "hard" ||
+        item.delta !== true ||
+        latestFullHasDelta !== true
+      ) {
+        pendingGuidanceSplitBaseText = pendingAgentBoundary.baseText;
+      }
+      pendingAgentBoundary = undefined;
     }
 
     const progressive = mergeProgressiveEventText({
@@ -751,10 +777,16 @@ export function getLiveResponseBlocks(
   return blocks;
 }
 
-function isAgentMessageBoundaryEvent(evt?: AcpStreamMessage): boolean {
-  if (!evt) return false;
-  if (evt.type !== "event") return true;
-  return evt.event?.type !== "message";
+function agentMessageBoundaryStrength(
+  evt?: AcpStreamMessage,
+): "hard" | "soft" | undefined {
+  if (!evt) return undefined;
+  if (evt.type === "event") {
+    return evt.event?.type === "message" ? undefined : "soft";
+  }
+  return evt.type === "status" || evt.type === "summary" || evt.type === "error"
+    ? "hard"
+    : "soft";
 }
 
 export function getMountedIntermediateResponseBlocks(
