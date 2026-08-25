@@ -153,9 +153,6 @@ export default function NotFocused({
         shiftKeyRef.current = !!(e as MouseEvent).shiftKey;
       }}
       onStop={(e, data) => {
-        // Unconditionally: dragging back to the exact starting position takes
-        // the else branch below, which would otherwise leave guides on screen.
-        setSnapLines?.([]);
         if (data.x || data.y) {
           shiftKeyRef.current = !!(e as MouseEvent).shiftKey;
           computeSnapForDrag(data);
@@ -170,6 +167,10 @@ export default function NotFocused({
           // without this it would be really hard to select and edit anything.
           onClick(e);
         }
+        // Last, and in both branches: computeSnapForDrag above sets the guides
+        // for its final position, so clearing any earlier would be undone by
+        // it, and the null-drag branch would never clear them at all.
+        setSnapLines?.([]);
       }}
       onDrag={(e, data) => {
         shiftKeyRef.current = !!(e as MouseEvent).shiftKey;
