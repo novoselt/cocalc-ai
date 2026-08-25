@@ -66,4 +66,37 @@ describe("normalized CRM database schema", () => {
       expect(SCHEMA[table].user_query).toBeUndefined();
     }
   });
+
+  it("owns CRM sequences, relational constraints, and specialized indexes", () => {
+    expect(SCHEMA.crm_organizations.pg_sequences).toEqual([
+      "crm_customer_number_seq",
+    ]);
+    expect(SCHEMA.crm_organization_domains.pg_constraints).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "crm_organization_domains_organization_domain_key",
+          type: "unique",
+        }),
+        expect.objectContaining({
+          name: "crm_organization_domains_organization_id_crm_fk",
+          type: "foreign-key",
+        }),
+        expect.objectContaining({
+          name: "crm_organization_domains_state_crm_check",
+          type: "check",
+        }),
+      ]),
+    );
+    expect(SCHEMA.crm_organization_domains.pg_custom_indexes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "crm_one_verified_domain",
+          unique: true,
+        }),
+      ]),
+    );
+    for (const table of TABLES_WITH_CREATED_AT) {
+      expect(SCHEMA[table].pg_constraints?.length ?? 0).toBeGreaterThan(0);
+    }
+  });
 });

@@ -91,7 +91,6 @@ import {
   CRM_TASK_TYPES,
 } from "@cocalc/util/crm";
 import { isValidUUID } from "@cocalc/util/misc";
-import { ensureCrmSchema } from "./schema";
 
 type Queryable = PoolClient | ReturnType<typeof getPool>;
 type Json = Record<string, unknown>;
@@ -409,7 +408,6 @@ async function withTransaction<T>(
 async function prepareRead(reason: unknown): Promise<void> {
   assertSeedAuthority();
   requireReason(reason);
-  await ensureCrmSchema();
 }
 
 async function resolveOrganizationId(
@@ -648,7 +646,6 @@ async function mutate<T>(
   opts: MutationOptions<T>,
 ): Promise<CrmMutationResult<T>> {
   assertSeedAuthority();
-  await ensureCrmSchema();
   const reason = requireReason(opts.reason);
   const actor = requireActor(opts.actor);
   const hash = payloadHash({ action: opts.action, proposed: opts.proposed });

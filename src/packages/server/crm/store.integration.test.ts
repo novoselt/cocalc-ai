@@ -13,6 +13,21 @@ const describePglite =
 
 const actor = randomUUID();
 
+const CRM_TABLES = [
+  "crm_organizations",
+  "crm_organization_domains",
+  "crm_people",
+  "crm_person_emails",
+  "crm_person_accounts",
+  "crm_organization_people",
+  "crm_external_references",
+  "crm_opportunities",
+  "crm_tasks",
+  "crm_activities",
+  "crm_metric_snapshots",
+  "crm_mutation_events",
+] as const;
+
 function committed<T>(value: CrmMutationResult<T>): T {
   if (value.preview) throw Error("expected a committed CRM mutation");
   return value.result;
@@ -102,8 +117,14 @@ describePglite("integrated CRM store", () => {
       expires_at TIMESTAMPTZ,
       metadata JSONB DEFAULT '{}'
     )`);
-    const { ensureCrmSchema } = await import("./schema");
-    await ensureCrmSchema();
+    const { SCHEMA } = await import("@cocalc/util/schema");
+    const { schemaNeedsSync, syncSchema } =
+      await import("@cocalc/database/postgres/schema/sync");
+    const crmSchema = Object.fromEntries(
+      CRM_TABLES.map((name) => [name, SCHEMA[name]]),
+    );
+    await syncSchema(crmSchema);
+    expect(await schemaNeedsSync(crmSchema)).toBe(false);
     store = await import("./store");
   });
 

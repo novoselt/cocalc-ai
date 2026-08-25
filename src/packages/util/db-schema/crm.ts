@@ -3,7 +3,7 @@
  *  License: MS-RSL - see LICENSE.md for details
  */
 
-import { type FieldSpec, Table } from "./types";
+import { type FieldSpec, type PgTableConstraint, Table } from "./types";
 
 function required(field: FieldSpec): FieldSpec {
   return { ...field, not_null: true };
@@ -36,6 +36,20 @@ function versionField(): FieldSpec {
   );
 }
 
+function foreignKey(
+  name: string,
+  column: string,
+  table: string,
+  referencedColumn = "id",
+): PgTableConstraint {
+  return {
+    name,
+    type: "foreign-key",
+    columns: [column],
+    references: { table, columns: [referencedColumn] },
+  };
+}
+
 // These generic field specifications predate the abandoned CRM editor and are
 // still imported by unrelated operational schemas.
 export const NOTES: FieldSpec = {
@@ -64,6 +78,52 @@ Table({
   name: "crm_organizations",
   rules: {
     primary_key: "id",
+    pg_sequences: ["crm_customer_number_seq"],
+    pg_constraints: [
+      {
+        name: "crm_organizations_customer_number_key",
+        type: "unique",
+        columns: ["customer_number"],
+      },
+      foreignKey(
+        "crm_organizations_parent_organization_id_crm_fk",
+        "parent_organization_id",
+        "crm_organizations",
+      ),
+      foreignKey(
+        "crm_organizations_merged_into_organization_id_crm_fk",
+        "merged_into_organization_id",
+        "crm_organizations",
+      ),
+      {
+        name: "crm_organizations_status_crm_check",
+        type: "check",
+        expression: "status IN ('active','merged','archived')",
+      },
+      {
+        name: "crm_organizations_version_crm_check",
+        type: "check",
+        expression: "version > 0",
+      },
+      {
+        name: "crm_organizations_parent_crm_check",
+        type: "check",
+        expression: "id IS DISTINCT FROM parent_organization_id",
+      },
+      {
+        name: "crm_organizations_merge_crm_check",
+        type: "check",
+        expression: "id IS DISTINCT FROM merged_into_organization_id",
+      },
+    ],
+    pg_custom_indexes: [
+      { name: "crm_org_name_idx", query: "lower(display_name)" },
+      {
+        name: "crm_org_owner_idx",
+        query: "relationship_owner_account_id",
+      },
+      { name: "crm_org_updated_idx", query: "(updated_at DESC,id)" },
+    ],
     pg_indexes: [
       "customer_number",
       "display_name",
@@ -82,7 +142,6 @@ Table({
     customer_number: required({
       type: "string",
       desc: "Stable customer display key.",
-      unique: true,
     }),
     display_name: required({
       type: "string",
@@ -140,6 +199,36 @@ Table({
   name: "crm_organization_domains",
   rules: {
     primary_key: "id",
+    pg_constraints: [
+      {
+        name: "crm_organization_domains_organization_domain_key",
+        type: "unique",
+        columns: ["organization_id", "normalized_domain"],
+      },
+      foreignKey(
+        "crm_organization_domains_organization_id_crm_fk",
+        "organization_id",
+        "crm_organizations",
+      ),
+      {
+        name: "crm_organization_domains_kind_crm_check",
+        type: "check",
+        expression: "kind IN ('primary','secondary','department','legacy')",
+      },
+      {
+        name: "crm_organization_domains_state_crm_check",
+        type: "check",
+        expression: "state IN ('suggested','verified','rejected','retired')",
+      },
+    ],
+    pg_custom_indexes: [
+      {
+        name: "crm_one_verified_domain",
+        query: "(normalized_domain) WHERE state='verified'",
+        unique: true,
+      },
+      { name: "crm_domain_org_idx", query: "organization_id" },
+    ],
     pg_indexes: [
       "organization_id",
       "normalized_domain",
@@ -204,6 +293,27 @@ Table({
   name: "crm_people",
   rules: {
     primary_key: "id",
+    pg_constraints: [
+      foreignKey(
+        "crm_people_merged_into_person_id_crm_fk",
+        "merged_into_person_id",
+        "crm_people",
+      ),
+      {
+        name: "crm_people_status_crm_check",
+        type: "check",
+        expression: "status IN ('active','merged','archived')",
+      },
+      {
+        name: "crm_people_merge_crm_check",
+        type: "check",
+        expression: "id IS DISTINCT FROM merged_into_person_id",
+      },
+    ],
+    pg_custom_indexes: [
+      { name: "crm_people_name_idx", query: "lower(display_name)" },
+      { name: "crm_people_updated_idx", query: "(updated_at DESC,id)" },
+    ],
     pg_indexes: [
       "display_name",
       "status",
@@ -246,6 +356,31 @@ Table({
   name: "crm_person_emails",
   rules: {
     primary_key: "id",
+    pg_constraints: [
+      {
+        name: "crm_person_emails_person_email_key",
+        type: "unique",
+        columns: ["person_id", "normalized_email"],
+      },
+      foreignKey(
+        "crm_person_emails_person_id_crm_fk",
+        "person_id",
+        "crm_people",
+      ),
+      {
+        name: "crm_person_emails_kind_crm_check",
+        type: "check",
+        expression: "kind IN ('work','billing','personal','other')",
+      },
+    ],
+    pg_custom_indexes: [
+      {
+        name: "crm_one_primary_email",
+        query: "(person_id) WHERE is_primary",
+        unique: true,
+      },
+      { name: "crm_email_normalized_idx", query: "normalized_email" },
+    ],
     pg_indexes: ["person_id", "normalized_email", "is_primary"],
   },
   fields: {
@@ -281,6 +416,30 @@ Table({
   name: "crm_person_accounts",
   rules: {
     primary_key: "id",
+    pg_constraints: [
+      {
+        name: "crm_person_accounts_person_account_key",
+        type: "unique",
+        columns: ["person_id", "account_id"],
+      },
+      foreignKey(
+        "crm_person_accounts_person_id_crm_fk",
+        "person_id",
+        "crm_people",
+      ),
+      {
+        name: "crm_person_accounts_state_crm_check",
+        type: "check",
+        expression: "state IN ('suggested','verified','rejected','retired')",
+      },
+    ],
+    pg_custom_indexes: [
+      {
+        name: "crm_one_verified_person_per_account",
+        query: "(account_id) WHERE state='verified'",
+        unique: true,
+      },
+    ],
     pg_indexes: ["person_id", "account_id", "state"],
   },
   fields: {
@@ -309,6 +468,31 @@ Table({
   name: "crm_organization_people",
   rules: {
     primary_key: "id",
+    pg_constraints: [
+      {
+        name: "crm_organization_people_organization_person_key",
+        type: "unique",
+        columns: ["organization_id", "person_id"],
+      },
+      foreignKey(
+        "crm_organization_people_organization_id_crm_fk",
+        "organization_id",
+        "crm_organizations",
+      ),
+      foreignKey(
+        "crm_organization_people_person_id_crm_fk",
+        "person_id",
+        "crm_people",
+      ),
+      {
+        name: "crm_organization_people_state_crm_check",
+        type: "check",
+        expression: "state IN ('active','former','retired')",
+      },
+    ],
+    pg_custom_indexes: [
+      { name: "crm_org_people_org_idx", query: "organization_id" },
+    ],
     pg_indexes: ["organization_id", "person_id", "state"],
   },
   fields: {
@@ -342,6 +526,37 @@ Table({
   name: "crm_external_references",
   rules: {
     primary_key: "id",
+    pg_constraints: [
+      {
+        name: "crm_external_references_provider_object_key",
+        type: "unique",
+        columns: ["provider", "object_kind", "external_id"],
+      },
+      foreignKey(
+        "crm_external_references_organization_id_crm_fk",
+        "organization_id",
+        "crm_organizations",
+      ),
+      foreignKey(
+        "crm_external_references_person_id_crm_fk",
+        "person_id",
+        "crm_people",
+      ),
+      foreignKey(
+        "crm_external_references_opportunity_id_crm_fk",
+        "opportunity_id",
+        "crm_opportunities",
+      ),
+      {
+        name: "crm_external_references_state_crm_check",
+        type: "check",
+        expression:
+          "verification_state IN ('suggested','verified','rejected','retired')",
+      },
+    ],
+    pg_custom_indexes: [
+      { name: "crm_external_org_idx", query: "organization_id" },
+    ],
     pg_indexes: [
       "organization_id",
       "person_id",
@@ -404,6 +619,24 @@ Table({
   name: "crm_opportunities",
   rules: {
     primary_key: "id",
+    pg_constraints: [
+      foreignKey(
+        "crm_opportunities_organization_id_crm_fk",
+        "organization_id",
+        "crm_organizations",
+      ),
+      {
+        name: "crm_opportunities_value_crm_check",
+        type: "check",
+        expression: "expected_value >= 0",
+      },
+    ],
+    pg_custom_indexes: [
+      {
+        name: "crm_opportunity_org_idx",
+        query: "(organization_id,stage)",
+      },
+    ],
     pg_indexes: [
       "organization_id",
       "kind",
@@ -484,6 +717,35 @@ Table({
   name: "crm_tasks",
   rules: {
     primary_key: "id",
+    pg_constraints: [
+      foreignKey(
+        "crm_tasks_organization_id_crm_fk",
+        "organization_id",
+        "crm_organizations",
+      ),
+      foreignKey("crm_tasks_person_id_crm_fk", "person_id", "crm_people"),
+      foreignKey(
+        "crm_tasks_opportunity_id_crm_fk",
+        "opportunity_id",
+        "crm_opportunities",
+      ),
+      {
+        name: "crm_tasks_state_crm_check",
+        type: "check",
+        expression: "state IN ('open','waiting','completed','cancelled')",
+      },
+      {
+        name: "crm_tasks_priority_crm_check",
+        type: "check",
+        expression: "priority IN ('low','normal','high','urgent')",
+      },
+    ],
+    pg_custom_indexes: [
+      {
+        name: "crm_task_queue_idx",
+        query: "(state,due_at,assignee_account_id)",
+      },
+    ],
     pg_indexes: [
       "organization_id",
       "person_id",
@@ -564,6 +826,36 @@ Table({
   name: "crm_activities",
   rules: {
     primary_key: "id",
+    pg_constraints: [
+      {
+        name: "crm_activities_source_key",
+        type: "unique",
+        columns: ["organization_id", "source", "source_id"],
+      },
+      foreignKey(
+        "crm_activities_organization_id_crm_fk",
+        "organization_id",
+        "crm_organizations",
+      ),
+      foreignKey("crm_activities_person_id_crm_fk", "person_id", "crm_people"),
+      foreignKey(
+        "crm_activities_opportunity_id_crm_fk",
+        "opportunity_id",
+        "crm_opportunities",
+      ),
+      foreignKey("crm_activities_task_id_crm_fk", "task_id", "crm_tasks"),
+      foreignKey(
+        "crm_activities_supersedes_activity_id_crm_fk",
+        "supersedes_activity_id",
+        "crm_activities",
+      ),
+    ],
+    pg_custom_indexes: [
+      {
+        name: "crm_activity_timeline_idx",
+        query: "(organization_id,occurred_at DESC,id)",
+      },
+    ],
     pg_indexes: [
       "organization_id",
       "person_id",
@@ -630,6 +922,19 @@ Table({
   name: "crm_metric_snapshots",
   rules: {
     primary_key: "id",
+    pg_constraints: [
+      foreignKey(
+        "crm_metric_snapshots_organization_id_crm_fk",
+        "organization_id",
+        "crm_organizations",
+      ),
+    ],
+    pg_custom_indexes: [
+      {
+        name: "crm_metric_org_idx",
+        query: "(organization_id,generated_at DESC)",
+      },
+    ],
     pg_indexes: ["organization_id", "generated_at", "scope"],
   },
   fields: {
@@ -663,6 +968,18 @@ Table({
   name: "crm_mutation_events",
   rules: {
     primary_key: "id",
+    pg_constraints: [
+      {
+        name: "crm_mutation_events_idempotency_key",
+        type: "unique",
+        columns: ["actor_account_id", "action", "idempotency_key"],
+      },
+      foreignKey(
+        "crm_mutation_events_organization_id_crm_fk",
+        "organization_id",
+        "crm_organizations",
+      ),
+    ],
     pg_indexes: [
       "organization_id",
       "action",

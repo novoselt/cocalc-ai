@@ -31,6 +31,11 @@ import {
 import { getIndexActions, syncTableSchemaIndexes } from "./index-convergence";
 import { backfillComputeVmProjectAccess } from "./compute-vm-project-access";
 import { cleanupLegacyCrmBeforeSchemaSync } from "./crm-legacy-cleanup";
+import {
+  schemaConstraintsNeedSync,
+  syncSchemaConstraints,
+} from "./constraints";
+import { schemaSequencesNeedSync, syncSchemaSequences } from "./sequences";
 
 const log = getLogger("db:schema:sync");
 
@@ -214,7 +219,13 @@ async function getColumnActions(
     const info = schema.fields[column];
     let cur_type = columnTypeInfo[column]?.toLowerCase();
     if (cur_type != null) {
-      cur_type = cur_type.split(" ")[0];
+      if (cur_type === "timestamp with time zone") {
+        cur_type = "timestamptz";
+      } else if (cur_type === "timestamp without time zone") {
+        cur_type = "timestamp";
+      } else {
+        cur_type = cur_type.split(" ")[0];
+      }
     }
     const goal_type_raw = pgType(info).toLowerCase();
     if (cur_type == null) {
@@ -405,6 +416,8 @@ export async function syncSchema(
     await dropDeprecatedTables(db);
     dbg("applying guarded legacy CRM cleanup");
     await cleanupLegacyCrmBeforeSchemaSync(db, dbSchema);
+    dbg("creating declared auxiliary sequences");
+    await syncSchemaSequences(db, dbSchema);
 
     const allTables = await getAllTables(db);
     // dbg("allTables", allTables);
@@ -438,6 +451,10 @@ export async function syncSchema(
       //dbg("sync existing table", table);
       await syncTableSchema(db, schema);
     }
+    // Constraints are synchronized after all tables and columns exist. This
+    // supports cross-table references without coupling correctness to import
+    // order and keeps application request paths free of schema mutations.
+    await syncSchemaConstraints(db, dbSchema);
     if (dbSchema.account_notification_index != null) {
       await ensureAccountNotificationRevisionSchema(db);
     }
@@ -488,6 +505,10 @@ export async function schemaNeedsSync(
       dbg("detected missing tables", missingTables);
       return true;
     }
+    if (await schemaSequencesNeedSync(db, dbSchema)) {
+      dbg("detected missing auxiliary sequences");
+      return true;
+    }
 
     for (const table of allTables) {
       const schema = dbSchema[table];
@@ -518,6 +539,10 @@ export async function schemaNeedsSync(
         dbg("detected primary key changes needed", schema.name, primaryKeyDiff);
         return true;
       }
+    }
+    if (await schemaConstraintsNeedSync(db, dbSchema)) {
+      dbg("detected missing or invalid table constraints");
+      return true;
     }
     if (
       dbSchema.account_notification_index != null &&
