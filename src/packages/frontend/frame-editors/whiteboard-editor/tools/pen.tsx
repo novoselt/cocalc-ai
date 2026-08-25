@@ -6,6 +6,7 @@ import { Button } from "antd";
 import { Tooltip } from "@cocalc/frontend/components";
 import { Icon } from "@cocalc/frontend/components/icon";
 import ToolPanel, { getPresetManager, Tool } from "./tool-panel";
+import type { PenNib } from "../types";
 import { defaultRadius, maxRadius as defaultMaxRadius } from "./defaults";
 import { SELECTED, WHITEBOARD_COMPACT_BUTTON_STYLE } from "./common";
 
@@ -14,6 +15,7 @@ interface Params {
   countdown?: number;
   radius?: number;
   opacity?: number;
+  nib?: PenNib;
 }
 
 export const COLORS = [
@@ -89,7 +91,12 @@ export default function PenToolPanel() {
 }
 
 const presetManager = getPresetManager<Params>(tool, DEFAULTS, {
-  [HIGHLIGHTER]: { color: "#ffff00", opacity: 0.4, radius: 15 },
+  [HIGHLIGHTER]: {
+    color: "#ffff00",
+    opacity: 0.4,
+    radius: 15,
+    nib: "chisel",
+  },
   [ERASER]: { color: "#ffffff", radius: 15 },
 });
 

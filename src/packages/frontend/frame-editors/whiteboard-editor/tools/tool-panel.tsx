@@ -10,6 +10,7 @@ import { Button, Popover, Slider, TimePicker } from "antd";
 import { Tooltip } from "@cocalc/frontend/components";
 import { PANEL_STYLE } from "./panel";
 import { Icon, IconName } from "@cocalc/frontend/components/icon";
+import type { PenNib } from "../types";
 import { CloseX } from "@cocalc/frontend/components/close-x";
 import { useFrameContext } from "../hooks";
 import { debounce, isEqual } from "lodash";
@@ -48,6 +49,7 @@ interface AllParams {
   radius?: number;
   opacity?: number;
   aspectRatio?: AspectRatio;
+  nib?: PenNib;
 }
 
 type ParamName = keyof AllParams;
