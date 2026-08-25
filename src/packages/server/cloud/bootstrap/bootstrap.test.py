@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 
+import io
 import json
 import os
 import pwd
 import subprocess
 import sys
 import tempfile
+import tarfile
 import time
 import unittest
 from collections import namedtuple
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 import bootstrap
 
@@ -109,6 +112,345 @@ def make_cfg(tmpdir: str) -> bootstrap.BootstrapConfig:
         ca_cert_path=None,
         bootstrap_done_paths=[],
     )
+
+
+class RuntimeStoragePathHelperTest(unittest.TestCase):
+    def helper_namespace(self):
+        namespace = {"__name__": "runtime_storage_path_helper_test"}
+        exec(bootstrap.RUNTIME_STORAGE_PATH_HELPER, namespace)
+        return namespace
+
+    def helper_run(self):
+        return self.helper_namespace()["run"]
+
+    def test_tree_copy_uses_anchored_directories(self) -> None:
+        run = self.helper_run()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source = root / "source"
+            preserve_dest = root / "preserve-dest"
+            reflink_dest = root / "reflink-dest"
+            outside = root / "outside"
+            source.mkdir()
+            preserve_dest.mkdir()
+            outside.mkdir()
+            (source / "marker").write_text("marker\n", encoding="utf-8")
+
+            allowed_roots = {str(root)}
+            run(
+                [
+                    "copy-tree-preserve",
+                    "--root",
+                    str(root),
+                    "--path",
+                    "source",
+                    "--dest-root",
+                    str(root),
+                    "--dest",
+                    "preserve-dest",
+                ],
+                allowed_roots=allowed_roots,
+            )
+            run(
+                [
+                    "copy-tree-reflink",
+                    "--root",
+                    str(root),
+                    "--path",
+                    "source",
+                    "--dest-root",
+                    str(root),
+                    "--dest",
+                    "reflink-dest",
+                ],
+                allowed_roots=allowed_roots,
+            )
+            self.assertEqual(
+                (preserve_dest / "marker").read_text(encoding="utf-8"),
+                "marker\n",
+            )
+            self.assertEqual(
+                (reflink_dest / "marker").read_text(encoding="utf-8"),
+                "marker\n",
+            )
+
+            (root / "source-link").symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(OSError):
+                run(
+                    [
+                        "copy-tree-preserve",
+                        "--root",
+                        str(root),
+                        "--path",
+                        "source-link",
+                        "--dest-root",
+                        str(root),
+                        "--dest",
+                        "preserve-dest",
+                    ],
+                    allowed_roots=allowed_roots,
+                )
+
+            (root / "dest-link").symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(OSError):
+                run(
+                    [
+                        "copy-tree-reflink",
+                        "--root",
+                        str(root),
+                        "--path",
+                        "source",
+                        "--dest-root",
+                        str(root),
+                        "--dest",
+                        "dest-link",
+                    ],
+                    allowed_roots=allowed_roots,
+                )
+            self.assertEqual(list(outside.iterdir()), [])
+
+    def test_overlay_uses_anchored_directories(self) -> None:
+        namespace = self.helper_namespace()
+        run_overlay = namespace["run_overlay"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for name in ("lower", "upper", "work", "merged", "outside"):
+                (root / name).mkdir()
+            with mock.patch.object(namespace["subprocess"], "run") as run:
+                run_overlay(
+                    [
+                        "mount-overlay-project",
+                        "--lower-root",
+                        str(root),
+                        "--lower-path",
+                        "lower",
+                        "--upper-root",
+                        str(root),
+                        "--upper-path",
+                        "upper",
+                        "--work-root",
+                        str(root),
+                        "--work-path",
+                        "work",
+                        "--merged-root",
+                        str(root),
+                        "--merged-path",
+                        "merged",
+                    ],
+                    allowed_roots={str(root)},
+                )
+            args = run.call_args.args[0]
+            self.assertEqual(args[:4], ["/bin/mount", "-t", "overlay", "overlay"])
+            self.assertIn("metacopy=on,redirect_dir=on,index=off", args[5])
+            self.assertRegex(args[-1], r"^/proc/self/fd/[0-9]+$")
+
+            (root / "lower").rmdir()
+            (root / "lower").symlink_to(root / "outside", target_is_directory=True)
+            with self.assertRaises(OSError):
+                run_overlay(
+                    [
+                        "mount-overlay-project",
+                        "--lower-root",
+                        str(root),
+                        "--lower-path",
+                        "lower",
+                        "--upper-root",
+                        str(root),
+                        "--upper-path",
+                        "upper",
+                        "--work-root",
+                        str(root),
+                        "--work-path",
+                        "work",
+                        "--merged-root",
+                        str(root),
+                        "--merged-path",
+                        "merged",
+                    ],
+                    allowed_roots={str(root)},
+                )
+
+    def test_normalize_rootfs_uses_private_bind_mount(self) -> None:
+        namespace = self.helper_namespace()
+        run_normalize_rootfs = namespace["run_normalize_rootfs"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "rootfs").mkdir()
+            runtime_root = root / "run"
+            with mock.patch.object(namespace["subprocess"], "run") as run:
+                run_normalize_rootfs(
+                    [
+                        "normalize-rootfs",
+                        "--root",
+                        str(root),
+                        "--path",
+                        "rootfs",
+                        "--ownership-source",
+                        "keep-id",
+                        "--podman-user",
+                        "cocalc-host",
+                    ],
+                    allowed_roots={str(root)},
+                    runtime_root=str(runtime_root),
+                    runtime_root_uid=os.getuid(),
+                )
+            invocations = [call.args[0] for call in run.call_args_list]
+            self.assertEqual(invocations[0][:2], ["/bin/mount", "--bind"])
+            self.assertEqual(
+                invocations[1][:2],
+                [
+                    "/usr/local/sbin/cocalc-runtime-storage",
+                    "_normalize-rootfs-anchored",
+                ],
+            )
+            self.assertEqual(invocations[2][:2], ["/bin/umount", "-l"])
+
+            (root / "rootfs").rmdir()
+            (root / "rootfs").symlink_to(root / "outside", target_is_directory=True)
+            with self.assertRaises(OSError):
+                run_normalize_rootfs(
+                    [
+                        "normalize-rootfs",
+                        "--root",
+                        str(root),
+                        "--path",
+                        "rootfs",
+                        "--ownership-source",
+                        "keep-id",
+                        "--podman-user",
+                        "cocalc-host",
+                    ],
+                    allowed_roots={str(root)},
+                    runtime_root=str(runtime_root),
+                    runtime_root_uid=os.getuid(),
+                )
+
+    def test_rustic_rejects_executable_profile_configuration(self) -> None:
+        run_rustic = self.helper_namespace()["run_rustic"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "source").mkdir()
+            (root / "profile.toml").write_text(
+                """[repository]
+repository = "opendal:s3"
+password-command = "id"
+""",
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                run_rustic(
+                    [
+                        "rustic-project-backup",
+                        "--root",
+                        str(root),
+                        "--path",
+                        "source",
+                        "--profile-root",
+                        str(root),
+                        "--profile-path",
+                        "profile.toml",
+                        "--host",
+                        "project-test",
+                    ],
+                    allowed_roots={str(root)},
+                    rustic_candidates=[str(root / "not-used")],
+                    profile_run_dir=str(root / "run"),
+                    profile_run_dir_uid=os.getuid(),
+                )
+
+    def test_rustic_uses_anchored_validated_profile_snapshot(self) -> None:
+        run_rustic = self.helper_namespace()["run_rustic"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source = root / "source"
+            source.mkdir()
+            (root / "profile.toml").write_text(
+                """[repository]
+repository = "opendal:s3"
+password = "audit-password"
+[repository.options]
+access_key_id = "access"
+bucket = "bucket"
+endpoint = "https://object.invalid"
+region = "auto"
+root = "project-test"
+secret_access_key = "secret"
+""",
+                encoding="utf-8",
+            )
+            invocation = root / "invocation"
+            fake_rustic = root / "rustic"
+            fake_rustic.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                f"printf '%s\\n' \"$PWD\" \"$@\" > {invocation}\n",
+                encoding="utf-8",
+            )
+            fake_rustic.chmod(0o755)
+            profile_run_dir = root / "run"
+            run_rustic(
+                [
+                    "rustic-project-backup",
+                    "--root",
+                    str(root),
+                    "--path",
+                    "source",
+                    "--profile-root",
+                    str(root),
+                    "--profile-path",
+                    "profile.toml",
+                    "--host",
+                    "project-test",
+                    "--tag",
+                    "audit",
+                ],
+                allowed_roots={str(root)},
+                rustic_candidates=[str(fake_rustic)],
+                profile_run_dir=str(profile_run_dir),
+                profile_run_dir_uid=os.getuid(),
+            )
+            lines = invocation.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(lines[0], str(source))
+            self.assertIn("backup", lines)
+            self.assertIn("--host", lines)
+            self.assertEqual(list(profile_run_dir.iterdir()), [])
+
+            outside = root / "outside-profile.toml"
+            outside.write_text(
+                """[repository]
+repository = "opendal:s3"
+password = "audit"
+[repository.options]
+access_key_id = "access"
+bucket = "bucket"
+endpoint = "https://object.invalid"
+region = "auto"
+root = "project-test"
+secret_access_key = "secret"
+""",
+                encoding="utf-8",
+            )
+            (root / "profile-link.toml").symlink_to(outside)
+            with self.assertRaises(OSError):
+                run_rustic(
+                    [
+                        "rustic-project-backup",
+                        "--root",
+                        str(root),
+                        "--path",
+                        "source",
+                        "--profile-root",
+                        str(root),
+                        "--profile-path",
+                        "profile-link.toml",
+                        "--host",
+                        "project-test",
+                    ],
+                    allowed_roots={str(root)},
+                    rustic_candidates=[str(fake_rustic)],
+                    profile_run_dir=str(profile_run_dir),
+                    profile_run_dir_uid=os.getuid(),
+                )
 
 
 class ProjectHostStartTest(unittest.TestCase):
@@ -495,6 +837,40 @@ class BootstrapBundleManifestResolutionTest(unittest.TestCase):
                 resolved.manifest_url,
                 "https://example.invalid/software/tools/latest-linux-amd64.json",
             )
+
+    def test_installs_privileged_rustic_from_verified_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            remote = Path(tmpdir) / "tools.tar.xz"
+            payload = b"#!/usr/bin/env bash\nexit 0\n"
+            with tarfile.open(remote, mode="w:xz") as archive:
+                for name in ("bin/bees", "bin/rustic"):
+                    member = tarfile.TarInfo(name)
+                    member.mode = 0o755
+                    member.size = len(payload)
+                    archive.addfile(member, io.BytesIO(payload))
+            bundle = replace(
+                cfg.tools_bundle,
+                url="https://example.invalid/tools.tar.xz",
+                sha256=bootstrap.hashlib.sha256(remote.read_bytes()).hexdigest(),
+                remote=str(remote),
+            )
+            destinations = {
+                "bin/bees": Path(tmpdir) / "trusted" / "bees",
+                "bin/rustic": Path(tmpdir) / "trusted" / "rustic",
+            }
+
+            bootstrap.install_privileged_tool_binaries(
+                cfg,
+                bundle,
+                destinations=destinations,
+                destination_uid=os.getuid(),
+                destination_gid=os.getgid(),
+            )
+
+            for destination in destinations.values():
+                self.assertEqual(destination.read_bytes(), payload)
+                self.assertEqual(destination.stat().st_mode & 0o777, 0o755)
 
     def test_download_file_retries_curl_fallback_failures(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2337,26 +2713,31 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertNotEqual(parser_result.returncode, 0)
             self.assertIn("leaf rbps exceeds pool rbps", parser_result.stderr)
-            self.assertIn("metacopy=on,redirect_dir=on,index=off", script)
+            self.assertIn(
+                "metacopy=on,redirect_dir=on,index=off",
+                bootstrap.RUNTIME_STORAGE_PATH_HELPER,
+            )
             self.assertIn(
                 "project-rustic-backup|project-rustic-backup-maintenance)",
                 script,
             )
             self.assertIn("project-rustic-restore)", script)
             self.assertIn(
-                '--glob "!.snapshots" --glob "!.snapshots/**"',
+                "rustic-project-backup",
+                bootstrap.RUNTIME_STORAGE_PATH_HELPER,
+            )
+            self.assertNotIn('backup_status="$?"', script)
+            self.assertNotIn("/opt/cocalc/tools/current/rustic", script)
+            self.assertNotIn("/opt/cocalc/tools/current/bees", script)
+            self.assertIn("/usr/local/libexec/cocalc-bees", script)
+            self.assertIn("set_rustic_profile_parts()", script)
+            self.assertIn(
+                "/usr/local/libexec/cocalc-runtime-storage-path-helper",
                 script,
             )
-            self.assertEqual(script.count('backup_status="$?"'), 1)
-            self.assertIn("backup_status=0", script)
-            self.assertIn('if [ "$backup_status" -eq 0 ]; then', script)
             self.assertIn(
-                'if ! "${rustic_cmd[@]}" repoinfo >/dev/null 2>&1; then',
-                script,
-            )
-            self.assertIn(
-                'exec "${rustic_cmd[@]}" backup --json --no-scan --host "$host_name" "$@" .',
-                script,
+                '["--glob", "!.snapshots", "--glob", "!.snapshots/**"]',
+                bootstrap.RUNTIME_STORAGE_PATH_HELPER,
             )
             self.assertIn(
                 'PRIVILEGED_RUSTIC_CACHE="/root/.cache/rustic"', script
@@ -2372,10 +2753,6 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("flock -s -w 120 7", script)
             self.assertIn("rm -rf --one-file-system", script)
             self.assertIn("PRIVILEGED_RUSTIC_CACHE_MIN_AGE_SECONDS", script)
-            self.assertIn(
-                '"${rustic_cmd[@]}" backup -x --json --no-scan --host "$host_name" "${tag_args[@]}" "${parent_args[@]}" --glob "!.snapshots" --glob "!.snapshots/**" . || backup_status="$?"',
-                script,
-            )
             self.assertIn("parent_args=()", script)
             self.assertIn("--parent)", script)
             self.assertIn('"${parent_args[@]}"', script)
@@ -4626,6 +5003,7 @@ class BootstrapModesTest(unittest.TestCase):
                 "ensure_runtime_user",
                 "ensure_bootstrap_paths",
                 "install_privileged_wrappers",
+                "install_privileged_tool_binaries",
                 "write_helpers",
                 "configure_runtime_sudoers",
                 "verify_runtime_sudoers",
@@ -4676,6 +5054,7 @@ class BootstrapModesTest(unittest.TestCase):
                     "ensure_runtime_user",
                     "ensure_bootstrap_paths",
                     "install_privileged_wrappers",
+                    "install_privileged_tool_binaries",
                     "write_helpers",
                     "configure_runtime_sudoers",
                     "verify_runtime_sudoers",
@@ -4881,6 +5260,7 @@ class BootstrapModesTest(unittest.TestCase):
                     bundle,
                 )[1],
             )
+            patch("install_privileged_tool_binaries", lambda _cfg, _bundle: None)
             patch("install_node", lambda _cfg: None)
             patch("write_wrapper", lambda _cfg: None)
             patch("write_helpers", lambda _cfg: None)
