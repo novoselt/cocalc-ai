@@ -141,6 +141,7 @@ const invariantSchemaDef: TableSchema = {
     },
     started_at: {
       type: "timestamp",
+      pg_type: "TIMESTAMPTZ",
       pg_default: "now()",
       not_null: true,
       pg_null_backfill: "now()",
@@ -501,7 +502,7 @@ describe("schemaNeedsSync column actions", () => {
         },
         {
           column_name: "started_at",
-          data_type: "timestamp without time zone",
+          data_type: "timestamp with time zone",
           column_default: null,
           is_nullable: "YES",
         },
@@ -546,7 +547,7 @@ describe("schemaNeedsSync column actions", () => {
         },
         {
           column_name: "started_at",
-          data_type: "timestamp without time zone",
+          data_type: "timestamp with time zone",
           column_default: "now()",
           is_nullable: "NO",
         },

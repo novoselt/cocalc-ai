@@ -52,6 +52,10 @@ const FEATURE_META = {
     icon: "terminal",
   },
   whiteboard: { accent: COLORS.FG_RED, icon: "layout" },
+  x11: {
+    accent: COLORS.RUN,
+    icon: "window-restore",
+  },
 } satisfies Record<string, { accent: string; icon: IconName }>;
 
 export function featureMeta(slug: string): { accent: string; icon: IconName } {

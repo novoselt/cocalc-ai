@@ -126,6 +126,9 @@ export function Blit({ is_current, project_id, reload }: Props) {
           result.stderr || "Graphical application support installation failed.",
         );
       }
+      const api = webapp_client.conat_client.projectApi({ project_id });
+      await api.apps.upsertAppSpec(createBlitAppSpec(project_id));
+      await api.apps.stopApp(BLIT_APP_ID);
       setRetry((value) => value + 1);
     } catch (err) {
       setError(`${err}`);
@@ -169,8 +172,9 @@ export function Blit({ is_current, project_id, reload }: Props) {
             <>
               <Typography.Paragraph>
                 This project needs approximately 400 MB of Ubuntu packages for
-                Xwayland and software rendering. Installation modifies only this
-                project&apos;s writable root filesystem.
+                Xwayland, software rendering, and application audio.
+                Installation modifies only this project&apos;s writable root
+                filesystem.
               </Typography.Paragraph>
               <Typography.Text type="secondary">
                 Missing: {missingPackages.join(", ")}

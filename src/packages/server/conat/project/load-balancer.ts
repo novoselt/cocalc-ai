@@ -55,7 +55,12 @@ async function getConfig({ project_id }): Promise<Configuration> {
   const config = {
     image,
     secret: await getProjectSecretToken(project_id),
-    cpu: run_quota?.cpu_limit ?? 1, // actually a *priority* with higher numbers being higher
+    // Legacy CoCalc.com hard-core limit. FAIR_CPU_MODE preserves this value in
+    // Configuration for compatibility but does not enforce it on shared hosts.
+    cpu: run_quota?.cpu_limit ?? 1,
+    // This is the CoCalc.ai work-conserving scheduling priority. A project may
+    // use more cores while capacity is idle; priority matters under contention.
+    cpu_priority: run_quota?.shared_compute_priority ?? 0,
     memory: memoryLimitBytes,
     pids: DEFAULT_PID_LIMIT,
     // uses swap if available on the runner; amount is a function of resources

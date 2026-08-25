@@ -13,7 +13,7 @@ High-level responsibilities:
   6) Fetch + verify bundles/tools and unpack them into cocalc-host paths.
   7) Install Node via nvm, write wrapper + helper scripts.
   8) Optional cloudflared setup, GPU setup, and autostart cron.
-  9) Start project-host, re-enable unattended upgrades, mark bootstrap done.
+  9) Start project-host, enable managed security updates, mark bootstrap done.
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ from typing import Any
 STATE_SCHEMA_VERSION = 1
 HELPER_SCHEMA_VERSION = "20260814-v44"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
+BOOTSTRAP_LIFECYCLE_EXPORT_DIR = Path("/var/lib/cocalc/bootstrap-lifecycle")
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
 CLOUDFLARED_DEB_SHA256 = {
@@ -77,6 +78,7 @@ PROJECT_HOST_RUNTIME_SUBID_RANGES = (
 )
 APT_RETRIES = 5
 APT_ACQUIRE_TIMEOUT_S = 60
+APT_LOCK_TIMEOUT_S = 120
 APT_UPDATE_TIMEOUT_S = 180
 APT_INSTALL_TIMEOUT_S = 600
 RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S = 10
@@ -91,6 +93,13 @@ PODMAN_STALE_BOOT_ERROR_PATTERNS = (
     re.compile(r"invalid internal status", re.IGNORECASE),
 )
 NODE_RUNTIME_APT_PACKAGES = ("libatomic1",)
+AUTOMATIC_SECURITY_UPDATES_CONFIG = """// Managed by CoCalc project-host bootstrap.
+// CoCalc's own systemd timer runs unattended-upgrade; disable the distro's
+// overlapping periodic scheduler.
+APT::Periodic::Enable "0";
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::SyslogEnable "true";
+"""
 GCE_UBUNTU_MIRROR_RE = re.compile(
     r"https?://[A-Za-z0-9.-]*gce(?:\.clouds)?\.archive\.ubuntu\.com/ubuntu/?"
 )
@@ -1834,6 +1843,90 @@ def write_bootstrap_state_files(cfg: BootstrapConfig) -> None:
     json_write_atomic(bootstrap_desired_state_path(cfg), build_desired_state(cfg))
     state = refresh_installed_state(cfg, json_load(bootstrap_state_path(cfg)))
     json_write_atomic(bootstrap_state_path(cfg), state)
+    write_bootstrap_lifecycle_export(cfg)
+
+
+def _selected_fields(source: dict[str, Any], fields: list[str]) -> dict[str, Any]:
+    return {field: source[field] for field in fields if field in source}
+
+
+def write_bootstrap_lifecycle_export(cfg: BootstrapConfig) -> None:
+    """Publish only the non-secret state needed by project-host heartbeats."""
+    desired = json_load(bootstrap_desired_state_path(cfg))
+    installed = json_load(bootstrap_state_path(cfg))
+    facts = json_load(bootstrap_host_facts_path(cfg))
+    public_desired = _selected_fields(
+        desired,
+        [
+            "schema_version",
+            "recorded_at",
+            "helper_schema_version",
+            "runtime_wrapper_version",
+            "runtime_user_contract",
+        ],
+    )
+    public_desired["bootstrap"] = _selected_fields(
+        desired.get("bootstrap") or {}, ["selector", "url", "sha256"]
+    )
+    for key in (
+        "project_host_bundle",
+        "project_bundle",
+        "tools_bundle",
+        "container_runtime_bundle",
+    ):
+        fields = ["version"]
+        if key == "project_host_bundle":
+            fields.append("root")
+        public_desired[key] = _selected_fields(desired.get(key) or {}, fields)
+    public_desired["cloudflared"] = _selected_fields(
+        desired.get("cloudflared") or {}, ["enabled"]
+    )
+
+    public_installed = _selected_fields(
+        installed,
+        [
+            "schema_version",
+            "recorded_at",
+            "helper_schema_version",
+            "runtime_wrapper_version",
+            "runtime_user_contract",
+            "installed",
+            "current_operation",
+            "last_error",
+            "last_provision_started_at",
+            "last_provision_finished_at",
+            "last_provision_result",
+            "last_reconcile_started_at",
+            "last_reconcile_finished_at",
+            "last_reconcile_result",
+            "provisioned",
+        ],
+    )
+    public_installed["bootstrap"] = _selected_fields(
+        installed.get("bootstrap") or {}, ["selector", "url", "sha256"]
+    )
+    public_facts = _selected_fields(
+        facts,
+        [
+            "schema_version",
+            "recorded_at",
+            "bootstrap_root",
+            "project_host_bundle_root",
+        ],
+    )
+
+    export_dir = BOOTSTRAP_LIFECYCLE_EXPORT_DIR
+    export_dir.mkdir(parents=True, exist_ok=True)
+    export_dir.chmod(0o755)
+    exports = {
+        "bootstrap-desired-state.json": public_desired,
+        "bootstrap-state.json": public_installed,
+        "bootstrap-host-facts.json": public_facts,
+    }
+    for name, payload in exports.items():
+        path = export_dir / name
+        json_write_atomic(path, payload)
+        path.chmod(0o644)
 
 
 def record_operation_start(cfg: BootstrapConfig, operation: str) -> None:
@@ -1844,6 +1937,7 @@ def record_operation_start(cfg: BootstrapConfig, operation: str) -> None:
     state["current_operation"] = operation
     state["last_error"] = None
     json_write_atomic(bootstrap_state_path(cfg), state)
+    write_bootstrap_lifecycle_export(cfg)
 
 
 def record_operation_success(cfg: BootstrapConfig, operation: str) -> None:
@@ -1855,6 +1949,7 @@ def record_operation_success(cfg: BootstrapConfig, operation: str) -> None:
     if operation == "provision":
         state["provisioned"] = True
     json_write_atomic(bootstrap_state_path(cfg), state)
+    write_bootstrap_lifecycle_export(cfg)
 
 
 def record_operation_failure(cfg: BootstrapConfig, operation: str, error: str) -> None:
@@ -1864,6 +1959,7 @@ def record_operation_failure(cfg: BootstrapConfig, operation: str, error: str) -
     state["current_operation"] = None
     state["last_error"] = error
     json_write_atomic(bootstrap_state_path(cfg), state)
+    write_bootstrap_lifecycle_export(cfg)
 
 
 def log_line(cfg: BootstrapConfig, message: str) -> None:
@@ -2003,12 +2099,22 @@ def compute_image_size(cfg: BootstrapConfig) -> int:
 
 
 def disable_unattended(cfg: BootstrapConfig) -> None:
-    log_line(cfg, "bootstrap: disabling unattended upgrades")
-    run_best_effort(cfg, ["systemctl", "stop", "apt-daily.service", "apt-daily-upgrade.service", "unattended-upgrades.service"], "stop unattended-upgrades")
-    run_best_effort(cfg, ["systemctl", "stop", "apt-daily.timer", "apt-daily-upgrade.timer"], "stop apt timers")
-    run_best_effort(cfg, ["pkill", "-9", "apt-get"], "kill apt-get")
-    run_best_effort(cfg, ["pkill", "-f", "-9", "unattended-upgrade"], "kill unattended-upgrade")
-    run_best_effort(cfg, ["apt-get", "remove", "-y", "unattended-upgrades"], "remove unattended-upgrades")
+    log_line(cfg, "bootstrap: pausing automatic apt activity")
+    run_best_effort(
+        cfg,
+        [
+            "systemctl",
+            "stop",
+            "apt-daily.timer",
+            "apt-daily-upgrade.timer",
+            "apt-daily.service",
+            "apt-daily-upgrade.service",
+            "cocalc-security-updates.timer",
+            "cocalc-security-updates.service",
+        ],
+        "stop automatic apt timers and services",
+        timeout=APT_LOCK_TIMEOUT_S,
+    )
 
 
 def apt_run(cfg: BootstrapConfig, args: list[str], desc: str, retries: int, timeout: int) -> None:
@@ -2078,6 +2184,8 @@ def apt_update_install(cfg: BootstrapConfig) -> None:
         f"Acquire::https::Timeout={APT_ACQUIRE_TIMEOUT_S}",
         "-o",
         f"Acquire::ftp::Timeout={APT_ACQUIRE_TIMEOUT_S}",
+        "-o",
+        f"DPkg::Lock::Timeout={APT_LOCK_TIMEOUT_S}",
     ]
     apt_run(
         cfg,
@@ -2099,6 +2207,184 @@ def apt_update_install(cfg: BootstrapConfig) -> None:
         retries=APT_RETRIES,
         timeout=APT_INSTALL_TIMEOUT_S,
     )
+
+
+def ensure_automatic_security_updates(
+    cfg: BootstrapConfig,
+    *,
+    config_path: Path = Path("/etc/apt/apt.conf.d/52cocalc-periodic"),
+    helper_path: Path = Path("/usr/local/sbin/cocalc-security-update"),
+    service_path: Path = Path(
+        "/etc/systemd/system/cocalc-security-updates.service"
+    ),
+    timer_path: Path = Path("/etc/systemd/system/cocalc-security-updates.timer"),
+    status_dir: Path = Path("/var/lib/cocalc/security-updates"),
+) -> None:
+    log_line(cfg, "bootstrap: configuring automatic security updates")
+    reconcile_gce_ubuntu_apt_sources(cfg)
+    apt_opts = [
+        "-y",
+        "-o",
+        "Acquire::ForceIPv4=true",
+        "-o",
+        f"Acquire::Retries={APT_RETRIES}",
+        "-o",
+        f"Acquire::http::Timeout={APT_ACQUIRE_TIMEOUT_S}",
+        "-o",
+        f"Acquire::https::Timeout={APT_ACQUIRE_TIMEOUT_S}",
+        "-o",
+        f"Acquire::ftp::Timeout={APT_ACQUIRE_TIMEOUT_S}",
+        "-o",
+        f"DPkg::Lock::Timeout={APT_LOCK_TIMEOUT_S}",
+    ]
+    apt_run(
+        cfg,
+        ["apt-get", *apt_opts, "update"],
+        "apt-get update for automatic security updates",
+        retries=APT_RETRIES,
+        timeout=APT_UPDATE_TIMEOUT_S,
+    )
+    apt_run(
+        cfg,
+        [
+            "apt-get",
+            *apt_opts,
+            "--no-install-recommends",
+            "install",
+            "unattended-upgrades",
+        ],
+        "install unattended-upgrades",
+        retries=APT_RETRIES,
+        timeout=APT_INSTALL_TIMEOUT_S,
+    )
+    if shutil.which("unattended-upgrade") is None:
+        raise RuntimeError("unattended-upgrade executable is missing after install")
+    text_write_atomic(config_path, AUTOMATIC_SECURITY_UPDATES_CONFIG)
+    status_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(status_dir, 0o755)
+    status_dir_shell = shlex.quote(str(status_dir))
+    helper = f"""#!/usr/bin/env bash
+set -euo pipefail
+umask 022
+
+STATUS_DIR={status_dir_shell}
+STATUS_FILE="$STATUS_DIR/status.json"
+LOCK_FILE=/run/lock/cocalc-security-updates.lock
+
+mkdir -p "$STATUS_DIR"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  exit 0
+fi
+
+STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+write_status() {{
+  local result="$1" exit_code="$2" finished_at tmp
+  finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  tmp="$(mktemp "$STATUS_DIR/.status.XXXXXX")"
+  printf '{{\n  "schema": "cocalc-security-updates-v1",\n  "result": "%s",\n  "exit_code": %s,\n  "started_at": "%s",\n  "finished_at": "%s"\n}}\n' \
+    "$result" "$exit_code" "$STARTED_AT" "$finished_at" >"$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$STATUS_FILE"
+}}
+record_failure() {{
+  local exit_code="$?"
+  set +e
+  write_status failed "$exit_code"
+}}
+trap record_failure EXIT
+
+write_status running 0
+export DEBIAN_FRONTEND=noninteractive
+apt-get -y \
+  -o Acquire::ForceIPv4=true \
+  -o Acquire::Retries={APT_RETRIES} \
+  -o Acquire::http::Timeout={APT_ACQUIRE_TIMEOUT_S} \
+  -o Acquire::https::Timeout={APT_ACQUIRE_TIMEOUT_S} \
+  -o Acquire::ftp::Timeout={APT_ACQUIRE_TIMEOUT_S} \
+  -o DPkg::Lock::Timeout={APT_LOCK_TIMEOUT_S} \
+  update
+unattended-upgrade --verbose
+write_status ok 0
+trap - EXIT
+"""
+    text_write_atomic(helper_path, helper, default_mode=0o755)
+    os.chmod(helper_path, 0o755)
+    service = f"""[Unit]
+Description=Install CoCalc project-host security updates
+Wants=network-online.target
+After=network-online.target
+ConditionPathIsExecutable={helper_path}
+
+[Service]
+Type=oneshot
+ExecStart={helper_path}
+TimeoutStartSec=45min
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+CPUWeight=10
+IOWeight=10
+UMask=0022
+"""
+    timer = """[Unit]
+Description=Daily CoCalc project-host security updates
+
+[Timer]
+OnCalendar=*-*-* 05:00:00 UTC
+RandomizedDelaySec=3h
+FixedRandomDelay=true
+Persistent=true
+AccuracySec=1min
+Unit=cocalc-security-updates.service
+
+[Install]
+WantedBy=timers.target
+"""
+    text_write_atomic(service_path, service)
+    text_write_atomic(timer_path, timer)
+    run_cmd(
+        cfg,
+        ["systemctl", "daemon-reload"],
+        "reload systemd security update units",
+        timeout=30,
+    )
+    run_cmd(
+        cfg,
+        [
+            "systemctl",
+            "disable",
+            "--now",
+            "apt-daily.timer",
+            "apt-daily-upgrade.timer",
+        ],
+        "disable distro automatic apt timers",
+        timeout=APT_LOCK_TIMEOUT_S,
+    )
+    run_cmd(
+        cfg,
+        [
+            "systemctl",
+            "enable",
+            "--now",
+            "cocalc-security-updates.timer",
+        ],
+        "enable managed security update timer",
+        timeout=APT_LOCK_TIMEOUT_S,
+    )
+    for timer in ("cocalc-security-updates.timer",):
+        run_cmd(
+            cfg,
+            ["systemctl", "is-enabled", timer],
+            f"verify {timer} enabled",
+            timeout=30,
+        )
+        run_cmd(
+            cfg,
+            ["systemctl", "is-active", timer],
+            f"verify {timer} active",
+            timeout=30,
+        )
 
 
 def node_major_version(node_version: str) -> int:
@@ -3656,6 +3942,8 @@ PROJECT_STORAGE_WORKER_MEMORY_MAX="$((2 * 1024 * 1024 * 1024))"
 PROJECT_STORAGE_WORKER_MEMORY_HIGH="$((1 * 1024 * 1024 * 1024))"
 PROJECT_PROCESS_OOM_SCORE_ADJ="500"
 RUNTIME_USER="__RUNTIME_USER__"
+CONTAINER_RUNTIME_CURRENT="/opt/cocalc/container-runtime/current"
+CONTAINER_RUNTIME_REQUIRED="__CONTAINER_RUNTIME_REQUIRED__"
 PROJECT_LEAF_POOL_HEADROOM_BYTES="$((2 * 1024 * 1024 * 1024))"
 MIN_PROJECT_LEAF_MEMORY_MAX_BYTES="$((512 * 1024 * 1024))"
 PROJECT_PASTA_NOFILE_LIMIT="4096"
@@ -3699,6 +3987,47 @@ deny() {
   local detail="$2"
   echo "SECURITY_DENY code=${code} detail=${detail}" >&2
   exit 2
+}
+
+run_rootfs_podman_as_user() {
+  local podman_user="$1"
+  local runtime_uid runtime_dir podman_bin
+  local -a runtime_env podman_prefix=()
+  shift
+  if [ "$podman_user" != "$RUNTIME_USER" ]; then
+    deny "rootfs-podman-user-mismatch" "$podman_user"
+  fi
+  runtime_uid="$(id -u -- "$podman_user")"
+  runtime_dir="/mnt/cocalc/data/tmp/cocalc-podman-runtime-${runtime_uid}"
+  runtime_env=(
+    "XDG_RUNTIME_DIR=${runtime_dir}"
+    "COCALC_PODMAN_RUNTIME_DIR=${runtime_dir}"
+    "CONTAINERS_CGROUP_MANAGER=cgroupfs"
+  )
+  if [ -x "${CONTAINER_RUNTIME_CURRENT}/bin/podman" ]; then
+    podman_bin="${CONTAINER_RUNTIME_CURRENT}/bin/podman"
+    runtime_env+=(
+      "CONTAINERS_CONF_OVERRIDE=${CONTAINER_RUNTIME_CURRENT}/etc/containers/containers.conf"
+      "PATH=${CONTAINER_RUNTIME_CURRENT}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    )
+  elif [ "$CONTAINER_RUNTIME_REQUIRED" = "1" ]; then
+    deny "managed-podman-missing" "${CONTAINER_RUNTIME_CURRENT}/bin/podman"
+  elif [ -x /usr/bin/podman ]; then
+    # Legacy bootstrap payloads without a managed runtime remain supported.
+    podman_bin="/usr/bin/podman"
+  else
+    deny "podman-missing" "/usr/bin/podman"
+  fi
+  # Ubuntu grants unprivileged user namespaces to Podman via this profile.
+  # The managed binary is under /opt, so enter the profile explicitly.
+  if [ -x /usr/bin/aa-exec ] && \
+     grep -q '^podman ' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+    podman_prefix=(/usr/bin/aa-exec -p podman --)
+  fi
+  /usr/bin/sudo -u "$podman_user" -H /usr/bin/env \
+    "${runtime_env[@]}" \
+    "${podman_prefix[@]}" \
+    "$podman_bin" "$@"
 }
 
 maintain_privileged_rustic_cache() {
@@ -6802,8 +7131,10 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
     : >"$rootfs/run/.containerenv"
     chmod 0644 "$rootfs/run/.containerenv" || true
     if [ "$skip_ownership_bridge" = false ]; then
-      /usr/bin/sudo -u "$podman_user" -H bash -lc "cd ~ && /usr/bin/podman unshare cat /proc/self/uid_map" >"$rewrite_uid_map_file"
-      /usr/bin/sudo -u "$podman_user" -H bash -lc "cd ~ && /usr/bin/podman unshare cat /proc/self/gid_map" >"$rewrite_gid_map_file"
+      run_rootfs_podman_as_user "$podman_user" \
+        unshare cat /proc/self/uid_map >"$rewrite_uid_map_file"
+      run_rootfs_podman_as_user "$podman_user" \
+        unshare cat /proc/self/gid_map >"$rewrite_gid_map_file"
       /usr/bin/python3 "$remap_rootfs_ids_script" \
         "to-canonical" \
         "$rootfs" \
@@ -6821,21 +7152,19 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
         "$rewrite_gid_map_file" \
         "$ownership_source"
       normalize_runtime_package_state_rootfs
-      fix_setid_runtime_helpers_escaped="$(printf '%q' "$fix_setid_runtime_helpers_script")"
-      /usr/bin/sudo -u "$podman_user" -H bash -lc "
-          cd ~ &&
-          /usr/bin/podman run --rm --network host \
-            --userns=keep-id:uid=2001,gid=2001 \
-            --user 0:0 \
-            --workdir / \
-            -e HOME=/root \
-            -e USER=root \
-            -e LOGNAME=root \
-            -e COCALC_RUNTIME_UID='2001' \
-            -e COCALC_RUNTIME_GID='2001' \
-            --security-opt label=disable \
-            --rootfs '$rootfs' '$shell_path' -lc $fix_setid_runtime_helpers_escaped
-        " >/dev/null
+      run_rootfs_podman_as_user "$podman_user" \
+        run --rm --network host \
+          --userns=keep-id:uid=2001,gid=2001 \
+          --user 0:0 \
+          --workdir / \
+          -e HOME=/root \
+          -e USER=root \
+          -e LOGNAME=root \
+          -e COCALC_RUNTIME_UID=2001 \
+          -e COCALC_RUNTIME_GID=2001 \
+          --security-opt label=disable \
+          --rootfs "$rootfs" "$shell_path" -lc \
+          "$fix_setid_runtime_helpers_script" >/dev/null
     fi
     normalize_result="$(printf '{"ok":true,"distro_family":"%s","package_manager":"%s","shell":"%s","glibc":true,"sudo_present":%s,"ca_certificates_present":%s}\n' \
       "$distro_family" "$package_manager" "$shell_path" "$sudo_present" "$ca_certificates_present")"
@@ -7404,6 +7733,10 @@ esac
         "__PROJECT_POOL_CGROUP__", DEFAULT_PROJECT_POOL_CGROUP
     )
     storage_wrapper = storage_wrapper.replace("__RUNTIME_USER__", cfg.ssh_user)
+    storage_wrapper = storage_wrapper.replace(
+        "__CONTAINER_RUNTIME_REQUIRED__",
+        "1" if cfg.container_runtime_bundle is not None else "0",
+    )
     wrappers = {
         "/usr/local/libexec/cocalc-runtime-storage-path-helper": RUNTIME_STORAGE_PATH_HELPER,
         "/usr/local/libexec/cocalc-project-io-policy": PROJECT_IO_POLICY_HELPER,
@@ -7713,6 +8046,9 @@ def write_env(cfg: BootstrapConfig, image_size_gb: int) -> None:
         run_best_effort(cfg, ["chown", f"{cfg.ssh_user}:{cfg.ssh_user}", runtime_dir], "chown runtime dir")
         env_assignments["COCALC_PODMAN_RUNTIME_DIR"] = runtime_dir
     env_assignments["COCALC_BTRFS_ROOT_RESERVE_GB"] = str(compute_root_reserve_gb(cfg))
+    env_assignments["COCALC_PROJECT_HOST_BOOTSTRAP_DIR"] = str(
+        BOOTSTRAP_LIFECYCLE_EXPORT_DIR
+    )
     env_assignments.setdefault(
         "COCALC_PROJECT_POOL_CGROUP",
         existing_env.get(
@@ -10445,11 +10781,6 @@ def start_project_host(cfg: BootstrapConfig) -> None:
     raise RuntimeError(f"project-host start failed with exit code {result.returncode}")
 
 
-def reenable_unattended(cfg: BootstrapConfig) -> None:
-    run_best_effort(cfg, ["apt-get", "install", "-y", "unattended-upgrades"], "install unattended-upgrades")
-    run_best_effort(cfg, ["systemctl", "enable", "--now", "apt-daily.timer", "apt-daily-upgrade.timer", "unattended-upgrades.service"], "enable unattended-upgrades")
-
-
 def touch_paths(paths: list[str]) -> None:
     for path in paths:
         try:
@@ -10501,6 +10832,7 @@ def run_reconcile(cfg: BootstrapConfig) -> int:
     try:
         ensure_runtime_user(cfg)
         ensure_bootstrap_paths(cfg)
+        ensure_automatic_security_updates(cfg)
         configure_kernel_module_hardening(cfg)
         configure_kernel_key_limits(cfg)
         configure_inotify_limits(cfg)
@@ -10604,7 +10936,6 @@ def run_bootstrap(cfg: BootstrapConfig) -> int:
     report_bootstrap_status(cfg, "running", "Starting project-host services")
     start_project_host(cfg)
     report_bootstrap_status(cfg, "running", "Finalizing bootstrap")
-    reenable_unattended(cfg)
     touch_paths(cfg.bootstrap_done_paths)
     write_bootstrap_state_files(cfg)
     log_line(cfg, "bootstrap: completed successfully")

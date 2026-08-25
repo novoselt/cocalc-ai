@@ -77,6 +77,47 @@ describe("Blit graphical application setup", () => {
     });
   });
 
+  it("restarts an existing compositor after installing new prerequisites", async () => {
+    execMock
+      .mockResolvedValueOnce({
+        exit_code: 21,
+        stderr: "",
+        stdout: "missing-package:pipewire\n",
+      })
+      .mockResolvedValueOnce({ exit_code: 0, stderr: "", stdout: "" })
+      .mockResolvedValueOnce({ exit_code: 0, stderr: "", stdout: "" });
+    upsertAppSpecMock.mockResolvedValue({
+      spec: {
+        id: BLIT_APP_ID,
+        kind: "service",
+        proxy: { open_mode: "proxy" },
+      },
+    });
+    stopAppMock.mockResolvedValue(undefined);
+    ensureRunningMock.mockResolvedValue({
+      id: BLIT_APP_ID,
+      state: "running",
+      url: "http://127.0.0.1:1234",
+    });
+    getProjectAppOpenUrlMock.mockResolvedValue("https://example.test/blit/");
+
+    render(<Blit is_current project_id="project-id" />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Install graphical application support",
+      }),
+    );
+
+    await waitFor(() => expect(stopAppMock).toHaveBeenCalledWith(BLIT_APP_ID));
+    expect(upsertAppSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: BLIT_APP_ID }),
+    );
+    expect(
+      await screen.findByTitle("Blit graphical applications"),
+    ).toBeInTheDocument();
+  });
+
   it("stops the shared managed app and closes its iframe", async () => {
     execMock.mockResolvedValue({ exit_code: 0, stderr: "", stdout: "" });
     upsertAppSpecMock.mockResolvedValue({

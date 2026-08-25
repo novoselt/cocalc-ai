@@ -1156,6 +1156,67 @@ describe("CodexAppServerAgent", () => {
     expect(error?.error).toContain("/opt/cocalc/bin2/codex: not found");
   });
 
+  it("fails immediately when the app-server exits while a turn is running", async () => {
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, { ok: true });
+          break;
+        case "account/login/start":
+          fake.sendResponse(message.id, { type: "apiKey" });
+          break;
+        case "thread/start":
+          fake.sendResponse(message.id, { thread: { id: "thr-exit" } });
+          break;
+        case "turn/start":
+          fake.sendResponse(message.id, { turn: { id: "turn-exit" } });
+          setImmediate(() => {
+            fake.stderr.write("provider transport unavailable\n");
+            fake.exitCode = 255;
+            fake.emit("exit", 255, null);
+          });
+          break;
+        default:
+          if (typeof message.id === "number") fake.sendResponse(message.id, {});
+      }
+    });
+
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer: async () => ({
+        proc: proc as any,
+        cmd: "fake-codex",
+        args: ["app-server"],
+        cwd: "/tmp/project",
+        appServerLogin: { type: "apiKey", apiKey: "secret-key" },
+      }),
+    });
+
+    const agent = new CodexAppServerAgent();
+    const streamPayloads: any[] = [];
+    const startedAt = Date.now();
+    await agent.evaluate({
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      prompt: "say hello",
+      stream: async (payload) => {
+        if (payload) streamPayloads.push(payload);
+      },
+      config: { workingDirectory: "/tmp/project" } as any,
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    const error = streamPayloads.find((payload) => payload.type === "error");
+    expect(error?.error).toContain("codex app-server exited unexpectedly: 255");
+    expect(error?.error).toContain("provider transport unavailable");
+    expect(loggerMock.warn).not.toHaveBeenCalledWith(
+      "codex app-server: turn reconciliation failed",
+      expect.anything(),
+    );
+  });
+
   it("surfaces a command rejection instead of the routine bubblewrap warning", async () => {
     const proc = new FakeCodexAppServerProc((fake, message) => {
       if (message.method !== "initialize") return;

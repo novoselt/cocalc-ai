@@ -3,6 +3,10 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
+// CoCalc.ai shared project hosts are work-conserving: a project may use all
+// otherwise-idle CPU. Under contention, shared_compute_priority determines its
+// proportional share. In this mode the legacy CoCalc.com `cores`/`cpu_limit`
+// value remains in run_quota for compatibility, but is not a hard core cap.
 export const FAIR_CPU_MODE = true;
 
 // IMPORTANT: If you change this file, also update this date, which

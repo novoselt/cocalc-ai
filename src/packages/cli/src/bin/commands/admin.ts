@@ -52,6 +52,7 @@ import type {
   LaunchSmokeStepResult,
 } from "@cocalc/conat/hub/api/system";
 import { registerReceivablesCommand } from "./admin/receivables";
+import { registerCrmCommand } from "./admin/crm";
 
 export type AdminCommandDeps = {
   withContext: any;
@@ -1149,6 +1150,11 @@ Merge comments are private unless their corresponding --*-comment-public flag is
     resolveAccountByIdentifier,
     isValidUUID,
   });
+  registerCrmCommand(admin, {
+    withContext,
+    resolveAccountByIdentifier,
+    isValidUUID,
+  });
 
   async function resolveTargetAccountId(
     ctx: any,
@@ -2144,7 +2150,7 @@ Merge comments are private unless their corresponding --*-comment-public flag is
   adminSupport
     .command("spam <ticket-id>")
     .description(
-      "plan or mark a Zendesk ticket as spam and suspend its requester",
+      "plan or mark a Zendesk ticket as spam, with a solve-and-tag fallback",
     )
     .option(
       "--expected-updated-at <timestamp>",

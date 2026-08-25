@@ -98,6 +98,7 @@ type SiteLicenseAffiliationNotificationStage =
 
 interface RawSiteLicenseRecord {
   id: string;
+  crm_organization_id?: string | null;
   name: string;
   organization_name: string;
   bay_id?: string | null;

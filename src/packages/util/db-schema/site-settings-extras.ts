@@ -283,6 +283,10 @@ export type SiteSettingsExtrasKeys =
   | "r2_access_key_id"
   | "r2_secret_access_key"
   | "r2_bucket_prefix"
+  | "blob_storage_heading"
+  | "blob_storage_backend"
+  | "blob_r2_bucket"
+  | "blob_r2_public_url"
   | "re_captcha_v3_heading"
   | "re_captcha_v3_publishable_key"
   | "re_captcha_v3_secret_key"
@@ -1320,6 +1324,48 @@ export const EXTRAS: SettingsExtras = {
     subgroup: "Cloudflare R2",
     order: 60,
     show: cloudflare_self_mode,
+    hidden: true,
+  },
+  blob_storage_heading: {
+    name: "Public Blob Storage",
+    desc: "Storage and delivery settings for public immutable image blobs.",
+    default: "",
+    type: "header",
+    tags: ["Backups", "Cloudflare"],
+    group: "Backups & Storage",
+    subgroup: "Public Blobs",
+    order: 70,
+    hidden: true,
+  },
+  blob_storage_backend: {
+    name: "Public Blob Storage Backend",
+    desc: "Where public image blob bytes are stored. Use postgres for self-hosted fallback, r2 for managed sites, or auto to use R2 only when fully configured.",
+    default: "postgres",
+    valid: ["postgres", "r2", "auto"],
+    tags: ["Backups", "Cloudflare"],
+    group: "Backups & Storage",
+    subgroup: "Public Blobs",
+    order: 80,
+    hidden: true,
+  },
+  blob_r2_bucket: {
+    name: "Public Blob R2 Bucket",
+    desc: "Private Cloudflare R2 bucket for public image blobs, e.g. prod-blobs or staging-blobs.",
+    default: "",
+    tags: ["Backups", "Cloudflare"],
+    group: "Backups & Storage",
+    subgroup: "Public Blobs",
+    order: 90,
+    hidden: true,
+  },
+  blob_r2_public_url: {
+    name: "Public Blob R2 URL",
+    desc: "Canonical public base URL served by the blob Cloudflare Worker. Leave blank to serve through the hub fallback route.",
+    default: "",
+    tags: ["Backups", "Cloudflare"],
+    group: "Backups & Storage",
+    subgroup: "Public Blobs",
+    order: 100,
     hidden: true,
   },
   re_captcha_v3_heading: {

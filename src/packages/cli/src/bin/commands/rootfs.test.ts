@@ -2662,7 +2662,7 @@ test("rootfs recipe run polls async command output and honors step timeout", asy
   }
 });
 
-test("rootfs recipe run reconnects while polling async command output", async () => {
+test("rootfs recipe run reconnects after a project RPC timeout", async () => {
   const dir = mkdtempSync(join(tmpdir(), "cocalc-rootfs-recipe-reconnect-"));
   const recipePath = join(dir, "recipe.json");
   const execCalls: any[] = [];
@@ -2709,7 +2709,9 @@ test("rootfs recipe run reconnects while polling async command output", async ()
                 }
                 assert.equal(opts.async_get, "job-1");
                 if (firstConnection) {
-                  throw new Error("socket has been disconnected");
+                  throw new Error(
+                    "timeout - Error: operation has timed out subject:project.builder-project.api.-",
+                  );
                 }
                 return {
                   type: "async",

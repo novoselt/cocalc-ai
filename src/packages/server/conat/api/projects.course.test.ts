@@ -11,6 +11,7 @@ let getSeedMembershipTierByIdMock: jest.Mock;
 let listMembershipPackagesMock: jest.Mock;
 let interBayGetMembershipMock: jest.Mock;
 let interBayGetMembershipPackagesMock: jest.Mock;
+let listClaimableMembershipPackagesForAccountMock: jest.Mock;
 let claimMembershipPackageSeatWithVerifiedEmailsOnLocalBayMock: jest.Mock;
 
 jest.mock("@cocalc/server/conat/project-local-access", () => ({
@@ -80,7 +81,8 @@ jest.mock("@cocalc/server/membership/packages", () => ({
   assignMembershipPackageSeat: jest.fn(),
   claimMembershipPackageSeatWithVerifiedEmailsOnLocalBay: (...args: any[]) =>
     claimMembershipPackageSeatWithVerifiedEmailsOnLocalBayMock(...args),
-  listClaimableMembershipPackagesForAccount: jest.fn(async () => []),
+  listClaimableMembershipPackagesForAccount: (...args: any[]) =>
+    listClaimableMembershipPackagesForAccountMock(...args),
   listMembershipPackageDetailsForOwner: (...args: any[]) =>
     listMembershipPackagesMock(...args),
 }));
@@ -144,6 +146,7 @@ describe("project course info helpers", () => {
       entitlements: {},
     }));
     interBayGetMembershipPackagesMock = jest.fn(async () => []);
+    listClaimableMembershipPackagesForAccountMock = jest.fn(async () => []);
     claimMembershipPackageSeatWithVerifiedEmailsOnLocalBayMock = jest.fn(
       async ({ package_id, account_id }) => ({
         id: "reserved-assignment",
@@ -329,6 +332,69 @@ describe("project course info helpers", () => {
     expect(queryMock).toHaveBeenCalledWith(expect.stringContaining("SELECT"), [
       PROJECT_ID,
     ]);
+  });
+
+  it("offers only the exact automatically claimable site-license pool", async () => {
+    queryMock.mockResolvedValue({
+      rows: [
+        {
+          region: null,
+          created: null,
+          env: null,
+          rootfs_image: null,
+          rootfs_image_id: null,
+          rootfs_publish_config: null,
+          snapshots: null,
+          backups: null,
+          run_quota: null,
+          course: {
+            type: "student",
+            project_id: "33333333-3333-4333-8333-333333333333",
+            account_id: ACCOUNT_ID,
+            site_license_pay: true,
+            required_membership_class: "student",
+          },
+        },
+      ],
+    });
+    listClaimableMembershipPackagesForAccountMock.mockResolvedValue([
+      {
+        package_id: "instructor-pool",
+        kind: "site",
+        membership_class: "instructor",
+        requires_approval: false,
+        matched_email_address: "teacher@example.edu",
+      },
+      {
+        package_id: "student-approval-pool",
+        kind: "site",
+        membership_class: "student",
+        requires_approval: true,
+        matched_email_address: "student@example.edu",
+      },
+      {
+        package_id: "student-pool",
+        kind: "site",
+        membership_class: "student",
+        requires_approval: false,
+        matched_email_address: "student@example.edu",
+        expires_at: new Date("2027-07-01T00:00:00.000Z"),
+      },
+    ]);
+
+    const { getCourseStudentAccess } = await import("./projects");
+    await expect(
+      getCourseStudentAccess({
+        account_id: ACCOUNT_ID,
+        project_id: PROJECT_ID,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        status: "site-license-claimable",
+        package_id: "student-pool",
+        membership_class: "student",
+      }),
+    );
   });
 
   it("allows admins to read project course info without collaborator access", async () => {

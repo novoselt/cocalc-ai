@@ -36,6 +36,7 @@ import {
 } from "react";
 
 import { useTypedRedux } from "@cocalc/frontend/app-framework";
+import { CustomerSelector } from "@cocalc/frontend/admin/customers/selector";
 import {
   FreshAuthModal,
   useFreshAuthAction,
@@ -99,6 +100,7 @@ import {
 import { moneyRound2Up, toDecimal } from "@cocalc/util/money";
 import { sortMembershipTiersByDisplayOrder } from "@cocalc/util/membership-tier-order";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
+import type { CrmMutationResult } from "@cocalc/util/crm";
 import { COLORS } from "@cocalc/util/theme";
 import { joinUrlPath } from "@cocalc/util/url-path";
 import type { LineItem } from "@cocalc/util/stripe/types";
@@ -2078,6 +2080,7 @@ export function SiteLicenseAdminPanel({
           overviews={filteredOverviews}
           selectedSiteLicenseId={selectedSiteLicenseId}
           totalCount={overviews.length}
+          onCustomerChanged={handleChanged}
           onToggle={(siteLicenseId) =>
             setSelectedSiteLicenseId((currentSiteLicenseId) =>
               currentSiteLicenseId === siteLicenseId ? "" : siteLicenseId,
@@ -2123,12 +2126,14 @@ function SiteLicenseSummaryTable({
   overviews,
   selectedSiteLicenseId,
   totalCount,
+  onCustomerChanged,
   onToggle,
   renderExpandedRow,
 }: {
   overviews: SiteLicenseOverview[];
   selectedSiteLicenseId: string;
   totalCount: number;
+  onCustomerChanged: () => void | Promise<void>;
   onToggle: (siteLicenseId: string) => void;
   renderExpandedRow: (overview: SiteLicenseOverview) => ReactNode;
 }) {
@@ -2224,6 +2229,16 @@ function SiteLicenseSummaryTable({
             }}
           />
           <Table.Column<SiteLicenseOverview>
+            title="Customer"
+            width={300}
+            render={(_, overview) => (
+              <SiteLicenseCustomerLink
+                overview={overview}
+                onChanged={onCustomerChanged}
+              />
+            )}
+          />
+          <Table.Column<SiteLicenseOverview>
             title="Period"
             render={(_, overview) => (
               <Text type="secondary">
@@ -2240,6 +2255,155 @@ function SiteLicenseSummaryTable({
         </Table>
       </Space>
     </Card>
+  );
+}
+
+type SiteLicenseLinkPreview = Extract<
+  CrmMutationResult<unknown>,
+  { preview: true }
+>;
+
+function SiteLicenseCustomerLink({
+  overview,
+  onChanged,
+}: {
+  overview: SiteLicenseOverview;
+  onChanged: () => void | Promise<void>;
+}) {
+  const current = overview.site_license.crm_organization_id ?? undefined;
+  const [selected, setSelected] = useState<string | undefined>(current);
+  const [preview, setPreview] = useState<SiteLicenseLinkPreview>();
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+  const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
+
+  useEffect(() => setSelected(current), [current]);
+
+  const action = current ? "remove" : "verify";
+  const organization = current ?? selected;
+
+  async function prepare() {
+    if (!organization || selected === current) return;
+    setWorking(true);
+    setError("");
+    try {
+      const result =
+        await webapp_client.conat_client.hub.adminCrm.mutateExternalReference({
+          browser_id: webapp_client.browser_id,
+          organization,
+          action,
+          provider: "cocalc",
+          object_kind: "site_license",
+          external_id: overview.site_license.id,
+          reason: current
+            ? "Remove reviewed site-license customer link"
+            : "Link site license to reviewed CRM customer",
+        });
+      if (!result.preview) throw Error("expected a CRM link preview");
+      setPreview(result);
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function commit() {
+    if (!organization || !preview) return;
+    setWorking(true);
+    setError("");
+    try {
+      await runFreshAuthAction(async () => {
+        await webapp_client.conat_client.hub.adminCrm.mutateExternalReference({
+          browser_id: webapp_client.browser_id,
+          organization,
+          action,
+          provider: "cocalc",
+          object_kind: "site_license",
+          external_id: overview.site_license.id,
+          reason: current
+            ? "Remove reviewed site-license customer link"
+            : "Link site license to reviewed CRM customer",
+          commit: true,
+          expected_version: preview.expected_version,
+          idempotency_key: preview.idempotency_key,
+        });
+      });
+      setPreview(undefined);
+      await onChanged();
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <div onClick={(event) => event.stopPropagation()}>
+      <Space orientation="vertical" size={6} style={{ width: "100%" }}>
+        <CustomerSelector
+          disabled={!!current || working}
+          onChange={setSelected}
+          value={selected}
+        />
+        <Space wrap size={4}>
+          {current ? (
+            <Button
+              href={joinUrlPath(
+                appBasePath,
+                "admin",
+                "customers",
+                encodeURIComponent(current),
+              )}
+              size="small"
+              type="link"
+            >
+              Customer 360
+            </Button>
+          ) : null}
+          <Button
+            danger={!!current}
+            disabled={!organization || (!current && selected === current)}
+            loading={working}
+            onClick={() => void prepare()}
+            size="small"
+          >
+            {current ? "Unlink" : "Review link"}
+          </Button>
+        </Space>
+        {error ? (
+          <Alert
+            closable
+            onClose={() => setError("")}
+            showIcon
+            title={error}
+            type="error"
+          />
+        ) : null}
+      </Space>
+      <Modal
+        cancelButtonProps={{ disabled: working }}
+        destroyOnHidden
+        okButtonProps={{ loading: working }}
+        okText={current ? "Unlink customer" : "Link customer"}
+        onCancel={() => setPreview(undefined)}
+        onOk={() => void commit()}
+        open={!!preview}
+        title={current ? "Review customer unlink" : "Review customer link"}
+      >
+        <Alert
+          description="Nothing has changed yet. Confirming uses fresh authentication and records an immutable CRM audit event."
+          showIcon
+          title={
+            current
+              ? "Remove this license from its current Customer 360 record?"
+              : "Associate this license with the selected Customer 360 record?"
+          }
+          type="info"
+        />
+      </Modal>
+      <FreshAuthModal {...freshAuthModalProps} />
+    </div>
   );
 }
 

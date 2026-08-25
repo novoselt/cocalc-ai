@@ -23,6 +23,5 @@ import "./csv-editor/register";
 import "./slides-editor/register";
 import "./whiteboard-editor/register";
 
-import "./crm-editor/register";
 import "./task-editor/register";
 import "./chat-editor/register";

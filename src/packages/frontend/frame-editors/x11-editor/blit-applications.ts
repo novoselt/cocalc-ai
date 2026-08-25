@@ -28,6 +28,28 @@ export interface BlitApplication {
 
 const UBUNTU_ID = "$" + "{ID:-}";
 const UBUNTU_VERSION_CODENAME = "$" + "{VERSION_CODENAME:-}";
+const PYTHON_VERSION = "$" + "{python_version}";
+
+export const INSTALL_IDLE_APPLICATION_COMMAND = String.raw`set -euo pipefail
+sudo -n true
+sudo -n apt-get update
+
+python_version="$(/usr/bin/python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+package="idle-python${PYTHON_VERSION}"
+if ! apt-cache show "$package" >/dev/null 2>&1; then
+  echo "Ubuntu does not provide $package for the default system Python." >&2
+  exit 1
+fi
+
+sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y "$package"
+sudo -n tee /usr/local/bin/cocalc-idle >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exec /usr/bin/python3 -m idlelib "$@"
+EOF
+sudo -n chmod 0755 /usr/local/bin/cocalc-idle
+sudo -n apt-get clean
+sudo -n rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb`;
 
 export const INSTALL_CHROMIUM_APPLICATION_COMMAND = String.raw`set -euo pipefail
 key=5301FA4FD93244FBC6F6149982BB6851C64F6880
@@ -109,6 +131,21 @@ export const BLIT_APPLICATIONS = [
       command: INSTALL_CHROMIUM_APPLICATION_COMMAND,
       summary:
         "This adds the signed XtraDeb Ubuntu repository and installs its real Chromium Debian package, ChromiumDriver, and Chromium sandbox.",
+    },
+  },
+  {
+    id: "idle",
+    label: "IDLE",
+    description:
+      "Python's Integrated Development and Learning Environment, including an interactive shell and editor.",
+    icon: "python",
+    executable: "cocalc-idle",
+    command: ["cocalc-idle"],
+    install: {
+      kind: "script",
+      command: INSTALL_IDLE_APPLICATION_COMMAND,
+      summary:
+        "This installs the Ubuntu IDLE package matching the project's default system Python, then adds a stable IDLE launcher.",
     },
   },
   {

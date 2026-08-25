@@ -56,6 +56,7 @@ import * as compute from "./compute";
 import * as publicDirectoryShares from "./public-directory-shares";
 import * as growthAnalytics from "./growth-analytics";
 import * as commercialOrders from "./commercial-orders";
+import * as adminCrm from "./crm";
 
 import getLogger from "@cocalc/backend/logger";
 import { type HubApi, getUserId, transformArgs } from "@cocalc/conat/hub/api";
@@ -102,6 +103,7 @@ export const hubApi: HubApi = {
   publicDirectoryShares,
   growthAnalytics,
   commercialOrders,
+  adminCrm,
   ssh,
   reflect,
 };

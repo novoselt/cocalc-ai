@@ -127,6 +127,14 @@ export type SiteSettingsKeys =
   | "commercial_receivables_manual_settlement_enabled"
   | "commercial_receivables_reconciliation_enabled"
   | "commercial_receivables_fulfillment_enabled"
+  | "crm_visible"
+  | "crm_mutations_enabled"
+  | "crm_pipeline_mutations_enabled"
+  | "crm_zendesk_linking_enabled"
+  | "crm_commercial_integration_enabled"
+  | "crm_metric_projections_enabled"
+  | "crm_exports_enabled"
+  | "crm_backfill_enabled"
   | "project_hosts_google-cloud_enabled"
   | "project_hosts_hyperstack_enabled"
   | "project_hosts_lambda_enabled"
@@ -996,6 +1004,86 @@ export const site_settings_conf: SiteSettings = {
     tags: ["Commercialization"],
     group: "Billing & Commerce",
     subgroup: "Accounts Receivable",
+  },
+  crm_visible: {
+    name: "Show customer relationship management",
+    desc: "Allow admins and authorized agents to read the seed-global customer directory, queue, and customer timeline.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "Customer Relationships",
+  },
+  crm_mutations_enabled: {
+    name: "Enable CRM mutations",
+    desc: "Allow preview-first, audited customer, contact, domain, activity, and relationship mutations.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "Customer Relationships",
+  },
+  crm_pipeline_mutations_enabled: {
+    name: "Enable CRM pipeline mutations",
+    desc: "Allow preview-first opportunity and internal follow-up task mutations.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "Customer Relationships",
+  },
+  crm_zendesk_linking_enabled: {
+    name: "Enable CRM Zendesk linking",
+    desc: "Allow reviewed links between customers and stable Zendesk ticket or requester identifiers.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "Customer Relationships",
+  },
+  crm_commercial_integration_enabled: {
+    name: "Enable CRM commercial integration",
+    desc: "Allow reviewed Stripe, commercial-order, and site-license links and order creation from opportunities.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "Customer Relationships",
+  },
+  crm_metric_projections_enabled: {
+    name: "Enable CRM metric projections",
+    desc: "Allow bounded customer spend, receivables, license, and adoption metric projections.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "Customer Relationships",
+  },
+  crm_exports_enabled: {
+    name: "Enable CRM exports",
+    desc: "Allow bounded fresh-auth exports of sensitive customer records.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "Customer Relationships",
+  },
+  crm_backfill_enabled: {
+    name: "Enable CRM discovery backfill",
+    desc: "Allow fresh-auth preview and reviewed application of customer candidates from existing commercial systems.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "Customer Relationships",
   },
   commercial_receivables_mutations_enabled: {
     name: "Enable commercial order mutations",

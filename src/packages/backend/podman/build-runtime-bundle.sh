@@ -5,10 +5,10 @@ set -euo pipefail
 # production hosts. Source archives and the compiler are checksum pinned; the
 # output never replaces the host's distro Podman.
 
-PODMAN_VERSION="${PODMAN_VERSION:-5.8.2}"
+PODMAN_VERSION="${PODMAN_VERSION:-5.8.6}"
 CONMON_VERSION="${CONMON_VERSION:-2.2.1}"
-CRUN_VERSION="${CRUN_VERSION:-1.27}"
-GO_VERSION="${GO_VERSION:-1.24.2}"
+CRUN_VERSION="${CRUN_VERSION:-1.29.1}"
+GO_VERSION="${GO_VERSION:-1.25.14}"
 RUST_VERSION="${RUST_VERSION:-1.83.0}"
 NETAVARK_VERSION="${NETAVARK_VERSION:-1.16.1}"
 AARDVARK_VERSION="${AARDVARK_VERSION:-1.16.0}"
@@ -26,20 +26,20 @@ OUTPUT="$BUILD_DIR/container-runtime-linux-$ARCH.tar.xz"
 
 case "$ARCH" in
   amd64)
-    GO_SHA256="68097bd680839cbc9d464a0edce4f7c333975e27a90246890e9f1078c7e702ad"
+    GO_SHA256="a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712"
     RUST_TARGET="x86_64-unknown-linux-gnu"
     RUST_SHA256="bd9d53d09d4b60826288336de19fb9c5c7592081e4e4520d6de2f65ee8d79087"
-    CRUN_SHA256="2a80f801a0eeffadb1dca02928e329fbc88dd950fbb6e34e00abeaf9407f7ebf"
+    CRUN_SHA256="0a5ea25cafe618bbfbf1c747871155063619f18025ccdd8ad648c97633f35d57"
     ;;
   arm64)
-    GO_SHA256="756274ea4b68fa5535eb9fe2559889287d725a8da63c6aae4d5f23778c229f4b"
+    GO_SHA256="9bf234ea70ffec9347fdf6b22ce4add51717d3386a38a441e8c8743fceb5eaee"
     RUST_TARGET="aarch64-unknown-linux-gnu"
     RUST_SHA256="ec70c500e2744f0db55bd495ef90534a31fd9c0d5f5a2d752182a59e439ddee3"
-    CRUN_SHA256="6d36c4a15d5344fc125da386e8357ce2e3071a9d9cb4c806ab4a696b2d05b210"
+    CRUN_SHA256="1ea99c6fc7a8e17a4a1d666df09cccb0769a4db0aa738cf38c967a777a731b1d"
     ;;
 esac
 
-PODMAN_SHA256="b20ea65afc5a58ea1cea019bd51a5d84eb9042d25d3eb82c55010c8815732d84"
+PODMAN_SHA256="107eb5b04fa1133a309204b6d888bc21c7750c53d9f714dcca28b81ed38a45eb"
 CONMON_SHA256="814fb5979a3a4b8576b1f901e606b482bebb41cb7e57926e6d5765ee786b96d3"
 NETAVARK_SHA256="e655fcd882fe891bcc8328ddcfff3745831c8b1013ae59f012d37ce87175b0b3"
 AARDVARK_SHA256="6c84a3371087d6af95407b0d3de26cdc1e720ae8cd983a9bdaec8883e2216959"
@@ -118,15 +118,24 @@ mkdir -p "$SRC" "$STAGE/bin" "$STAGE/etc/containers" "$STAGE/share/cocalc"
 
 GO_ARCHIVE="$SRC/go.tar.gz"
 fetch "https://go.dev/dl/go${GO_VERSION}.linux-${ARCH}.tar.gz" "$GO_SHA256" "$GO_ARCHIVE"
+# Go releases must be installed into an empty tree; extracting over an older
+# release can leave stale standard-library files and produce invalid builds.
+if [[ -d /usr/local/go ]]; then
+  find /usr/local/go -depth -delete
+fi
 tar -xzf "$GO_ARCHIVE" -C /usr/local
+export GOROOT=/usr/local/go
 export PATH="/usr/local/go/bin:$PATH"
+# Fail rather than silently downloading an unpinned compiler requested by a
+# dependency's go.mod toolchain directive.
+export GOTOOLCHAIN=local
 
 PODMAN_ARCHIVE="$SRC/podman.tar.gz"
 CONMON_ARCHIVE="$SRC/conmon.tar.gz"
 CRUN_BINARY="$SRC/crun"
 NETAVARK_ARCHIVE="$SRC/netavark.tar.gz"
 AARDVARK_ARCHIVE="$SRC/aardvark.tar.gz"
-fetch "https://github.com/containers/podman/archive/refs/tags/v${PODMAN_VERSION}.tar.gz" "$PODMAN_SHA256" "$PODMAN_ARCHIVE"
+fetch "https://github.com/podman-container-tools/podman/archive/refs/tags/v${PODMAN_VERSION}.tar.gz" "$PODMAN_SHA256" "$PODMAN_ARCHIVE"
 fetch "https://github.com/containers/conmon/archive/refs/tags/v${CONMON_VERSION}.tar.gz" "$CONMON_SHA256" "$CONMON_ARCHIVE"
 fetch "https://github.com/containers/crun/releases/download/${CRUN_VERSION}/crun-${CRUN_VERSION}-linux-${ARCH}" "$CRUN_SHA256" "$CRUN_BINARY"
 fetch "https://github.com/containers/netavark/archive/refs/tags/v${NETAVARK_VERSION}.tar.gz" "$NETAVARK_SHA256" "$NETAVARK_ARCHIVE"
@@ -140,6 +149,7 @@ RUST_ARCHIVE="$SRC/rust.tar.gz"
 fetch "https://static.rust-lang.org/dist/2024-11-28/rust-${RUST_VERSION}-${RUST_TARGET}.tar.gz" "$RUST_SHA256" "$RUST_ARCHIVE"
 tar -xzf "$RUST_ARCHIVE" -C "$SRC"
 "$SRC/rust-${RUST_VERSION}-${RUST_TARGET}/install.sh" --prefix=/usr/local --disable-ldconfig
+export LD_LIBRARY_PATH="/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 make -C "$SRC/podman-$PODMAN_VERSION" -j"$(nproc)" \
   BUILDTAGS="seccomp apparmor systemd" bin/podman

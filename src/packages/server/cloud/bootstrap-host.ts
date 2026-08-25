@@ -1538,6 +1538,7 @@ fi
     "crun",
     "cron",
     "chrony",
+    "unattended-upgrades",
     "libatomic1",
     "libcap2-bin",
     "cloud-guest-utils",

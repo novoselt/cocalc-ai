@@ -11,6 +11,7 @@ Table({
     primary_key: "id",
     pg_indexes: [
       "bay_id",
+      "crm_organization_id",
       "owner_account_id",
       "organization_name",
       "starts_at",
@@ -22,6 +23,7 @@ Table({
         admin: true,
         fields: {
           id: null,
+          crm_organization_id: null,
           name: null,
           organization_name: null,
           owner_account_id: null,
@@ -43,6 +45,7 @@ Table({
         delete: true,
         fields: {
           id: null,
+          crm_organization_id: null,
           name: null,
           organization_name: null,
           bay_id: null,
@@ -64,6 +67,10 @@ Table({
     id: {
       type: "uuid",
       desc: "Unique site-license id.",
+    },
+    crm_organization_id: {
+      type: "uuid",
+      desc: "Optional reviewed canonical CRM organization.",
     },
     name: {
       type: "string",

@@ -23,6 +23,92 @@ const TELEMETRY_ONLY =
 // public hub API exports with destructive/admin-looking names and fails until
 // new RPCs are added here with a fresh-auth decision.
 export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
+  "adminCrm.addActivity": {
+    decision: "fresh-auth-required",
+    reason: "appends an immutable internal customer activity",
+  },
+  "adminCrm.archiveOrganization": {
+    decision: "fresh-auth-required",
+    reason: "archives a canonical customer relationship record",
+  },
+  "adminCrm.backfill": {
+    decision: "fresh-auth-required",
+    reason:
+      "creates and links reviewed customer records from commercial systems",
+  },
+  "adminCrm.createCommercialOrderFromOpportunity": {
+    decision: "fresh-auth-required",
+    reason:
+      "creates durable institutional commercial terms from an opportunity",
+  },
+  "adminCrm.createOpportunity": {
+    decision: "fresh-auth-required",
+    reason: "creates a durable commercial opportunity",
+  },
+  "adminCrm.createOrganization": {
+    decision: "fresh-auth-required",
+    reason: "creates a canonical customer identity",
+  },
+  "adminCrm.createPerson": {
+    decision: "fresh-auth-required",
+    reason: "creates a customer contact containing bounded PII",
+  },
+  "adminCrm.createTask": {
+    decision: "fresh-auth-required",
+    reason: "creates an internal customer follow-up task",
+  },
+  "adminCrm.exportData": {
+    decision: "fresh-auth-required",
+    reason: "exports bounded sensitive customer and commercial context",
+  },
+  "adminCrm.mergeOrganizations": {
+    decision: "fresh-auth-required",
+    reason: "rewrites reviewed customer relationships into a canonical record",
+  },
+  "adminCrm.mutateDomain": {
+    decision: "fresh-auth-required",
+    reason: "changes reviewed institutional domain identity evidence",
+  },
+  "adminCrm.mutateExternalReference": {
+    decision: "fresh-auth-required",
+    reason: "links customer records to external commercial or support systems",
+  },
+  "adminCrm.mutateOrganizationPerson": {
+    decision: "fresh-auth-required",
+    reason: "changes a customer's reviewed contact relationships",
+  },
+  "adminCrm.mutatePersonAccount": {
+    decision: "fresh-auth-required",
+    reason: "links a customer contact to a CoCalc account",
+  },
+  "adminCrm.mutatePersonEmail": {
+    decision: "fresh-auth-required",
+    reason: "changes customer contact PII",
+  },
+  "adminCrm.transitionOpportunity": {
+    decision: "fresh-auth-required",
+    reason: "changes a durable commercial pipeline stage",
+  },
+  "adminCrm.transitionTask": {
+    decision: "fresh-auth-required",
+    reason: "changes ownership or terminal state of customer follow-up",
+  },
+  "adminCrm.updateOpportunity": {
+    decision: "fresh-auth-required",
+    reason: "changes commercial opportunity details",
+  },
+  "adminCrm.updateOrganization": {
+    decision: "fresh-auth-required",
+    reason: "changes canonical customer identity and ownership",
+  },
+  "adminCrm.updatePerson": {
+    decision: "fresh-auth-required",
+    reason: "changes customer contact PII",
+  },
+  "adminCrm.updateTask": {
+    decision: "fresh-auth-required",
+    reason: "changes internal customer follow-up",
+  },
   "compute.approveAgentGrant": {
     decision: "fresh-auth-required",
     reason: "delegates billable managed compute actions to a project agent",

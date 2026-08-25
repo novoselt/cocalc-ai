@@ -493,13 +493,6 @@ const chatAssociation: FileSpec = {
 file_associations["chat"] = chatAssociation;
 file_associations["sage-chat"] = chatAssociation;
 
-file_associations["cocalc-crm"] = {
-  editor: "crm",
-  icon: "database",
-  opts: {},
-  name: "crm",
-};
-
 file_associations["sage-git"] = {
   editor: "git",
   icon: "git-square",

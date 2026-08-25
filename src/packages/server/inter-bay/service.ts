@@ -166,6 +166,11 @@ import {
   getMembershipAnalyticsOverviewLocal,
 } from "@cocalc/server/membership/analytics";
 import { dispatchCommercialSeedRequest } from "@cocalc/server/commercial-orders/dispatch";
+import { dispatchCrmSeedRequest } from "@cocalc/server/crm/dispatch";
+import {
+  assertCrmCapability,
+  crmActionCapabilities,
+} from "@cocalc/server/crm/feature-flags";
 import { getMembershipAllocationSeriesLocal } from "@cocalc/server/membership/allocation-analytics-series";
 import { getActiveUserMapOverview } from "@cocalc/server/account-presence-locations";
 import {
@@ -768,6 +773,24 @@ async function startBayOpsService(): Promise<void> {
         await assertCommercialReceivablesCapability(capability);
       }
       return await dispatchCommercialSeedRequest(opts);
+    },
+    crm: async (opts) => {
+      if (bay_id !== getConfiguredClusterSeedBayId()) {
+        throw Error("CRM is authoritative on the seed bay");
+      }
+      if (!(await isAdmin(opts.actor_account_id))) {
+        throw Error("CRM inter-bay actor must be an admin");
+      }
+      if (`${opts.payload.reason ?? ""}`.trim().length < 4) {
+        throw Error("CRM inter-bay request requires an audit reason");
+      }
+      for (const capability of crmActionCapabilities(
+        opts.action,
+        opts.payload,
+      )) {
+        await assertCrmCapability(capability);
+      }
+      return await dispatchCrmSeedRequest(opts);
     },
   };
   services.push(

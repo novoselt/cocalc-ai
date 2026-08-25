@@ -22,6 +22,7 @@ const SOURCE_MODULES: SourceModule[] = [
   { filename: "admin-data-explorer.ts", hubGroup: "adminData" },
   { filename: "admin-db.ts", hubGroup: "adminDb" },
   { filename: "admin-host.ts", hubGroup: "adminHost" },
+  { filename: "crm.ts", hubGroup: "adminCrm" },
   { filename: "admin-support.ts", hubGroup: "adminSupport" },
   { filename: "commercial-orders.ts", hubGroup: "commercialOrders" },
   { filename: "compute.ts", hubGroup: "compute" },
@@ -56,12 +57,14 @@ function exportedNames(source: string): string[] {
   return names.filter(Boolean).sort();
 }
 
-function riskyHubRpcNames(): string[] {
+function hubRpcNames({
+  riskyOnly = false,
+}: { riskyOnly?: boolean } = {}): string[] {
   const names: string[] = [];
   for (const { filename, hubGroup } of SOURCE_MODULES) {
     const source = readFileSync(join(__dirname, filename), "utf8");
     for (const name of exportedNames(source)) {
-      if (DANGEROUS_RPC_NAME_PATTERN.test(name)) {
+      if (!riskyOnly || DANGEROUS_RPC_NAME_PATTERN.test(name)) {
         names.push(`${hubGroup}.${name}`);
       }
     }
@@ -178,7 +181,7 @@ function frontendFreshAuthProofOmissions(): string[] {
 
 describe("dangerous hub RPC fresh-auth registry", () => {
   it("classifies every risky-looking public hub RPC export", () => {
-    const riskyNames = riskyHubRpcNames();
+    const riskyNames = hubRpcNames({ riskyOnly: true });
     const missing = riskyNames.filter((name) => !DANGEROUS_RPC_DECISIONS[name]);
 
     expect(missing).toEqual([]);
@@ -188,9 +191,9 @@ describe("dangerous hub RPC fresh-auth registry", () => {
   });
 
   it("does not contain stale RPC names", () => {
-    const riskyNames = new Set(riskyHubRpcNames());
+    const publicNames = new Set(hubRpcNames());
     const stale = Object.keys(DANGEROUS_RPC_DECISIONS).filter(
-      (name) => !riskyNames.has(name),
+      (name) => !publicNames.has(name),
     );
 
     expect(stale).toEqual([]);

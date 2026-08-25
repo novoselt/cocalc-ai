@@ -49,7 +49,9 @@ export interface Configuration {
   secrets?: { [key: string]: string };
   // Authoritative generation represented by the complete secrets map.
   secrets_generation?: number;
-  // hard CPU limit measured in cores
+  // Optional hard CPU limit measured in cores. FAIR_CPU_MODE deliberately
+  // ignores this legacy CoCalc.com limit so shared projects can burst into
+  // idle CPU; cpu_priority controls their proportional share under contention.
   cpu?: number;
   // relative, work-conserving CPU scheduling priority
   cpu_priority?: number;

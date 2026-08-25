@@ -334,6 +334,7 @@ export const Cell: React.FC<Props> = React.memo((props: Props) => {
         isDragging={props.isDragging}
         stdin={props.stdin}
         runOverlay={props.runOverlay}
+        readOnly={props.read_only}
       />
     );
   }

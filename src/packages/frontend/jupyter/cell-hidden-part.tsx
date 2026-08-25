@@ -3,23 +3,47 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
+import { Button } from "antd";
 import React from "react";
-import { Icon } from "../components/icon";
 
-// TODO: maybe clicking to reveal.
-// This is just an mvp. See https://github.com/sagemathinc/cocalc/issues/3835
+import { Icon, Tooltip } from "@cocalc/frontend/components";
+import { COLORS } from "@cocalc/util/theme";
 
 interface Props {
   title: string;
+  onReveal?: () => void;
+  revealLabel?: string;
 }
 
-export const CellHiddenPart: React.FC<Props> = (props: Props) => {
+const STYLE: React.CSSProperties = {
+  color: COLORS.GRAY_L,
+  fontSize: "14pt",
+  marginLeft: "7px",
+};
+
+export const CellHiddenPart: React.FC<Props> = ({
+  title,
+  onReveal,
+  revealLabel,
+}: Props) => {
+  if (onReveal != null) {
+    return (
+      <Tooltip title={title}>
+        <Button
+          aria-label={revealLabel ?? title}
+          icon={<Icon name="ellipsis" />}
+          onClick={onReveal}
+          size="small"
+          style={STYLE}
+          type="text"
+        />
+      </Tooltip>
+    );
+  }
+
   return (
-    <div
-      style={{ color: "#aaa", fontSize: "14pt", paddingLeft: "15px" }}
-      title={props.title}
-    >
-      <Icon name={"ellipsis"} />
+    <div style={{ ...STYLE, marginLeft: "15px" }} title={title}>
+      <Icon name="ellipsis" />
     </div>
   );
 };

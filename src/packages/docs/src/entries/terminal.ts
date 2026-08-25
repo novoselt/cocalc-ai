@@ -17,9 +17,9 @@ export const TERMINAL_ENTRIES: DocsEntry[] = [
     body: GRAPHICAL_APPLICATIONS_BODY.trim(),
     category: "Terminal",
     id: "terminal.graphical-applications",
-    lastReviewed: "2026-08-22",
+    lastReviewed: "2026-08-24",
     searchKeywords:
-      "X11 X Window Wayland Xwayland Blit GUI desktop DISPLAY graphical applications Chromium GIMP Inkscape modal dialog popup",
+      "X11 X Window Wayland Xwayland Blit GUI desktop DISPLAY graphical applications Chromium GIMP Inkscape IDLE audio sound PipeWire pygame modal dialog popup",
     slug: "terminal/graphical-applications",
     status: "ready",
     summary:

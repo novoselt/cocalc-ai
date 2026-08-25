@@ -31,6 +31,7 @@ import {
   type CommercialOrdersApi,
   commercialOrders,
 } from "./commercial-orders";
+import { type AdminCrmApi, adminCrm } from "./crm";
 
 export interface HubApi {
   system: System;
@@ -58,6 +59,7 @@ export interface HubApi {
   publicDirectoryShares: PublicDirectoryShares;
   growthAnalytics: GrowthAnalyticsApi;
   commercialOrders: CommercialOrdersApi;
+  adminCrm: AdminCrmApi;
 }
 
 const HubApiStructure = {
@@ -86,6 +88,7 @@ const HubApiStructure = {
   publicDirectoryShares,
   growthAnalytics,
   commercialOrders,
+  adminCrm,
 } as const;
 
 export function transformArgs({

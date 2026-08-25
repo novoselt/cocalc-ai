@@ -4,6 +4,7 @@
  */
 
 import { authFirstRequireAccount } from "./util";
+import type { CrmSupportCustomerContext } from "@cocalc/util/crm";
 
 export const ADMIN_SUPPORT_TICKET_STATUSES = [
   "new",
@@ -134,6 +135,7 @@ export interface AdminSupportShowResponse {
     images: AdminSupportImageReference[];
   };
   comments: AdminSupportTicketComment[];
+  crm_context?: CrmSupportCustomerContext;
   result_bytes: number;
   truncated: boolean;
   redaction: "best_effort";
@@ -340,7 +342,10 @@ export interface AdminSupportSpamResponse {
   idempotency_key: string;
   idempotent_replay: boolean;
   ticket_id: number;
-  requester_suspended: true;
+  requester_suspended: boolean;
+  disposition: "deleted_as_spam" | "solved_and_tagged";
+  fallback_reason?: string;
+  ticket?: AdminSupportTicketSummary;
   zendesk_job_id?: string;
   zendesk_job_status: string;
 }
@@ -372,7 +377,7 @@ export const ADMIN_SUPPORT_CONVENTIONS = {
     "Use pending only when the requester must respond or act.",
     "Do not mark solved merely because a fix was committed; complete and verify the promised operational action first.",
     "Merge duplicates only after explicit approval, keeping the more complete or canonical ticket as the target.",
-    "Mark spam only for clear unsolicited junk. Zendesk spam handling deletes the ticket and suspends the requester.",
+    "Mark spam only for clear unsolicited junk. Zendesk spam handling deletes the ticket and suspends the requester; if Zendesk definitively rejects that action, CoCalc instead solves and tags the ticket without replying and reports that the requester was not suspended.",
     "Limit account and project inspection to data relevant to the support request, use a ticket-specific audit reason, and never expose secrets or unnecessary personal data in replies.",
   ],
 } as const;

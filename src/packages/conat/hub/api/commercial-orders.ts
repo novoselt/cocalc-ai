@@ -113,7 +113,7 @@ export type CommercialOrderContactInput = Pick<
 
 export interface CommercialOrderCreateRequest extends CommercialMutationRequest {
   organization_name: string;
-  crm_organization_id?: number;
+  crm_organization_id?: string;
   customer_account_id?: string;
   site_license_id?: string;
   stripe_customer_id?: string;

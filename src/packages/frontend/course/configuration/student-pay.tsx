@@ -136,30 +136,39 @@ export default function StudentPay({
   const tierById = useMemo(() => {
     return new Map(tiers.map((tier) => [tier.id, tier]));
   }, [tiers]);
-  const matchingSiteLicense = useMemo(() => {
-    if (!selectedTier) {
-      return null;
+  const siteLicenseChoices = useMemo(() => {
+    const byTier = new Map<string, ClaimableMembershipPackage>();
+    const packages = claimablePackages
+      .filter(
+        (membershipPackage) =>
+          membershipPackage.kind === "site" &&
+          !membershipPackage.requires_approval &&
+          tierById.has(membershipPackage.membership_class),
+      )
+      .sort((left, right) => {
+        const leftPriority = tierById.get(left.membership_class)?.priority ?? 0;
+        const rightPriority =
+          tierById.get(right.membership_class)?.priority ?? 0;
+        return (
+          leftPriority - rightPriority ||
+          left.package_id.localeCompare(right.package_id)
+        );
+      });
+    for (const membershipPackage of packages) {
+      if (!byTier.has(membershipPackage.membership_class)) {
+        byTier.set(membershipPackage.membership_class, membershipPackage);
+      }
     }
-    const requiredPriority = selectedTier.priority ?? 0;
-    return (
-      claimablePackages
-        .filter((membershipPackage) => membershipPackage.kind === "site")
-        .filter((membershipPackage) => {
-          const siteTier = tierById.get(membershipPackage.membership_class);
-          return (siteTier?.priority ?? 0) >= requiredPriority;
-        })
-        .sort((left, right) => {
-          const leftPriority =
-            tierById.get(left.membership_class)?.priority ?? 0;
-          const rightPriority =
-            tierById.get(right.membership_class)?.priority ?? 0;
-          if (rightPriority !== leftPriority) {
-            return rightPriority - leftPriority;
-          }
-          return left.package_id.localeCompare(right.package_id);
-        })[0] ?? null
-    );
-  }, [claimablePackages, selectedTier, tierById]);
+    return Array.from(byTier.values());
+  }, [claimablePackages, tierById]);
+  const matchingSiteLicense =
+    siteLicenseChoices.find(
+      (membershipPackage) =>
+        membershipPackage.membership_class === selectedTierId,
+    ) ?? null;
+  const matchingSiteLicenseTier = matchingSiteLicense
+    ? (tierById.get(matchingSiteLicense.membership_class) ?? null)
+    : null;
   const paymentEnabled = !!(
     settings?.get("student_pay") ||
     settings?.get("institute_pay") ||
@@ -204,9 +213,7 @@ export default function StudentPay({
   }
 
   function setSelectedTier(required_membership_class: string) {
-    const tier = courseTiers.find(
-      (tier) => tier.id === required_membership_class,
-    );
+    const tier = tierById.get(required_membership_class);
     const tierGraceDays = Number(tier?.course_grace_days);
     actions.configuration.set_course_membership({
       required_membership_class,
@@ -229,8 +236,35 @@ export default function StudentPay({
   }
 
   function setPayChoice(value: CoursePayChoice) {
+    if (value === "site_license" && !matchingSiteLicense) {
+      const defaultSiteLicense = siteLicenseChoices[0];
+      if (defaultSiteLicense) {
+        setSelectedTier(defaultSiteLicense.membership_class);
+      }
+    } else if (value !== "site_license" && !selectedTier) {
+      const defaultCourseTier = courseTiers[0];
+      if (defaultCourseTier) {
+        setSelectedTier(defaultCourseTier.id);
+      }
+    }
     actions.configuration.set_pay_choice(value, true);
     actions.configuration.configure_all_projects();
+  }
+
+  function siteLicenseChoiceLabel(
+    membershipPackage: ClaimableMembershipPackage,
+  ) {
+    const tier = tierById.get(membershipPackage.membership_class);
+    const poolName =
+      `${membershipPackage.pool_name ?? ""}`.trim() ||
+      tier?.label ||
+      membershipPackage.membership_class;
+    const organization = `${
+      membershipPackage.organization_name ??
+      membershipPackage.site_license_name ??
+      ""
+    }`.trim();
+    return organization ? `${poolName} - ${organization}` : poolName;
   }
 
   return (
@@ -282,83 +316,32 @@ export default function StudentPay({
         <Space vertical size="middle" style={{ width: "100%" }}>
           <div>
             <div style={{ marginBottom: "6px", fontWeight: 600 }}>
-              Required student course membership
-            </div>
-            <Select
-              style={{ width: "100%" }}
-              placeholder="Select a course membership tier"
-              value={selectedTierId || undefined}
-              onChange={setSelectedTier}
-              options={courseTiers.map((tier) => ({
-                value: tier.id,
-                label: `${tier.label ?? tier.id} (${currency(
-                  Number(tier.course_price ?? 0),
-                )} / ${Number(tier.course_duration_days ?? 0)} days)`,
-              }))}
-            />
-          </div>
-          {selectedTier && (
-            <Space vertical size="small" style={{ width: "100%" }}>
-              <Text type="secondary">
-                {currency(Number(selectedTier.course_price ?? 0))} for{" "}
-                {Number(selectedTier.course_duration_days ?? 0)} days per
-                student.
-              </Text>
-              <Text type="secondary">
-                Grace period:{" "}
-                <Text strong>
-                  {Number.isFinite(selectedGraceDays)
-                    ? selectedGraceDays
-                    : DEFAULT_GRACE_DAYS}{" "}
-                  days after the course start date
-                </Text>
-                .
-              </Text>
-              <MembershipTierBenefits compact tier={selectedTier} />
-            </Space>
-          )}
-          <div>
-            <div style={{ marginBottom: "6px", fontWeight: 600 }}>
-              Course start date
-            </div>
-            <DatePicker
-              disabled={!selectedTier}
-              style={{ width: "100%" }}
-              value={courseStartDate.isValid() ? courseStartDate : null}
-              onChange={setCourseStartDate}
-            />
-            <Text type="secondary">
-              Student-pay grace days are counted from this date. Set this to the
-              first day students should have full course access.
-            </Text>
-          </div>
-          <div>
-            <div style={{ marginBottom: "6px", fontWeight: 600 }}>
               Who pays?
             </div>
             <Radio.Group
+              aria-label="Who pays?"
               value={selectedPayChoice}
               onChange={(e) => setPayChoice(e.target.value)}
               style={{ width: "100%" }}
             >
               <Space vertical style={{ width: "100%" }}>
-                <Radio value="student" disabled={!selectedTier}>
+                <Radio value="student">
                   {intl.formatMessage({
                     id: "course.student-pay.radio.students-pay",
                     defaultMessage: "Student pays directly",
                   })}
                 </Radio>
-                <Radio value="institute" disabled={!selectedTier}>
+                <Radio value="institute">
                   Institute or instructor pays directly
                 </Radio>
                 <Space size="small">
                   <Radio
                     value="site_license"
-                    disabled={!selectedTier || !matchingSiteLicense}
+                    disabled={siteLicenseChoices.length === 0}
                   >
                     Site license
                   </Radio>
-                  {selectedTier && !matchingSiteLicense ? (
+                  {siteLicenseChoices.length === 0 ? (
                     <Popover
                       title="No matching site license found"
                       content={
@@ -368,7 +351,8 @@ export default function StudentPay({
                           can still pay directly, or the instructor can buy
                           course seats. If a site license is expected, verify
                           the instructor email domain and confirm the license
-                          has available seats.
+                          has an automatically claimable student pool with
+                          available seats.
                         </div>
                       }
                     >
@@ -381,36 +365,144 @@ export default function StudentPay({
               </Space>
             </Radio.Group>
           </div>
-          {selectedTier && matchingSiteLicense ? (
-            <Alert
-              type="success"
-              showIcon
-              title="Matching site license available"
-              description={
+          {selectedPayChoice === "site_license" ? (
+            <Space vertical size="middle" style={{ width: "100%" }}>
+              <div>
+                <div style={{ marginBottom: "6px", fontWeight: 600 }}>
+                  Site license student membership
+                </div>
+                <Select
+                  aria-label="Site license student membership"
+                  style={{ width: "100%" }}
+                  value={matchingSiteLicense?.membership_class}
+                  onChange={setSelectedTier}
+                  options={siteLicenseChoices.map((membershipPackage) => ({
+                    value: membershipPackage.membership_class,
+                    label: siteLicenseChoiceLabel(membershipPackage),
+                  }))}
+                />
+              </div>
+              {matchingSiteLicense ? (
                 <>
-                  The verified email{" "}
-                  <strong>{matchingSiteLicense.matched_email_address}</strong>{" "}
-                  can claim a site license for{" "}
-                  <strong>{matchingSiteLicense.membership_class}</strong>. This
-                  option is selected by default for this membership when no
-                  other course payment mode has been chosen.
+                  <Alert
+                    type="success"
+                    showIcon
+                    title="Students are covered by the site license"
+                    description={
+                      <Space vertical size="small">
+                        <span>
+                          Students with a matching verified institutional email
+                          can claim the{" "}
+                          <strong>
+                            {matchingSiteLicenseTier?.label ??
+                              matchingSiteLicense.membership_class}
+                          </strong>{" "}
+                          membership from{" "}
+                          <strong>
+                            {matchingSiteLicense.organization_name ??
+                              matchingSiteLicense.site_license_name ??
+                              "this site license"}
+                          </strong>
+                          .
+                        </span>
+                        <span>
+                          The retail course-seat price and duration do not
+                          apply. Access follows the site-license term and
+                          affiliation verification policy.
+                        </span>
+                        {matchingSiteLicense.expires_at ? (
+                          <span>
+                            Current site-license term ends{" "}
+                            <strong>
+                              {dayjs(matchingSiteLicense.expires_at).format(
+                                "MMMM D, YYYY",
+                              )}
+                            </strong>
+                            .
+                          </span>
+                        ) : null}
+                      </Space>
+                    }
+                  />
+                  {matchingSiteLicenseTier ? (
+                    <MembershipTierBenefits
+                      compact
+                      tier={matchingSiteLicenseTier}
+                    />
+                  ) : null}
                 </>
-              }
-            />
+              ) : null}
+            </Space>
+          ) : selectedPayChoice ? (
+            <Space vertical size="middle" style={{ width: "100%" }}>
+              <div>
+                <div style={{ marginBottom: "6px", fontWeight: 600 }}>
+                  Required student course membership
+                </div>
+                <Select
+                  aria-label="Required student course membership"
+                  style={{ width: "100%" }}
+                  placeholder="Select a course membership tier"
+                  value={selectedTierId || undefined}
+                  onChange={setSelectedTier}
+                  options={courseTiers.map((tier) => ({
+                    value: tier.id,
+                    label: `${tier.label ?? tier.id} (${currency(
+                      Number(tier.course_price ?? 0),
+                    )} / ${Number(tier.course_duration_days ?? 0)} days)`,
+                  }))}
+                />
+              </div>
+              {selectedTier ? (
+                <Space vertical size="small" style={{ width: "100%" }}>
+                  <Text type="secondary">
+                    {currency(Number(selectedTier.course_price ?? 0))} for{" "}
+                    {Number(selectedTier.course_duration_days ?? 0)} days per
+                    student.
+                  </Text>
+                  <Text type="secondary">
+                    Grace period:{" "}
+                    <Text strong>
+                      {Number.isFinite(selectedGraceDays)
+                        ? selectedGraceDays
+                        : DEFAULT_GRACE_DAYS}{" "}
+                      days after the course start date
+                    </Text>
+                    .
+                  </Text>
+                  <MembershipTierBenefits compact tier={selectedTier} />
+                </Space>
+              ) : null}
+              <div>
+                <div style={{ marginBottom: "6px", fontWeight: 600 }}>
+                  Course start date
+                </div>
+                <DatePicker
+                  disabled={!selectedTier}
+                  style={{ width: "100%" }}
+                  value={courseStartDate.isValid() ? courseStartDate : null}
+                  onChange={setCourseStartDate}
+                />
+                <Text type="secondary">
+                  Student-pay grace days are counted from this date. Set this to
+                  the first day students should have full course access.
+                </Text>
+              </div>
+              <InstitutePaySection
+                project_id={project_id}
+                enabled={selectedPayChoice === "institute"}
+                showToggle={false}
+                selectedTier={selectedTier}
+                onManageSeats={onManageSeats}
+                onToggle={(checked) => {
+                  actions.configuration.set_pay_choice("institute", checked);
+                  if (checked) {
+                    actions.configuration.configure_all_projects();
+                  }
+                }}
+              />
+            </Space>
           ) : null}
-          <InstitutePaySection
-            project_id={project_id}
-            enabled={selectedPayChoice === "institute"}
-            showToggle={false}
-            selectedTier={selectedTier}
-            onManageSeats={onManageSeats}
-            onToggle={(checked) => {
-              actions.configuration.set_pay_choice("institute", checked);
-              if (checked) {
-                actions.configuration.configure_all_projects();
-              }
-            }}
-          />
         </Space>
       )}
     </Card>

@@ -158,12 +158,14 @@ describe("admin support API", () => {
   it("redacts common secrets and private project paths", () => {
     const redacted = redactSupportText(
       `alice@example.com from 192.0.2.10 password=hunter2 ` +
+        `token=private-token ` +
         `https://cocalc.ai/projects/${PROJECT_ID}/files/home/alice/private.txt?auth=x`,
       10_000,
     );
     expect(redacted).not.toContain("alice@example.com");
     expect(redacted).not.toContain("192.0.2.10");
     expect(redacted).not.toContain("hunter2");
+    expect(redacted).not.toContain("private-token");
     expect(redacted).not.toContain("private.txt");
     expect(redacted).toContain(PROJECT_ID);
     expect(redacted).toContain("[REDACTED_PATH]");
@@ -357,7 +359,10 @@ describe("admin support API", () => {
       })),
     };
     const attachments = {
-      show: jest.fn(async () => ({ result: attachment, response: {} })),
+      show: jest.fn(async () => ({
+        result: { attachment },
+        response: {},
+      })),
     };
     mockGetZendeskClient.mockResolvedValue({
       config: {
@@ -731,7 +736,10 @@ describe("admin support API", () => {
     });
     const tickets = {
       show: jest.fn(async () => ({ result: before, response: {} })),
-      put: jest.fn(async () => ({ result: null, response: {} })),
+      _rawRequest: jest.fn(async () => ({
+        result: null,
+        response: { status: 200, statusText: "OK" },
+      })),
     };
     mockGetZendeskClient.mockResolvedValue({ tickets } as any);
 
@@ -746,7 +754,7 @@ describe("admin support API", () => {
       expected_updated_at: "2026-08-06T10:00:00.000Z",
       warning: expect.stringContaining("suspend"),
     });
-    expect(tickets.put).not.toHaveBeenCalled();
+    expect(tickets._rawRequest).not.toHaveBeenCalled();
 
     const request = {
       account_id: "11111111-1111-4111-8111-111111111111",
@@ -765,8 +773,9 @@ describe("admin support API", () => {
         session_hash: "fresh-session",
       }),
     );
-    expect(tickets.put).toHaveBeenCalledTimes(1);
-    expect(tickets.put).toHaveBeenCalledWith(
+    expect(tickets._rawRequest).toHaveBeenCalledTimes(1);
+    expect(tickets._rawRequest).toHaveBeenCalledWith(
+      "PUT",
       ["tickets", 300, "mark_as_spam"],
       {},
     );
@@ -776,9 +785,146 @@ describe("admin support API", () => {
       idempotent_replay: false,
       ticket_id: 300,
       requester_suspended: true,
+      disposition: "deleted_as_spam",
       zendesk_job_status: "completed",
     });
     expect(replay).toMatchObject({ idempotent_replay: true });
+  });
+
+  it("solves and tags spam when Zendesk definitively rejects suspension", async () => {
+    const before = ticket({
+      id: 301,
+      status: "new",
+      tags: ["incoming"],
+      updated_at: "2026-08-06T10:00:00.000Z",
+    });
+    const after = ticket({
+      id: 301,
+      status: "solved",
+      tags: ["incoming", "spam", "unsolicited"],
+      updated_at: "2026-08-06T10:01:00.000Z",
+    });
+    const tickets = {
+      show: jest
+        .fn()
+        .mockResolvedValueOnce({ result: before, response: {} })
+        .mockResolvedValueOnce({ result: before, response: {} })
+        .mockResolvedValueOnce({ result: after, response: {} }),
+      _rawRequest: jest
+        .fn()
+        .mockResolvedValueOnce({
+          response: { status: 422, statusText: "Unprocessable Entity" },
+          result: {
+            error: "RecordInvalid",
+            description:
+              "Cannot suspend agent alice@example.com password=hunter2",
+          },
+        })
+        .mockResolvedValueOnce({
+          response: { status: 200, statusText: "OK" },
+          result: { ticket: after },
+        }),
+    };
+    mockGetZendeskClient.mockResolvedValue({ tickets } as any);
+
+    const planned = await planSpam({
+      account_id: "admin-account",
+      ticket_id: 301,
+      reason: "review obvious unsolicited junk",
+    });
+    expect(planned.warning).toContain("solve and tag");
+
+    const request = {
+      account_id: "11111111-1111-4111-8111-111111111111",
+      session_hash: "fresh-session",
+      ticket_id: 301,
+      expected_updated_at: planned.expected_updated_at,
+      idempotency_key: "support-spam-fallback-301",
+      reason: "approved obvious unsolicited junk",
+    };
+    const result = await spam(request);
+    const replay = await spam(request);
+
+    expect(tickets._rawRequest).toHaveBeenNthCalledWith(
+      2,
+      "PUT",
+      ["tickets", 301],
+      expect.objectContaining({
+        ticket: expect.objectContaining({
+          safe_update: true,
+          updated_stamp: "2026-08-06T10:00:00.000Z",
+          status: "solved",
+          tags: ["incoming", "spam", "unsolicited"],
+        }),
+      }),
+    );
+    expect(result).toMatchObject({
+      requester_suspended: false,
+      disposition: "solved_and_tagged",
+      zendesk_job_status: "fallback_completed",
+      ticket: {
+        id: 301,
+        status: "solved",
+        tags: ["incoming", "spam", "unsolicited"],
+      },
+    });
+    expect(result.fallback_reason).toContain("RecordInvalid");
+    expect(result.fallback_reason).toContain("[REDACTED_EMAIL]");
+    expect(result.fallback_reason).toContain("password=[REDACTED_SECRET]");
+    expect(result.fallback_reason).not.toContain("alice@example.com");
+    expect(result.fallback_reason).not.toContain("hunter2");
+    expect(replay).toMatchObject({
+      idempotent_replay: true,
+      disposition: "solved_and_tagged",
+    });
+    expect(tickets._rawRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves redacted Zendesk details when spam and fallback both fail", async () => {
+    const before = ticket({
+      id: 302,
+      status: "new",
+      updated_at: "2026-08-06T10:00:00.000Z",
+    });
+    const tickets = {
+      show: jest.fn(async () => ({ result: before, response: {} })),
+      _rawRequest: jest
+        .fn()
+        .mockResolvedValueOnce({
+          response: { status: 422, statusText: "Unprocessable Entity" },
+          result: {
+            error: "RecordInvalid",
+            description: "Cannot suspend alice@example.com",
+          },
+        })
+        .mockResolvedValueOnce({
+          response: { status: 403, statusText: "Forbidden" },
+          result: {
+            error: "Forbidden",
+            token: "super-secret-token",
+          },
+        }),
+    };
+    mockGetZendeskClient.mockResolvedValue({ tickets } as any);
+
+    let thrown: Error | undefined;
+    try {
+      await spam({
+        account_id: "11111111-1111-4111-8111-111111111111",
+        session_hash: "fresh-session",
+        ticket_id: 302,
+        expected_updated_at: "2026-08-06T10:00:00.000Z",
+        idempotency_key: "support-spam-fallback-failed-302",
+        reason: "approved obvious unsolicited junk",
+      });
+    } catch (error) {
+      thrown = error as Error;
+    }
+    expect(thrown?.message).toMatch(
+      /RecordInvalid.*\[REDACTED_EMAIL\].*Forbidden.*token.*\[REDACTED_SECRET\]/,
+    );
+    expect(thrown?.message).not.toContain("alice@example.com");
+    expect(thrown?.message).not.toContain("super-secret-token");
   });
 
   it("rejects non-admin callers before reading Zendesk", async () => {

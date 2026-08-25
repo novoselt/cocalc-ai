@@ -41,6 +41,13 @@ function parseOptionalPositiveInteger(
   return parsePositiveInteger(value, flagName);
 }
 
+function parseBoolean(value: string | undefined, flagName: string): boolean {
+  const normalized = `${value ?? ""}`.trim().toLowerCase();
+  if (["true", "yes", "1"].includes(normalized)) return true;
+  if (["false", "no", "0"].includes(normalized)) return false;
+  throw new Error(`${flagName} must be true or false`);
+}
+
 function parseJsonObject(
   raw: string | undefined,
   flagName: string,
@@ -1141,6 +1148,162 @@ export function registerMembershipCommand(
                 account_id: ctx.accountId,
                 owner_account_id,
                 site_license_id,
+              }),
+              toIso,
+            );
+          },
+        );
+      },
+    );
+
+  siteLicense
+    .command("update <siteLicenseId>")
+    .description("update site-license terms and institutional domains")
+    .option(
+      "--domain <domain...>",
+      "replace allowed institutional email domains; repeat or pass comma-separated values",
+    )
+    .option("--name <name>", "site license name")
+    .option("--organization-name <name>", "organization name")
+    .option("--starts-at <iso>", "explicit start time")
+    .option("--expires-at <iso>", "explicit expiry time")
+    .action(
+      async (
+        siteLicenseId: string,
+        opts: {
+          domain?: string[];
+          name?: string;
+          organizationName?: string;
+          startsAt?: string;
+          expiresAt?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(
+          command,
+          "membership site-license update",
+          async (ctx) => {
+            const site_license_id = `${siteLicenseId ?? ""}`.trim();
+            if (!site_license_id) {
+              throw new Error("site license id must be non-empty");
+            }
+            const allowed_domains =
+              opts.domain === undefined
+                ? undefined
+                : normalizeStringList(opts.domain);
+            if (opts.domain !== undefined && allowed_domains?.length === 0) {
+              throw new Error("--domain must contain at least one domain");
+            }
+            if (
+              allowed_domains === undefined &&
+              opts.name === undefined &&
+              opts.organizationName === undefined &&
+              opts.startsAt === undefined &&
+              opts.expiresAt === undefined
+            ) {
+              throw new Error("at least one update option is required");
+            }
+            return serializeSiteLicenseOverview(
+              await ctx.hub.purchases.updateSiteLicense({
+                account_id: ctx.accountId,
+                site_license_id,
+                allowed_domains,
+                name:
+                  opts.name === undefined ? undefined : `${opts.name}`.trim(),
+                organization_name:
+                  opts.organizationName === undefined
+                    ? undefined
+                    : `${opts.organizationName}`.trim(),
+                starts_at:
+                  opts.startsAt === undefined
+                    ? undefined
+                    : parseIsoDate(opts.startsAt, "--starts-at"),
+                expires_at:
+                  opts.expiresAt === undefined
+                    ? undefined
+                    : parseIsoDate(opts.expiresAt, "--expires-at"),
+              }),
+              toIso,
+            );
+          },
+        );
+      },
+    );
+
+  siteLicense
+    .command("pool-update <packageId>")
+    .description("update a site-license membership pool")
+    .requiredOption(
+      "--site-license <siteLicenseId>",
+      "site license containing the pool",
+    )
+    .option(
+      "--requires-approval <boolean>",
+      "whether eligible users must request manager approval",
+    )
+    .option("--pool-name <name>", "pool display name")
+    .option("--seat-count <count>", "pool seat count")
+    .option(
+      "--domain <domain...>",
+      "replace pool-specific allowed domains; repeat or pass comma-separated values",
+    )
+    .action(
+      async (
+        packageId: string,
+        opts: {
+          siteLicense: string;
+          requiresApproval?: string;
+          poolName?: string;
+          seatCount?: string;
+          domain?: string[];
+        },
+        command: Command,
+      ) => {
+        await withContext(
+          command,
+          "membership site-license pool-update",
+          async (ctx) => {
+            const package_id = `${packageId ?? ""}`.trim();
+            const site_license_id = `${opts.siteLicense ?? ""}`.trim();
+            if (!package_id || !site_license_id) {
+              throw new Error("package id and --site-license are required");
+            }
+            const allowed_domains =
+              opts.domain === undefined
+                ? undefined
+                : normalizeStringList(opts.domain);
+            if (opts.domain !== undefined && allowed_domains?.length === 0) {
+              throw new Error("--domain must contain at least one domain");
+            }
+            if (
+              opts.requiresApproval === undefined &&
+              opts.poolName === undefined &&
+              opts.seatCount === undefined &&
+              allowed_domains === undefined
+            ) {
+              throw new Error("at least one pool update option is required");
+            }
+            return serializeMembershipPackage(
+              await ctx.hub.purchases.updateMembershipPackage({
+                account_id: ctx.accountId,
+                package_id,
+                site_license_id,
+                requires_approval:
+                  opts.requiresApproval === undefined
+                    ? undefined
+                    : parseBoolean(
+                        opts.requiresApproval,
+                        "--requires-approval",
+                      ),
+                pool_name:
+                  opts.poolName === undefined
+                    ? undefined
+                    : `${opts.poolName}`.trim(),
+                seat_count:
+                  opts.seatCount === undefined
+                    ? undefined
+                    : parsePositiveInteger(opts.seatCount, "--seat-count"),
+                allowed_domains,
               }),
               toIso,
             );

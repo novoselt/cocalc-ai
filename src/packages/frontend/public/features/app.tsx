@@ -48,6 +48,7 @@ import SlidesFeaturePage from "./slides-page";
 import TeachingFeaturePage from "./teaching-page";
 import TerminalFeaturePage from "./terminal-page";
 import WhiteboardFeaturePage from "./whiteboard-page";
+import X11FeaturePage from "./x11-page";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -81,6 +82,7 @@ const FEATURE_DETAIL_COMPONENTS = {
   teaching: TeachingFeaturePage,
   terminal: TerminalFeaturePage,
   whiteboard: WhiteboardFeaturePage,
+  x11: X11FeaturePage,
 } as const;
 
 const FEATURE_INDEX_PRIORITY = [
@@ -89,6 +91,7 @@ const FEATURE_INDEX_PRIORITY = [
   "latex-editor",
   "terminal",
   "linux",
+  "x11",
   "whiteboard",
   "teaching",
   "compare",
@@ -100,7 +103,7 @@ const FEATURE_GROUPS = [
     description:
       "Use a persistent Linux environment for shells, packages, processes, and services.",
     icon: "terminal",
-    slugs: ["terminal", "linux", "software-environment"],
+    slugs: ["terminal", "linux", "x11", "software-environment"],
     title: "Runtime",
     variant: "cards",
   },
@@ -704,6 +707,11 @@ function FeatureDetail({
         helpEmail={helpEmail}
         isAuthenticated={isAuthenticated}
       />
+    );
+  }
+  if (slug === "x11") {
+    return (
+      <X11FeaturePage helpEmail={helpEmail} isAuthenticated={isAuthenticated} />
     );
   }
   if (slug === "python") {

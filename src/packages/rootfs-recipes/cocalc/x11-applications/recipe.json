@@ -1,0 +1,27 @@
+{
+  "id": "cocalc/x11-applications",
+  "version": 1,
+  "description": "Install every application offered by CoCalc's graphical application launcher, including Chromium and Python IDLE.",
+  "timeout": 3600,
+  "inputs": {},
+  "run": { "shell": "bash", "script": "install.sh" },
+  "verify": { "shell": "bash", "script": "verify.sh" },
+  "contributes": {
+    "metadata": {
+      "family": "x11",
+      "tags": ["x11", "wayland", "graphical-applications"]
+    },
+    "content": {
+      "version": 1,
+      "title": "Graphical Linux applications",
+      "subtitle": "A collection of editors, graphics tools, spreadsheets, and Chromium for CoCalc's browser-streamed graphical workspace.",
+      "highlights": [
+        "Chromium",
+        "Python IDLE",
+        "GIMP, Inkscape, and Krita",
+        "Gnumeric and LibreOffice Calc",
+        "Emacs, GVim, and TeXstudio"
+      ]
+    }
+  }
+}

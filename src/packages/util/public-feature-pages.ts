@@ -142,6 +142,35 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     ],
   },
   {
+    slug: "x11",
+    title: "Linux Graphical Applications",
+    navLabel: "X11",
+    metadataTitle: "Run Linux Graphical Applications Online",
+    tagline: "Wayland and X11 applications streamed into your browser.",
+    summary:
+      "Run Linux GUI applications in a shared CoCalc project with browser clipboard, sound, persistent sessions, and install-on-demand launchers.",
+    metadataSummary:
+      "Run Linux graphical applications online with CoCalc: browser-streamed Wayland and X11 windows, clipboard and PipeWire audio, persistent shared sessions, launchers, and an X11 software environment.",
+    docsUrl: "/app-docs/terminal/graphical-applications",
+    index: true,
+    sections: [
+      {
+        title: "Linux GUI applications in the browser",
+        paragraphs: [
+          "Open an .x11 file and launch native Wayland or X11 applications inside the same persistent Linux project as your files, terminals, and notebooks.",
+          "CoCalc embeds Blit's headless Wayland compositor and uses xwayland-satellite for X11 compatibility, so applications appear as focused browser surfaces instead of inside a traditional remote desktop.",
+        ],
+        bullets: [
+          "Browser clipboard and PipeWire application audio",
+          "Install-on-demand launchers and a ready-made X11 software environment",
+          "One persistent graphical display shared by every collaborator and browser",
+          "Launch applications from the graphical terminal, a normal terminal, scripts, or Jupyter",
+        ],
+        links: [{ href: "https://blit.sh/", label: "Learn about Blit" }],
+      },
+    ],
+  },
+  {
     slug: "software-environment",
     title: "Software Environments",
     navLabel: "Software",

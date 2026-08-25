@@ -6,6 +6,7 @@
     "prefix": { "type": "string", "default": "/opt/cocalc-jupyter" },
     "python": { "type": "string", "default": "/usr/bin/python3" },
     "kernel_name": { "type": "string", "default": "python3" },
+    "system_site_packages": { "type": "boolean", "default": false },
     "packages": {
       "type": "string[]",
       "default": [

@@ -105,8 +105,9 @@ export async function podmanLimits(config?: Configuration): Promise<string[]> {
 
   // CPU
   if (FAIR_CPU_MODE) {
-    // CPU remains work-conserving, while membership priority determines each
-    // project's proportional share when sibling cgroups are contending.
+    // CPU remains work-conserving: deliberately ignore config.cpu (the legacy
+    // CoCalc.com hard-core limit), leave cpu.max unlimited, and use membership
+    // priority for proportional service when sibling cgroups are contending.
     args.push(`--cpu-shares=${cpuSharesFromPriority(config.cpu_priority)}`);
   } else if (config.cpu != null) {
     const cpu = k8sCpuParser(config.cpu); // accepts "500m", "2", etc.

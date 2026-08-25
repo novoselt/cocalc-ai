@@ -6,7 +6,10 @@ packages=(
   libegl1
   libxcb-cursor0
   mesa-vulkan-drivers
+  pipewire
+  pipewire-pulse
   shared-mime-info
+  wireplumber
   xwayland
 )
 
@@ -16,6 +19,10 @@ done
 
 command -v Xwayland >/dev/null
 command -v dbus-daemon >/dev/null
-ldconfig -p | grep -q 'libEGL\.so\.1'
-ldconfig -p | grep -q 'libxcb-cursor\.so\.0'
+command -v pipewire >/dev/null
+command -v pipewire-pulse >/dev/null
+command -v wireplumber >/dev/null
+ldconfig -p | grep 'libEGL\.so\.1' >/dev/null
+ldconfig -p | grep 'libpipewire-0\.3\.so\.0' >/dev/null
+ldconfig -p | grep 'libxcb-cursor\.so\.0' >/dev/null
 compgen -G '/usr/share/vulkan/icd.d/*lvp*.json' >/dev/null

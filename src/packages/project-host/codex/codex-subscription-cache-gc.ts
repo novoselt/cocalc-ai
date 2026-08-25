@@ -5,6 +5,7 @@ import getLogger from "@cocalc/backend/logger";
 import { codexSubscriptionsPath } from "@cocalc/backend/data";
 import { podmanEnv } from "@cocalc/backend/podman/env";
 import { DEFAULT_PROJECT_RUNTIME_HOME } from "@cocalc/util/project-runtime";
+import { PROJECT_RUNTIME_SUBSCRIPTION_CODEX_HOME } from "./codex-runtime-paths";
 
 const logger = getLogger("project-host:codex-subscription-cache-gc");
 const PROJECT_RUNTIME_CODEX_HOME = join(DEFAULT_PROJECT_RUNTIME_HOME, ".codex");
@@ -86,7 +87,12 @@ async function getActiveSubscriptionHomes(): Promise<Set<string> | undefined> {
       const mounts = container?.Mounts;
       if (!Array.isArray(mounts)) continue;
       for (const mount of mounts) {
-        if (mount?.Destination !== PROJECT_RUNTIME_CODEX_HOME) continue;
+        if (
+          mount?.Destination !== PROJECT_RUNTIME_CODEX_HOME &&
+          mount?.Destination !== PROJECT_RUNTIME_SUBSCRIPTION_CODEX_HOME
+        ) {
+          continue;
+        }
         if (typeof mount?.Source === "string" && mount.Source) {
           active.add(await normalizePath(mount.Source));
         }
