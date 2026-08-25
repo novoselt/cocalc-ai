@@ -233,13 +233,20 @@ export class SyncFsWatchStore {
     loader: () => Promise<string>,
     deleted = false,
     codec?: DocCodec,
+    forceDiff = false,
   ): Promise<ExternalChange> {
     // Only an explicit unlink event may turn the baseline into a deletion.
     const current = deleted ? "" : await loader();
     const currentHash = this.sha(current);
     const prev = this.get(path);
 
-    if (prev && prev.hash === currentHash && !prev.deleted && !deleted) {
+    if (
+      !forceDiff &&
+      prev &&
+      prev.hash === currentHash &&
+      !prev.deleted &&
+      !deleted
+    ) {
       this.stats.exactHashNoops += 1;
       return { content: current, hash: currentHash, deleted: false };
     }

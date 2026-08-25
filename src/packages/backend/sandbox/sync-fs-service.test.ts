@@ -768,7 +768,6 @@ describe("SyncFsService", () => {
       { mesg: { time: legacyPatchId(100), parents: [], version: 1 }, seq: 1 },
     ]);
     const svc = new SyncFsService();
-    svc.on("error", () => undefined);
     (svc as any).getPatchWriter = async () => fake;
     (svc as any).loadDocViaSyncDoc = async () => "complete document";
 
@@ -777,10 +776,36 @@ describe("SyncFsService", () => {
       syncPath: "missing.slides",
     });
 
-    expect(initialized).toBe(false);
+    expect(initialized).toBe(true);
     expect(fake.messages).toHaveLength(1);
     expect((svc as any).store.get(path)).toMatchObject({
       content: "complete document",
+      deleted: false,
+    });
+    svc.close();
+  }, 10_000);
+
+  it("seeds an empty structured revision for a new missing file", async () => {
+    const path = join(dir, "new-missing.syncdb");
+    const fake = new FakeAStream([]);
+    const svc = new SyncFsService();
+    (svc as any).getPatchWriter = async () => fake;
+
+    const initialized = await (svc as any).initPath(path, {
+      project_id: "p-new-missing",
+      syncPath: "new-missing.syncdb",
+      doctype: {
+        type: "db",
+        patch_format: 1,
+        opts: { primary_keys: ["id"] },
+      },
+    });
+
+    expect(initialized).toBe(true);
+    expect(fake.messages).toHaveLength(1);
+    expect(fake.messages[0].mesg.meta).toBeUndefined();
+    expect((svc as any).store.get(path)).toMatchObject({
+      content: "",
       deleted: false,
     });
     svc.close();
