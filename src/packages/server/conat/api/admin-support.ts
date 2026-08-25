@@ -60,6 +60,7 @@ import getZendeskClient from "@cocalc/server/support/zendesk-client";
 import { isValidUUID, uuid } from "@cocalc/util/misc";
 
 import { requireDangerousSessionAuth } from "./dangerous-session-auth";
+import { getSupportContext as getCrmSupportContext } from "./crm";
 
 const logger = getLogger("server:conat:api:admin-support");
 
@@ -103,6 +104,10 @@ type AuthOpts = {
 type ZendeskSearchResult = { response: unknown; result: Ticket[] };
 type ZendeskShowResult = { response: unknown; result: Ticket };
 type ZendeskCommentsResult = { response: unknown; result: TicketComment[] };
+type ZendeskUserResult = {
+  response?: unknown;
+  result?: { email?: string; external_id?: string | null };
+};
 type ZendeskUpdateResult = {
   response?: { ticket?: Ticket; audit?: { id?: number } };
   result?: Ticket;
@@ -1037,6 +1042,29 @@ async function loadTicket(ticketId: number): Promise<{
   };
 }
 
+async function loadRequesterIdentity(requesterId: number): Promise<{
+  email?: string;
+  account_id?: string;
+}> {
+  try {
+    const client = await getZendeskClient();
+    const response = (await client.users.show(
+      requesterId,
+    )) as unknown as ZendeskUserResult;
+    const externalId = `${response.result?.external_id ?? ""}`.trim();
+    return {
+      email: `${response.result?.email ?? ""}`.trim() || undefined,
+      account_id: isValidUUID(externalId) ? externalId : undefined,
+    };
+  } catch (err) {
+    logger.debug("unable to load Zendesk requester identity for CRM context", {
+      requesterId,
+      err,
+    });
+    return {};
+  }
+}
+
 async function recordAudit({
   auditId,
   accountId,
@@ -1348,6 +1376,32 @@ export async function show(
         siteURL(),
       ]);
     const summary = summarizeTicket(ticket);
+    const requester = await withZendeskReadSlot(
+      () => loadRequesterIdentity(Number(ticket.requester_id)),
+      "Zendesk requester identity read",
+    );
+    let crmContext: AdminSupportShowResponse["crm_context"];
+    try {
+      crmContext = await getCrmSupportContext({
+        account_id: opts.account_id,
+        browser_id: opts.browser_id,
+        session_hash: opts.session_hash,
+        ticket_id: ticketId,
+        requester_email: requester.email,
+        requester_account_id:
+          requester.account_id ??
+          (isValidUUID(`${ticket.external_id ?? ""}`)
+            ? `${ticket.external_id}`
+            : undefined),
+        reason: `${reason}; correlate support ticket with reviewed CRM evidence`,
+        limit: 10,
+      });
+    } catch (err) {
+      logger.debug("CRM customer context is unavailable for support ticket", {
+        ticketId,
+        err,
+      });
+    }
     const ticketDetail = {
       ...summary,
       description: redactSupportText(
@@ -1368,6 +1422,7 @@ export async function show(
     const envelope = {
       server_time: new Date().toISOString(),
       ticket: ticketDetail,
+      ...(crmContext ? { crm_context: crmContext } : {}),
       redaction: "best_effort" as const,
     };
     const bounded = limitItemsByBytes({

@@ -8,6 +8,7 @@ export type {
   DBSchema,
   TableSchema,
   FieldSpec,
+  PgTableConstraint,
   UserOrProjectQuery,
 } from "./types";
 export type { RenderSpec } from "./render-types";

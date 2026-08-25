@@ -10,12 +10,14 @@ import { ReceivablesQueue } from "./queue";
 export function ReceivablesAdmin({
   onBack,
   onCreateOrder,
+  onOpenCustomer,
   onOpenOrder,
   orderId,
   creating = false,
 }: {
   onBack: () => void;
   onCreateOrder: () => void;
+  onOpenCustomer?: (id: string) => void;
   onOpenOrder: (id: string) => void;
   orderId?: string;
   creating?: boolean;
@@ -24,7 +26,13 @@ export function ReceivablesAdmin({
     return <ReceivableOrderCreate onBack={onBack} onCreated={onOpenOrder} />;
   }
   if (orderId) {
-    return <ReceivableOrderDetail id={orderId} onBack={onBack} />;
+    return (
+      <ReceivableOrderDetail
+        id={orderId}
+        onBack={onBack}
+        onOpenCustomer={onOpenCustomer}
+      />
+    );
   }
   return (
     <ReceivablesQueue onCreateOrder={onCreateOrder} onOpenOrder={onOpenOrder} />

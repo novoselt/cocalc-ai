@@ -4,6 +4,7 @@
  */
 
 import { authFirstRequireAccount } from "./util";
+import type { CrmSupportCustomerContext } from "@cocalc/util/crm";
 
 export const ADMIN_SUPPORT_TICKET_STATUSES = [
   "new",
@@ -134,6 +135,7 @@ export interface AdminSupportShowResponse {
     images: AdminSupportImageReference[];
   };
   comments: AdminSupportTicketComment[];
+  crm_context?: CrmSupportCustomerContext;
   result_bytes: number;
   truncated: boolean;
   redaction: "best_effort";

@@ -18,6 +18,7 @@ import {
   Select,
   Space,
   Spin,
+  Statistic,
   Table,
   Typography,
   message,
@@ -25,7 +26,7 @@ import {
 } from "antd";
 import { useEffect, useState } from "react";
 
-import { Icon, TimeAgo } from "@cocalc/frontend/components";
+import { Icon, type IconName, TimeAgo } from "@cocalc/frontend/components";
 import {
   FreshAuthModal,
   useFreshAuthAction,
@@ -41,6 +42,7 @@ import {
   type CommercialOrderSummary,
   type CommercialWorkflowState,
 } from "@cocalc/util/commercial-orders";
+import { COLORS } from "@cocalc/util/theme";
 import {
   COLLECTION_LABELS,
   ExternalLink,
@@ -56,6 +58,7 @@ import {
 } from "./shared";
 import { AccountIdentity, loadAccountDisplayNames } from "./account-names";
 import { AccountSelector } from "./account-selector";
+import "./receivables.css";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -203,21 +206,25 @@ function DiagnosticSummary({
       label: "Open orders",
       value: metricValue(diagnostics.counts.open_orders),
       detail: formatMoney(diagnostics.amounts.open_amount ?? "0", "usd"),
+      icon: "shopping-cart" as IconName,
     },
     {
       label: "Unassigned",
       value: metricValue(diagnostics.counts.unassigned),
       detail: "Open orders without an owner",
+      icon: "users" as IconName,
     },
     {
       label: "Overdue",
       value: metricValue(diagnostics.counts.overdue),
       detail: formatMoney(diagnostics.amounts.overdue_amount ?? "0", "usd"),
+      icon: "clock" as IconName,
     },
     {
       label: "Paid, not provisioned",
       value: metricValue(diagnostics.counts.paid_not_provisioned),
       detail: "Requires fulfillment",
+      icon: "server" as IconName,
     },
     {
       label: "Provisioned, not paid",
@@ -226,24 +233,27 @@ function DiagnosticSummary({
         diagnostics.amounts.fulfilled_unpaid_amount ?? "0",
         "usd",
       ),
+      icon: "credit-card" as IconName,
     },
   ];
   return (
     <div
+      className="receivables-summary-grid"
       aria-label="Accounts receivable summary"
-      style={{
-        display: "grid",
-        gap: 12,
-        gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
-      }}
     >
-      {metrics.map(({ label, value, detail }) => (
-        <Card key={label} size="small">
-          <Text type="secondary">{label}</Text>
-          <Title level={4} style={{ margin: "4px 0" }}>
-            {value}
-          </Title>
-          <Text>{detail}</Text>
+      {metrics.map(({ label, value, detail, icon }) => (
+        <Card className="receivables-metric-card" key={label} size="small">
+          <Flex align="flex-start" gap={10}>
+            <Icon
+              className="receivables-metric-icon"
+              name={icon}
+              style={{ color: COLORS.FEATURE_TEAL }}
+            />
+            <div>
+              <Statistic title={label} value={value} />
+              <Text className="receivables-metric-detail">{detail}</Text>
+            </div>
+          </Flex>
         </Card>
       ))}
     </div>
@@ -528,21 +538,56 @@ export function ReceivablesQueue({
   ];
 
   return (
-    <Flex vertical gap="middle">
-      <Flex justify="space-between" align="start" gap="middle" wrap>
-        <Paragraph style={{ marginBottom: 0 }}>
-          Shared operational queue for negotiated commercial orders. Collection
-          and fulfillment are tracked independently so early provisioning cannot
-          be mistaken for payment.
-        </Paragraph>
-        <Button type="primary" onClick={onCreateOrder}>
-          Create commercial order
-        </Button>
-      </Flex>
+    <Flex className="receivables-shell" vertical gap={18}>
+      <section
+        className="receivables-hero"
+        aria-labelledby="receivables-queue-title"
+      >
+        <Flex align="center" gap={20} justify="space-between" wrap>
+          <div className="receivables-hero-copy">
+            <div className="receivables-eyebrow">Commercial operations</div>
+            <Title
+              id="receivables-queue-title"
+              level={2}
+              style={{ margin: "8px 0" }}
+            >
+              Every invoice, payment, and promise in one queue
+            </Title>
+            <Paragraph style={{ fontSize: 16, marginBottom: 0 }}>
+              Track negotiated terms, collection, and fulfillment independently
+              so every order has an owner and early provisioning is never
+              mistaken for payment.
+            </Paragraph>
+          </div>
+          <Space wrap>
+            <Button
+              aria-label="Operations runbook"
+              ghost
+              href="/app-docs/admin/accounts-receivable"
+              icon={<Icon name="book" />}
+              size="large"
+            >
+              Operations runbook
+            </Button>
+            <Button
+              aria-label="Create commercial order"
+              icon={<Icon name="plus" />}
+              onClick={onCreateOrder}
+              size="large"
+            >
+              Create commercial order
+            </Button>
+          </Space>
+        </Flex>
+      </section>
 
       {diagnostics ? <DiagnosticSummary diagnostics={diagnostics} /> : null}
 
-      <Card size="small" title="Queue filters">
+      <Card
+        className="receivables-filter-card"
+        size="small"
+        title="Queue filters"
+      >
         <Form layout="vertical" onFinish={applyFilters}>
           <div
             style={{

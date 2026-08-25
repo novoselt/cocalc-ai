@@ -160,6 +160,39 @@ export interface Fields {
     | FieldSpec;
 }
 
+export type PgTableConstraint =
+  | {
+      name: string;
+      type: "check";
+      expression: string;
+    }
+  | {
+      name: string;
+      type: "unique";
+      columns: string[];
+    }
+  | {
+      name: string;
+      type: "foreign-key";
+      columns: string[];
+      references: {
+        table: string;
+        columns: string[];
+      };
+      on_delete?:
+        | "no action"
+        | "restrict"
+        | "cascade"
+        | "set null"
+        | "set default";
+      on_update?:
+        | "no action"
+        | "restrict"
+        | "cascade"
+        | "set null"
+        | "set default";
+    };
+
 type PgWhere =
   | (string | { [key: string]: any })[]
   | ((obj: any, db: any) => any[]);
@@ -320,6 +353,13 @@ export interface TableSchema<F extends Fields> {
     unique?: boolean;
   }[];
   pg_unique_indexes?: string[];
+  // Table-level relational invariants. Startup schema synchronization applies
+  // these only after every declared table exists, so references are safe even
+  // when table declarations are ordered differently or form cycles.
+  pg_constraints?: PgTableConstraint[];
+  // Auxiliary PostgreSQL sequences owned by this table's feature. Sequence
+  // names are global within the database and must only be declared once.
+  pg_sequences?: string[];
   crm_indexes?: string[]; // pg_indexes are not used by the CRM data; you must specify any indexing of the CRM data explicitly here
   user_query?: UserOrProjectQuery<F>;
   project_query?: UserOrProjectQuery<F>;

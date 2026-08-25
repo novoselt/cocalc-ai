@@ -36,11 +36,6 @@ const EXTENSION_DOCTYPES: Record<string, SyncDocDescriptor> = {
     primary_keys: ["date", "sender_id", "event", "message_id", "thread_id"],
     string_cols: ["input"],
   },
-  "cocalc-crm": {
-    doctype: "syncdb",
-    primary_keys: ["table", "id"],
-    string_cols: [],
-  },
 };
 
 const FILENAME_DOCTYPES: Record<string, SyncDocDescriptor> = {};

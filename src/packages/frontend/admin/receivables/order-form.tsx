@@ -45,6 +45,7 @@ import {
 } from "./site-license-reference";
 import { AccountSelector } from "./account-selector";
 import { AccountIdentity, useAccountDisplayNames } from "./account-names";
+import { CustomerSelector, PersonSelector } from "../customers/selector";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -62,6 +63,7 @@ interface CommercialItemFormValue {
 
 interface CommercialContactFormValue {
   id?: string;
+  crm_person_id?: string;
   role: CommercialContactRole;
   name_snapshot: string;
   email_snapshot: string;
@@ -76,7 +78,7 @@ interface CommercialPoolFormValue {
 
 export interface CommercialOrderFormValues {
   organization_name: string;
-  crm_organization_id?: number;
+  crm_organization_id?: string;
   customer_account_id?: string;
   stripe_customer_id?: string;
   site_license_id?: string;
@@ -243,6 +245,7 @@ export function prepareCommercialOrder(
   }));
   const contacts = values.contacts.map((contact) => ({
     id: contact.id,
+    ...(contact.crm_person_id ? { crm_person_id: contact.crm_person_id } : {}),
     role: contact.role,
     name_snapshot: contact.name_snapshot.trim(),
     email_snapshot: contact.email_snapshot.trim().toLowerCase(),
@@ -425,6 +428,7 @@ export function commercialOrderInitialValues(
     ],
     contacts: order?.contacts.map((contact) => ({
       id: contact.id,
+      crm_person_id: contact.crm_person_id ?? undefined,
       role: contact.role,
       name_snapshot: contact.name_snapshot,
       email_snapshot: contact.email_snapshot,
@@ -475,6 +479,7 @@ export function CommercialOrderForm({
     "include_site_license_plan",
     form,
   );
+  const crmOrganizationId = Form.useWatch("crm_organization_id", form);
   return (
     <Form
       form={form}
@@ -510,8 +515,8 @@ export function CommercialOrderForm({
           >
             <Input autoComplete="organization" />
           </Form.Item>
-          <Form.Item label="CRM organization ID" name="crm_organization_id">
-            <InputNumber min={1} precision={0} style={{ width: "100%" }} />
+          <Form.Item label="Customer record" name="crm_organization_id">
+            <CustomerSelector />
           </Form.Item>
           <Form.Item
             label="Customer CoCalc account"
@@ -756,6 +761,38 @@ export function CommercialOrderForm({
                   title={`Line item ${index + 1}`}
                 >
                   <FormGrid>
+                    <Form.Item
+                      label="CRM contact"
+                      name={[field.name, "crm_person_id"]}
+                      extra="Optional reviewed identity; name and email below remain immutable order snapshots."
+                    >
+                      <PersonSelector
+                        organization={crmOrganizationId}
+                        onSelectPerson={(person) => {
+                          if (!person) return;
+                          const primaryEmail =
+                            person.emails.find(({ is_primary }) => is_primary)
+                              ?.email_address ??
+                            person.emails[0]?.email_address;
+                          form.setFieldValue(
+                            ["contacts", field.name, "name_snapshot"],
+                            person.display_name,
+                          );
+                          if (primaryEmail)
+                            form.setFieldValue(
+                              ["contacts", field.name, "email_snapshot"],
+                              primaryEmail,
+                            );
+                          const organizationName =
+                            form.getFieldValue("organization_name");
+                          if (organizationName)
+                            form.setFieldValue(
+                              ["contacts", field.name, "organization_snapshot"],
+                              organizationName,
+                            );
+                        }}
+                      />
+                    </Form.Item>
                     <Form.Item
                       label="Description"
                       name={[field.name, "description"]}

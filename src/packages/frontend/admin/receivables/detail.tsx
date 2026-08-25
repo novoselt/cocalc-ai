@@ -64,6 +64,7 @@ import { CommercialOrderEditModal } from "./create";
 import { AccountIdentity, useAccountDisplayNames } from "./account-names";
 import { SiteLicenseReference } from "./site-license-reference";
 import { AccountSelector } from "./account-selector";
+import "./receivables.css";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -541,9 +542,11 @@ function ReconcilePreviewModal({
 export function ReceivableOrderDetail({
   id,
   onBack,
+  onOpenCustomer,
 }: {
   id: string;
   onBack: () => void;
+  onOpenCustomer?: (id: string) => void;
 }) {
   const api = webapp_client.conat_client.hub.commercialOrders;
   const [order, setOrder] = useState<CommercialOrder | null>(null);
@@ -1224,30 +1227,105 @@ export function ReceivableOrderDetail({
   );
 
   return (
-    <Flex vertical gap="middle">
+    <Flex className="receivables-shell" vertical gap={18}>
       <Flex justify="space-between" align="center" gap="middle" wrap>
+        <Button icon={<Icon name="arrow-left" />} onClick={onBack}>
+          Accounts receivable queue
+        </Button>
         <Space wrap>
-          <Button icon={<Icon name="arrow-left" />} onClick={onBack}>
-            Back to accounts receivable queue
+          <Button
+            href="/app-docs/admin/accounts-receivable"
+            icon={<Icon name="book" />}
+            size="small"
+          >
+            Operations runbook
           </Button>
           <Button
             icon={<Icon name="refresh" />}
             onClick={() => void loadOrder()}
+            size="small"
           >
             Refresh order
           </Button>
+          <Text type="secondary">Version {order.version}</Text>
         </Space>
-        <Text type="secondary">Version {order.version}</Text>
       </Flex>
 
-      <Card>
-        <Flex vertical gap="middle">
-          <div>
-            <Title level={3} style={{ marginBottom: 4 }}>
-              {order.order_number}: {order.organization_name}
+      <section
+        className="receivables-hero"
+        aria-labelledby="receivables-order-title"
+      >
+        <Flex align="start" gap={20} justify="space-between" wrap>
+          <div className="receivables-hero-copy">
+            <div className="receivables-eyebrow">{order.order_number}</div>
+            <Title
+              id="receivables-order-title"
+              level={2}
+              style={{ margin: "8px 0" }}
+            >
+              {order.organization_name}
             </Title>
             <StateTriplet order={order} />
           </div>
+          <Space wrap>
+            <Button
+              aria-label="Add internal note"
+              ghost
+              onClick={() => {
+                noteForm.resetFields();
+                setNoteOpen(true);
+              }}
+              size="large"
+            >
+              Add internal note
+            </Button>
+            <Button
+              aria-label="Assign and set next action"
+              onClick={() => openAssignment(order)}
+              size="large"
+            >
+              Assign and set next action
+            </Button>
+          </Space>
+        </Flex>
+      </section>
+
+      <div
+        className="receivables-detail-summary-grid"
+        aria-label="Commercial order summary"
+      >
+        <Card className="receivables-metric-card" size="small">
+          <Text type="secondary">Agreement total</Text>
+          <div className="receivables-order-metric-value">
+            {formatMoney(order.agreed_total, order.currency)}
+          </div>
+        </Card>
+        <Card className="receivables-metric-card" size="small">
+          <Text type="secondary">Owner</Text>
+          <div className="receivables-order-metric-value">
+            <AccountIdentity
+              accountId={order.assignee_account_id}
+              names={accountNames}
+              unknownLabel="Unassigned"
+            />
+          </div>
+        </Card>
+        <Card className="receivables-metric-card" size="small">
+          <Text type="secondary">Next action</Text>
+          <div className="receivables-order-metric-value">
+            {order.next_action || "Not recorded"}
+          </div>
+        </Card>
+        <Card className="receivables-metric-card" size="small">
+          <Text type="secondary">Action due</Text>
+          <div className="receivables-order-metric-value">
+            {formatDate(order.next_action_due_at)}
+          </div>
+        </Card>
+      </div>
+
+      <Card className="receivables-section-card" title="Order overview">
+        <Flex vertical gap="middle">
           <IndependentStateAlerts order={order} />
           <Descriptions bordered size="small" column={{ xs: 1, md: 2 }}>
             <Descriptions.Item label="Agreement total">
@@ -1278,6 +1356,19 @@ export function ReceivableOrderDetail({
             </Descriptions.Item>
             <Descriptions.Item label="Customer reference">
               {order.customer_reference ?? "Not set"}
+            </Descriptions.Item>
+            <Descriptions.Item label="Customer record">
+              {order.crm_organization_id && onOpenCustomer ? (
+                <Button
+                  type="link"
+                  style={{ height: "auto", padding: 0 }}
+                  onClick={() => onOpenCustomer(order.crm_organization_id!)}
+                >
+                  Open Customer 360
+                </Button>
+              ) : (
+                "Not linked"
+              )}
             </Descriptions.Item>
             <Descriptions.Item label="Stripe customer">
               {order.stripe_customer_id ?? "Not linked"}
@@ -1353,7 +1444,7 @@ export function ReceivableOrderDetail({
         />
       ) : null}
 
-      <Card title="Actions" size="small">
+      <Card className="receivables-section-card" title="Actions" size="small">
         <Flex vertical gap="middle">
           <Alert
             showIcon
@@ -1456,7 +1547,11 @@ export function ReceivableOrderDetail({
         </Flex>
       </Card>
 
-      <Card title="Contacts and invoice recipients" size="small">
+      <Card
+        className="receivables-section-card"
+        title="Contacts and invoice recipients"
+        size="small"
+      >
         <Table
           aria-label="Commercial order contacts"
           columns={contactColumns}
@@ -1469,7 +1564,11 @@ export function ReceivableOrderDetail({
         />
       </Card>
 
-      <Card title="Agreement line items" size="small">
+      <Card
+        className="receivables-section-card"
+        title="Agreement line items"
+        size="small"
+      >
         <Table
           aria-label="Commercial order line items"
           columns={itemColumns}
@@ -1495,7 +1594,7 @@ export function ReceivableOrderDetail({
         />
       </Card>
 
-      <Card title="Invoices" size="small">
+      <Card className="receivables-section-card" title="Invoices" size="small">
         {order.invoices.length === 0 ? (
           <Empty description="No invoices have been created" />
         ) : (
@@ -1634,7 +1733,7 @@ export function ReceivableOrderDetail({
         )}
       </Card>
 
-      <Card title="Payments" size="small">
+      <Card className="receivables-section-card" title="Payments" size="small">
         <Table
           aria-label="Commercial order payments"
           columns={paymentColumns}
@@ -1647,7 +1746,11 @@ export function ReceivableOrderDetail({
         />
       </Card>
 
-      <Card title="Immutable agreement terms" size="small">
+      <Card
+        className="receivables-section-card"
+        title="Immutable agreement terms"
+        size="small"
+      >
         <Paragraph type="secondary">
           This snapshot records what was agreed. It is diagnostic and is not a
           generic status or money editor.
@@ -1659,13 +1762,17 @@ export function ReceivableOrderDetail({
         </pre>
       </Card>
 
-      <Card title="Audit timeline" size="small">
+      <Card
+        className="receivables-section-card"
+        title="Audit timeline"
+        size="small"
+      >
         {events.length === 0 ? (
           <Empty description="No audit events recorded" />
         ) : (
           <Timeline
             items={events.map((event) => ({
-              children: (
+              content: (
                 <div>
                   <Flex gap="small" align="baseline" wrap>
                     <Text strong>{humanizeKey(event.event_type)}</Text>

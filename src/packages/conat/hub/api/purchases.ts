@@ -726,6 +726,7 @@ export interface SiteLicensePoolConfig {
 
 export interface SiteLicenseRecord {
   id: string;
+  crm_organization_id?: string | null;
   name: string;
   organization_name: string;
   bay_id: string;
