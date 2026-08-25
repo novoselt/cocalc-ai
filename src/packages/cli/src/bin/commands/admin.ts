@@ -2144,7 +2144,7 @@ Merge comments are private unless their corresponding --*-comment-public flag is
   adminSupport
     .command("spam <ticket-id>")
     .description(
-      "plan or mark a Zendesk ticket as spam and suspend its requester",
+      "plan or mark a Zendesk ticket as spam, with a solve-and-tag fallback",
     )
     .option(
       "--expected-updated-at <timestamp>",

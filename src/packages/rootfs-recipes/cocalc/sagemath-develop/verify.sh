@@ -79,16 +79,23 @@ as_owner pip --version | grep -F "$prefix/"
 as_owner jupyter kernelspec list
 as_owner jupyter kernelspec list 2>/dev/null | grep -qi sagemath
 as_owner jupyter kernelspec list 2>/dev/null | grep -q python3
-as_owner python - <<'PY'
+as_owner python - "$prefix/sage" <<'PY'
 import json
 import shutil
+import sys
 from pathlib import Path
 
+sage = sys.argv[1]
 kernel = json.loads(
     Path("/usr/local/share/jupyter/kernels/sagemath/kernel.json").read_text()
 )
 assert kernel["language"].lower() == "sage", kernel
-assert kernel["argv"][1:3] == ["-m", "sage.repl.ipython_kernel"], kernel
+assert kernel["argv"][:4] == [
+    sage,
+    "-python",
+    "-m",
+    "sage.repl.ipython_kernel",
+], kernel
 assert shutil.which(kernel["argv"][0]), kernel
 PY
 

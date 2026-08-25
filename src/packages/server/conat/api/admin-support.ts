@@ -710,7 +710,7 @@ export function redactSupportText(value: unknown, maxChars: number): string {
     "$1=[REDACTED_ACCOUNT_ID]",
   );
   text = text.replace(
-    /\b(authorization|api[_ -]?key|access[_ -]?token|password|passwd|secret)\b\s*[:=]\s*[^\s,;]+/gi,
+    /\b(authorization|api[_ -]?key|access[_ -]?token|token|password|passwd|secret)\b\s*[:=]\s*[^\s,;]+/gi,
     "$1=[REDACTED_SECRET]",
   );
   text = text.replace(
@@ -1569,7 +1569,8 @@ export async function getImage(
       client.attachments.show(attachmentId),
       "Zendesk attachment metadata read",
     )) as any;
-    const detailedAttachment = (detail?.result ??
+    const detailedAttachment = (detail?.result?.attachment ??
+      detail?.result ??
       detail?.response?.attachment ??
       attachment) as Attachment;
     if (
@@ -2564,7 +2565,146 @@ export async function merge(
 }
 
 const SPAM_WARNING =
-  "Zendesk will delete this ticket and suspend its requester. Use only for clear unsolicited junk.";
+  "Zendesk will delete this ticket and suspend its requester. If Zendesk definitively rejects that action, CoCalc will instead solve and tag the ticket without replying or claiming the requester was suspended. Use only for clear unsolicited junk.";
+
+const SPAM_FALLBACK_TAGS = ["spam", "unsolicited"];
+
+type ZendeskRawResponse = {
+  response?: {
+    status?: number;
+    statusCode?: number;
+    statusText?: string;
+  };
+  result?: unknown;
+};
+
+function zendeskRawStatus(value: ZendeskRawResponse): number | undefined {
+  const status = Number(value?.response?.status ?? value?.response?.statusCode);
+  return Number.isSafeInteger(status) && status >= 100 && status <= 599
+    ? status
+    : undefined;
+}
+
+function zendeskResultDetail(value: unknown): string {
+  if (value == null) return "";
+  let serialized: string;
+  try {
+    serialized =
+      typeof value === "string"
+        ? value
+        : JSON.stringify(value, (key, current) =>
+            /^(?:authorization|api_?key|access_?token|token|password|passwd|secret)$/i.test(
+              key,
+            )
+              ? "[REDACTED_SECRET]"
+              : current,
+          );
+  } catch {
+    serialized = `${value}`;
+  }
+  return redactSupportText(serialized, 2_000);
+}
+
+function zendeskRawError(
+  label: string,
+  value: ZendeskRawResponse,
+): Error | undefined {
+  const status = zendeskRawStatus(value);
+  if (status == null || status < 400) return undefined;
+  const statusText = `${value?.response?.statusText ?? ""}`.trim();
+  const detail = zendeskResultDetail(value?.result);
+  return Object.assign(
+    new Error(
+      `${label} failed (${status}${statusText ? ` ${statusText}` : ""})${detail ? `: ${detail}` : ": no response details"}`,
+    ),
+    { statusCode: status, code: status },
+  );
+}
+
+async function zendeskRawRequest({
+  client,
+  method,
+  resource,
+  body,
+  label,
+}: {
+  client: Awaited<ReturnType<typeof getZendeskClient>>;
+  method: "PUT";
+  resource: Array<string | number>;
+  body: unknown;
+  label: string;
+}): Promise<ZendeskRawResponse> {
+  const response = (await withTimeout(
+    client.tickets._rawRequest(method, resource, body),
+    label,
+  )) as ZendeskRawResponse;
+  if (zendeskRawStatus(response) == null) {
+    throw new Error(`${label} returned no HTTP status`);
+  }
+  const error = zendeskRawError(label, response);
+  if (error) throw error;
+  return response;
+}
+
+function zendeskSpamFallbackAllowed(error: unknown): boolean {
+  const candidate = error as any;
+  return Number(candidate?.statusCode ?? candidate?.code) === 422;
+}
+
+async function applySpamFallback({
+  client,
+  plan,
+  idempotencyKey,
+  auditId,
+}: {
+  client: Awaited<ReturnType<typeof getZendeskClient>>;
+  plan: Awaited<ReturnType<typeof buildSpamPlan>>;
+  idempotencyKey: string;
+  auditId: string;
+}): Promise<Ticket> {
+  const tags = finalTags(plan.ticket, {
+    add_tags: SPAM_FALLBACK_TAGS,
+    remove_tags: [],
+  });
+  await zendeskRawRequest({
+    client,
+    method: "PUT",
+    resource: ["tickets", plan.ticketId],
+    body: {
+      ticket: {
+        safe_update: true,
+        updated_stamp: plan.expectedUpdatedAt,
+        status: "solved",
+        tags,
+        metadata: {
+          custom: {
+            cocalc_idempotency_key: idempotencyKey,
+            cocalc_payload_hash: plan.hash,
+            cocalc_audit_id: auditId,
+            cocalc_spam_fallback: true,
+          },
+        },
+      },
+    },
+    label: "Zendesk spam solve-and-tag fallback",
+  });
+  const verified = await withZendeskReadSlot(
+    () => loadTicketOnly(plan.ticketId),
+    "Zendesk spam fallback verification",
+  );
+  const verifiedTags = new Set(
+    (Array.isArray(verified.tags) ? verified.tags : []).map((tag) => `${tag}`),
+  );
+  if (
+    verified.status !== "solved" ||
+    SPAM_FALLBACK_TAGS.some((tag) => !verifiedTags.has(tag))
+  ) {
+    throw new Error(
+      "Zendesk spam fallback could not be verified as solved and tagged",
+    );
+  }
+  return verified;
+}
 
 function spamPayloadHash({
   ticketId,
@@ -2701,26 +2841,57 @@ export async function spam(
     await setMutationStatus({ idempotencyKey, status: "remote_started" });
     remoteStarted = true;
     const client = await getZendeskClient();
-    const response = await withTimeout(
-      client.tickets.put(["tickets", ticketId, "mark_as_spam"], {}),
-      "Zendesk mark ticket as spam",
-    );
-    const initialJob = zendeskJobFromResponse(response);
-    zendeskJobId = `${initialJob.id ?? ""}`.trim() || undefined;
-    if (zendeskJobId) {
-      await setMutationStatus({
-        idempotencyKey,
-        status: "remote_started",
-        zendeskJobId,
+    let jobStatus = "completed";
+    let fallbackReason: string | undefined;
+    let fallbackTicket: Ticket | undefined;
+    try {
+      const response = await zendeskRawRequest({
+        client,
+        method: "PUT",
+        resource: ["tickets", ticketId, "mark_as_spam"],
+        body: {},
+        label: "Zendesk mark ticket as spam",
       });
+      const initialJob = zendeskJobFromResponse(response);
+      zendeskJobId = `${initialJob.id ?? ""}`.trim() || undefined;
+      if (zendeskJobId) {
+        await setMutationStatus({
+          idempotencyKey,
+          status: "remote_started",
+          zendeskJobId,
+        });
+      }
+      const job = await waitForZendeskJob(client, initialJob, "spam");
+      jobStatus = `${job.status ?? "completed"}`;
+      if (jobStatus !== "completed") {
+        throw new Error(
+          `Zendesk spam job ${zendeskJobId ?? "(unknown)"} ${jobStatus}: ${job.message ?? "no details"}`,
+        );
+      }
+    } catch (error) {
+      if (!zendeskSpamFallbackAllowed(error)) throw error;
+      fallbackReason = redactSupportText(error, 2_000);
+      try {
+        fallbackTicket = await applySpamFallback({
+          client,
+          plan,
+          idempotencyKey,
+          auditId,
+        });
+      } catch (fallbackError) {
+        throw Object.assign(
+          new Error(
+            `Zendesk rejected spam handling and the safe fallback also failed. Spam rejection: ${fallbackReason}. Fallback error: ${redactSupportText(fallbackError, 2_000)}`,
+          ),
+          {
+            statusCode: (fallbackError as any)?.statusCode,
+            code: (fallbackError as any)?.code,
+          },
+        );
+      }
+      jobStatus = "fallback_completed";
     }
-    const job = await waitForZendeskJob(client, initialJob, "spam");
-    const jobStatus = `${job.status ?? "completed"}`;
-    if (jobStatus !== "completed") {
-      throw new Error(
-        `Zendesk spam job ${zendeskJobId ?? "(unknown)"} ${jobStatus}: ${job.message ?? "no details"}`,
-      );
-    }
+    const usedFallback = fallbackTicket != null;
     const result: AdminSupportSpamResponse = {
       audit_id: auditId,
       operation: "spam",
@@ -2729,7 +2900,10 @@ export async function spam(
       idempotency_key: idempotencyKey,
       idempotent_replay: false,
       ticket_id: ticketId,
-      requester_suspended: true,
+      requester_suspended: !usedFallback,
+      disposition: usedFallback ? "solved_and_tagged" : "deleted_as_spam",
+      ...(fallbackReason ? { fallback_reason: fallbackReason } : {}),
+      ...(fallbackTicket ? { ticket: summarizeTicket(fallbackTicket) } : {}),
       ...(zendeskJobId ? { zendesk_job_id: zendeskJobId } : {}),
       zendesk_job_status: jobStatus,
     };
@@ -2749,7 +2923,7 @@ export async function spam(
       idempotencyKey,
       priorUpdatedAt: expectedUpdatedAt,
       zendeskJobId,
-      resultStatus: jobStatus,
+      resultStatus: usedFallback ? "fallback_solved_and_tagged" : jobStatus,
       durationMs: Date.now() - started,
     });
     return result;

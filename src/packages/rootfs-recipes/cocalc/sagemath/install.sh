@@ -585,6 +585,27 @@ PY
     done
   fi
 
+  # Sage's generated kernelspec uses a bare "python3" command.  Jupyter
+  # replaces that token with the frontend's sys.executable, which bypasses
+  # the Sage launcher when JupyterLab comes from another environment.  Route
+  # both Sage-owned kernels through `sage -python` so every frontend gets the
+  # PATH and other runtime variables needed by Singular and Sage's libraries.
+  log "Configuring Jupyter kernels to use the Sage runtime environment"
+  $SUDO "$sage_bin" -python - "$sage_bin" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+sage = sys.argv[1]
+for name in ("python3", "sagemath"):
+    path = Path("/usr/local/share/jupyter/kernels") / name / "kernel.json"
+    data = json.loads(path.read_text())
+    argv = data["argv"]
+    if argv[:2] != [sage, "-python"]:
+        data["argv"] = [sage, "-python", *argv[1:]]
+        path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+
   if [ "$install_sagetex" = "true" ]; then
     log "Installing sagetex package"
     "$sage_bin" -p sagetex || log "sagetex install failed; continuing"
