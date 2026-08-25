@@ -11,6 +11,8 @@ interface Props {
   style?: CSSProperties;
   onClick?: (evt: any) => void;
   preview?: boolean;
+  // Accessible name for the selection control; only used when onClick is set.
+  ariaLabel?: string;
 }
 
 export default function Arrow({
@@ -23,6 +25,7 @@ export default function Arrow({
   style,
   onClick,
   preview,
+  ariaLabel = "Edge",
 }: Props) {
   const { x: x0, y: y0 } = start;
   const { x: x1, y: y1 } = end;
@@ -64,16 +67,26 @@ export default function Arrow({
   };
 
   return (
-    <div onClick={onClick} style={outerStyle}>
-      {/* Invisible click hit area (wider than the line) */}
+    <div style={outerStyle}>
+      {/* Selection surface: wider than the line so it is easy to hit, and a
+          real button so it is reachable by Tab and activated by Enter/Space
+          rather than being pointer-only. Left visually transparent; the
+          browser's own focus ring is deliberately not suppressed. */}
       {onClick && (
-        <div
+        <button
+          type="button"
+          aria-label={ariaLabel}
+          onClick={onClick}
           style={{
             position: "absolute",
             top: "-10px",
             left: 0,
             right: 0,
             height: "20px",
+            padding: 0,
+            border: "none",
+            background: "transparent",
+            cursor: "pointer",
           }}
         />
       )}

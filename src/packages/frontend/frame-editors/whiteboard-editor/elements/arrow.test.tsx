@@ -9,7 +9,7 @@ stem and the head have to straddle that axis, and the head must never extend
 past the endpoint it points at.
 */
 
-import { render } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 import Arrow from "./arrow";
 
@@ -89,5 +89,63 @@ describe("Arrow geometry", () => {
     // would render the head at 0.25 while the stem stayed at 0.5.
     expect(group.style.opacity).toBe("0.5");
     expect(svg!.querySelector("polygon")!.getAttribute("opacity")).toBeNull();
+  });
+
+  it("exposes edge selection as a button with an accessible name", () => {
+    render(
+      <Arrow start={{ x: 0, y: 0 }} end={{ x: 100, y: 0 }} onClick={() => {}} />,
+    );
+    const button = screen.getByRole("button", { name: "Edge" });
+    // a native button, so Enter/Space activate it without extra key handling
+    expect(button.tagName).toBe("BUTTON");
+    expect(button.getAttribute("type")).toBe("button");
+  });
+
+  it("accepts a caller-supplied accessible name", () => {
+    render(
+      <Arrow
+        start={{ x: 0, y: 0 }}
+        end={{ x: 100, y: 0 }}
+        onClick={() => {}}
+        ariaLabel="Edge from A to B"
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Edge from A to B" })).toBeTruthy();
+  });
+
+  it("is focusable and activates from the keyboard path", () => {
+    const onClick = jest.fn();
+    render(
+      <Arrow start={{ x: 0, y: 0 }} end={{ x: 100, y: 0 }} onClick={onClick} />,
+    );
+    const button = screen.getByRole("button", { name: "Edge" });
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    // jsdom does not synthesise click from Enter on a button the way a browser
+    // does, so assert the activation handler the browser would reach.
+    fireEvent.click(button);
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not suppress the focus ring", () => {
+    render(
+      <Arrow start={{ x: 0, y: 0 }} end={{ x: 100, y: 0 }} onClick={() => {}} />,
+    );
+    const button = screen.getByRole("button", { name: "Edge" });
+    expect(button.style.outline).toBe("");
+  });
+
+  it("renders no selection control when the edge is not clickable", () => {
+    render(<Arrow start={{ x: 0, y: 0 }} end={{ x: 100, y: 0 }} />);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("fires selection once, not once per nested layer", () => {
+    const onClick = jest.fn();
+    render(
+      <Arrow start={{ x: 0, y: 0 }} end={{ x: 100, y: 0 }} onClick={onClick} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edge" }));
+    expect(onClick).toHaveBeenCalledTimes(1);
   });
 });
