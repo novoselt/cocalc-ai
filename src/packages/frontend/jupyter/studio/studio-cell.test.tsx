@@ -163,6 +163,34 @@ describe("StudioCell transient output states", () => {
   });
 });
 
+describe("StudioCell hidden input", () => {
+  it("uses the accessible reveal control for the clicked cell", () => {
+    const set_jupyter_metadata = jest.fn();
+    renderStudioCell({
+      actions: { set_jupyter_metadata },
+      cell: fromJS({
+        id: "cell-1",
+        cell_type: "code",
+        input: "1+1",
+        metadata: { jupyter: { source_hidden: true } },
+      }),
+    });
+
+    const reveal = screen.getByRole("button", {
+      name: "Show hidden cell input",
+    });
+    reveal.focus();
+    expect(reveal).toHaveFocus();
+    fireEvent.click(reveal);
+
+    expect(set_jupyter_metadata).toHaveBeenCalledWith(
+      "cell-1",
+      "source_hidden",
+      undefined,
+    );
+  });
+});
+
 describe.each([
   ["standard", false],
   ["reading", true],

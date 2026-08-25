@@ -414,10 +414,23 @@ export const CellInput: React.FC<CellInputProps> = React.memo(
     }
 
     function render_hidden(): React.JSX.Element {
+      const onReveal =
+        props.actions != null && !props.is_readonly
+          ? () =>
+              props.actions?.set_jupyter_metadata(
+                props.id,
+                "source_hidden",
+                undefined,
+              )
+          : undefined;
       return (
         <CellHiddenPart
+          onReveal={onReveal}
+          revealLabel="Show hidden cell input"
           title={
-            "Input is hidden; show via Edit --> Toggle hide input in the menu."
+            onReveal == null
+              ? "Input is hidden."
+              : "Input is hidden. Click to show it."
           }
         />
       );
