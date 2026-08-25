@@ -748,6 +748,7 @@ export const StudioCell: React.FC<StudioCellProps> = React.memo((props) => {
                       isDragging={isDragging}
                       stdin={stdin}
                       runOverlay={runOverlay}
+                      readOnly={read_only}
                     />
                   </ScrollToBottomOutput>
                 )}
