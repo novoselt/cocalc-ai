@@ -6,6 +6,7 @@ import {
   runtimeSshServerForProviderReconcile,
   runReconcileOnce,
 } from "@cocalc/server/cloud";
+import { updateHostFromProviderSnapshot } from "./reconcile";
 import { before, after, getPool } from "@cocalc/server/test";
 
 beforeAll(async () => {
@@ -168,6 +169,58 @@ describe("cloud runtime endpoint reconciliation", () => {
         { public_ip: "203.0.113.10" },
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("cloud provider snapshot concurrency", () => {
+  const hostId = "ed8f9cb0-80d6-4fd2-9dd8-ad5ef2c8eca4";
+
+  beforeEach(async () => {
+    await getPool().query("DELETE FROM project_hosts WHERE id=$1", [hostId]);
+  });
+
+  afterEach(async () => {
+    await getPool().query("DELETE FROM project_hosts WHERE id=$1", [hostId]);
+  });
+
+  it("does not resurrect a stale runtime after delete or reprovision", async () => {
+    await getPool().query(
+      `INSERT INTO project_hosts (id, name, status, metadata, created, updated)
+       VALUES ($1, 'Concurrency guard', 'deprovisioned', $2, NOW(), NOW())`,
+      [
+        hostId,
+        {
+          machine: { cloud: "nebius" },
+          desired_state: "stopped",
+        },
+      ],
+    );
+
+    await expect(
+      updateHostFromProviderSnapshot(
+        {
+          id: hostId,
+          status: "running",
+          metadata: {
+            machine: { cloud: "nebius" },
+            runtime: { instance_id: "stale-instance" },
+          },
+        },
+        {
+          status: "error",
+          runtime: {
+            instance_id: "stale-instance",
+            provider_status: "missing",
+          },
+        },
+      ),
+    ).resolves.toBe(false);
+
+    const { rows } = await getPool().query(
+      "SELECT status, metadata->'runtime' AS runtime FROM project_hosts WHERE id=$1",
+      [hostId],
+    );
+    expect(rows).toEqual([{ status: "deprovisioned", runtime: null }]);
   });
 });
 

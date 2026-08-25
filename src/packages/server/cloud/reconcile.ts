@@ -592,7 +592,7 @@ async function dataDiskStatus(
   return "unknown";
 }
 
-async function updateHost(
+export async function updateHostFromProviderSnapshot(
   row: HostRow,
   updates: {
     status?: string;
@@ -654,10 +654,27 @@ async function updateHost(
     params.push(sshServer);
   }
   if (!sets.length) return;
-  await pool().query(
-    `UPDATE project_hosts SET ${sets.join(", ")}, updated=NOW() WHERE id=$1 AND deleted IS NULL`,
+  const where = ["id=$1", "deleted IS NULL"];
+  const expectedInstanceId =
+    `${row.metadata?.runtime?.instance_id ?? ""}`.trim();
+  if (expectedInstanceId) {
+    where.push(`metadata->'runtime'->>'instance_id'=$${idx++}`);
+    params.push(expectedInstanceId);
+  }
+  const result = await pool().query(
+    `UPDATE project_hosts
+        SET ${sets.join(", ")}, updated=NOW()
+      WHERE ${where.join(" AND ")}
+      RETURNING id`,
     params,
   );
+  const updated = (result.rowCount ?? result.rows?.length ?? 0) > 0;
+  if (!updated && expectedInstanceId) {
+    logger.info("cloud reconcile: skipped stale provider snapshot", {
+      host_id: row.id,
+      expected_instance_id: expectedInstanceId,
+    });
+  }
   const { rows } = await pool().query(
     `SELECT id, status, deleted, last_seen, metadata
        FROM project_hosts
@@ -668,7 +685,10 @@ async function updateHost(
   if (rows[0]) {
     await recordHostAvailabilityFromSnapshot(rows[0], "cloud_reconcile");
   }
+  return updated;
 }
+
+const updateHost = updateHostFromProviderSnapshot;
 
 export function runtimeSshServerForProviderReconcile(
   row: Pick<HostRow, "metadata">,
