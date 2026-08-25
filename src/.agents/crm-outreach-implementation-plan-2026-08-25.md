@@ -103,7 +103,11 @@ mailbox.
   and again immediately before provider submission.
 - Treat provider timeouts and retries without creating duplicate Zendesk
   tickets.
-- Create clear internal follow-up when a prospect replies.
+- Reconcile prospect replies against the existing shared follow-up task against the existing shared follow-up task.
+- Surface My Read Receipts view observations on the exact outreach message in
+  CRM UI, CLI, and the customer timeline.
+- Create a shared, assigned no-response follow-up task for every sent outreach
+  message, due after a reviewed and configurable interval.
 - Provide complete UI and CLI parity.
 - Work correctly in one-bay Launchpad and multibay Rocket.
 
@@ -113,6 +117,8 @@ mailbox.
 - Build a general marketing automation platform.
 - Send newsletters, product announcements, drip sequences, or automated
   nurture campaigns.
+- Automatically send reminder or follow-up messages. The first release flags
+  due work, but a human reviews and sends every follow-up through Zendesk.
 - Purchase or enrich contact lists.
 - Infer recipient addresses from domains and send without human review.
 - Automatically write messages using AI or send AI-generated text without
@@ -120,8 +126,9 @@ mailbox.
 - Automatically advance opportunity stages based on email events.
 - Claim that Zendesk ticket creation proves final email delivery or human
   reading.
-- Implement email open tracking, employee surveillance, or conversation
-  scoring.
+- Implement a new first-party tracking pixel, employee surveillance, or
+  conversation scoring. CoCalc only imports the bounded view observations that
+  the existing My Read Receipts Zendesk integration already records.
 - Fall back to direct SendGrid/SMTP delivery when Zendesk is unavailable.
 - Build enterprise sales territories, quotas, or generalized approval policy.
 
@@ -151,6 +158,16 @@ mailbox.
     demand.
 12. No outbound provider credential or webhook secret appears in CLI output,
     logs, CRM metadata, or browser state.
+13. A My Read Receipts event is named `view_observed`, not `read` or
+    `human_opened`. It is useful engagement evidence but not proof that a human
+    read the message, because image proxies, previews, and security scanners can
+    load tracking resources.
+14. Every `notification_requested` outreach with a `no_response` follow-up
+    policy creates exactly one linked task, initially task, initially waiting a snapshotted
+   
+    due time and owner. Queries and dashboards expose the task; they do not
+   
+    replace it.
 
 ## User Workflows
 
@@ -169,8 +186,9 @@ An agent starts from a reviewed organization such as `CRM-2026-000003`:
 7. The worker creates a proactive Zendesk ticket and records the returned
    ticket ID.
 8. CRM links the ticket and adds an append-only outreach activity.
-9. A reply webhook marks the delivery as replied and creates or updates a
-   follow-up task for the relationship owner.
+9. CRM creates one assigned waiting follow-up task at the snapshotted due time.
+10. A requester-reply webhook marks the delivery as replied and completes that
+    waiting task.
 
 ### Reviewed Batch Outreach
 
@@ -201,10 +219,81 @@ an unrestricted recipient query or generic campaign.
   comment implementation.
 - CRM shows the linked ticket, current status, last public interaction time,
   and a bounded reply summary.
-- The first requester reply creates one open `contact` task, or updates the
-  existing outreach follow-up task, assigned to the opportunity owner and due
-  on the next business day.
+- The first requester reply completes the existing waiting `contact` task with
+  outcome `response_received`; it does not create a duplicate task.
 - No reply automatically changes an opportunity from discovery to qualified.
+
+### View Observations
+
+The existing My Read Receipts Zendesk integration records when an outbound
+ticket comment appears to have been viewed. Import this as a first-class,
+append-only engagement observation tied to the exact Zendesk ticket and comment.
+
+For the opening outreach message:
+
+- record the opening Zendesk comment ID when creating the proactive ticket;
+- ingest the first and subsequent observed-view timestamps idempotently;
+- project the first observation, latest observation, and observation count onto
+  the delivery for efficient queue and Customer 360 display;
+- append one concise `outreach_view_observed` CRM activity for the first
+  observation and retain later observations in the engagement event history;
+- expose the signal in `outreach show`, JSON output, queue filters, and the
+  opportunity timeline;
+- do not automatically advance the opportunity, complete a task, or claim that
+  the recipient read the content.
+
+Prefer My Read Receipts' structured Zendesk ticket-field storage when available.
+If the installed configuration only emits private ticket comments, accept a
+receipt only when the Zendesk comment author/integration identity matches the
+configured My Read Receipts identity and the payload matches a versioned,
+fixture-tested adapter. Never parse an arbitrary private note containing words
+such as "seen" or "read".
+
+Only retain the prospect email relation, ticket/comment correlation, observation
+time, provider event key, and bounded provenance. Do not copy IP addresses,
+browser/OS fingerprints, user agents, location, or tracking URLs into CRM.
+
+### No-Response Follow-Up
+
+Follow-up must be durable shared work rather than a query that an employee has
+to remember to run.
+
+Each outreach template defines a constrained follow-up policy:
+
+- `no_response`, required for adoption-pilot, renewal, and expansion outreach;
+- `none`, allowed only for explicitly reviewed informational outreach; and
+- `follow_up_after_days`, an integer override snapshotted into every delivery.
+
+If the template has no override, use the site-wide default. When a delivery
+reaches `notification_requested`, atomically create one linked CRM task:
+
+- type `contact`;
+- state `waiting`;
+- assignee equal to the opportunity owner, falling back to the organization
+  relationship owner;
+- due at `notification_requested_at + follow_up_after_days`;
+- linked organization, person, opportunity, outreach delivery, and Zendesk
+  ticket;
+- subject such as `Follow up on adoption-pilot offer`.
+
+Before the due time, it appears under **Waiting for response**. At or after the
+due time, if no requester reply or opt-out has arrived, the same task becomes
+due/overdue in the ordinary shared CRM task queue and the Outreach follow-up
+view. Do not create a second task merely because the first became overdue.
+
+A requester reply completes the waiting task idempotently and records
+`response_received` in the completion activity in the completion activity. An opt-out or hard suppression
+cancels it. Ticket closure without a requester reply does not silently complete
+it; an employee must complete, cancel, or reschedule it with a reason. A view
+observation does not complete or postpone it, but the due queue may distinguish
+**view observed, no reply** from **no view observed**.
+
+The first release never sends the follow-up automatically. The queue links to
+the current redacted Zendesk thread and prints the existing
+`cocalc admin support reply <ticket>` command. A later reviewed follow-up can be
+recorded as another outbound comment and reschedules the same task from that
+comment's notification time. Multi-step automated sequences remain out of
+scope.
 
 ### Opt-Out
 
@@ -274,6 +363,8 @@ Fields:
 - `subject_template`
 - `body_markdown_template`
 - `required_fields` constrained text array
+- `follow_up_policy`: `no_response` or `none`
+- optional `follow_up_after_days` integer override
 - `created_by_account_id`
 - `created_at`
 - `activated_by_account_id`, `activated_at`
@@ -340,7 +431,12 @@ Fields:
 - deterministic `provider_external_id`, for example
   `cocalc-crm-outreach:<delivery-uuid>`
 - optional `zendesk_ticket_id`
-- `last_zendesk_comment_id`, `last_zendesk_status`, and bounded sync metadata
+- `opening_zendesk_comment_id`, `last_zendesk_comment_id`,
+  `last_zendesk_status`, and bounded sync metadata
+- projected `first_view_observed_at`, `last_view_observed_at`, and
+  `view_observation_count`
+- snapshotted `follow_up_policy`, `follow_up_after_days`,
+  `notification_requested_at`, and `follow_up_due_at`
 - `approved_at`, `queued_at`, `provider_submitted_at`, `replied_at`,
   `closed_at`, `cancelled_at`
 - `next_attempt_at`, `attempt_count`, bounded `last_error`
@@ -423,6 +519,29 @@ Provider event ID is unique. The HTTP handler validates the Zendesk signature,
 persists the event, and returns quickly. A seed worker fetches authoritative
 ticket metadata and applies idempotent CRM activities.
 
+### Outreach Engagement Events
+
+Suggested table: `crm_outreach_engagement_events`.
+
+Fields:
+
+- `id` UUID
+- `delivery_id`
+- `kind`, constrained to `view_observed` initially
+- `provider`, constrained to `my_read_receipts` initially
+- stable `provider_event_id`, or a canonical digest when the provider supplies
+  no event ID
+- `zendesk_ticket_id` and `zendesk_comment_id`
+- `observed_at` and `ingested_at`
+- bounded provenance metadata containing parser/field-map version, but no IP,
+  user-agent, browser, OS, location, or tracking URL
+
+Provider event identity is unique. If no stable event ID exists, derive the
+digest from provider, Zendesk ticket ID, Zendesk comment ID, normalized
+observation timestamp, and the authenticated integration identity. The delivery
+projection is rebuilt from these immutable rows and must never be the only copy
+of the observations.
+
 ### Worker State
 
 Use a small `crm_outreach_worker_state` table, keyed by provider, for durable
@@ -497,7 +616,14 @@ internal correlation keys; UUIDs remain in `external_id` and CRM.
 
 Before production enablement:
 
-- configure a shared support address such as `partnerships@cocalc.com`;
+- provision `partnerships@cocalc.com` as a standard Google Workspace mailbox,
+  not a private employee mailbox, Google Group, or unsupported alias chain;
+- add it to Zendesk as an external support address, automatically forward its
+  inbound mail to the Zendesk-provided address, verify forwarding, and
+  authorize Zendesk to send for `cocalc.com` through the required DNS email
+  authentication;
+- set the proactive ticket's `recipient` to that configured support address so
+  customer notifications and replies use the shared identity;
 - configure a Zendesk Partnerships/Sales group and view;
 - verify that the proactive-ticket trigger sends a requester notification for
   an agent-created ticket with a public comment;
@@ -536,6 +662,7 @@ Recommended settings and defaults:
 | `crm_outreach_send_per_day`             |   `200` | integer `1..5000`  | Seed-global provider calls per rolling 24 hours.                  |
 | `crm_outreach_send_per_domain_per_day`  |    `20` | integer `1..500`   | Calls to one normalized recipient domain per rolling 24 hours.    |
 | `crm_outreach_contact_cooldown_days`    |    `90` | integer `1..730`   | Default minimum interval between initiated outreach to one email. |
+| `crm_outreach_default_followup_days`    |     `7` | integer `1..90`    | Default calendar-day wait before no-response follow-up is due.    |
 | `crm_outreach_worker_concurrency`       |     `1` | integer `1..10`    | Maximum local effectful Zendesk calls in flight.                  |
 | `crm_outreach_worker_batch_size`        |    `10` | integer `1..100`   | Maximum rows claimed per worker cycle.                            |
 | `crm_outreach_retry_max_attempts`       |     `8` | integer `1..20`    | Maximum effectful/reconciliation attempts before dead letter.     |
@@ -551,6 +678,13 @@ Use separate settings for provider routing and required content:
 - `crm_outreach_footer_markdown`
 - `crm_outreach_zendesk_webhook_secret` as a secret site setting rendered with
   the standard secret setting input.
+- `crm_outreach_read_receipts_enabled`
+- `crm_outreach_read_receipts_mode`, constrained to `ticket_fields` or
+  `private_comments`
+- the Zendesk ticket-field IDs used by the installed My Read Receipts
+  configuration when `ticket_fields` mode is selected
+- the expected My Read Receipts Zendesk integration/user ID when
+  `private_comments` mode is selected
 
 Configuration behavior:
 
@@ -650,6 +784,8 @@ Reads:
 - `listContactSuppressions`
 - `getOutreachLimits`
 - `getOutreachDiagnostics`
+- `listOutreachEngagementEvents`
+- `listOutreachFollowups`
 
 Mutations:
 
@@ -662,6 +798,8 @@ Mutations:
 - add/revoke suppression
 - process a reviewed Zendesk reply association
 - sync one linked Zendesk ticket
+- reschedule or resolve a no-response follow-up through the shared CRM task
+  transition service
 
 Worker-only operations use a distinct seed-internal subject and capability.
 Browsers and ordinary agent tokens cannot claim deliveries or write provider
@@ -692,6 +830,7 @@ cocalc admin crm outreach retry|reconcile
 cocalc admin crm outreach batch create|add|remove|preview|approve|queue
 cocalc admin crm outreach templates list|show|create|revise|activate|retire
 cocalc admin crm outreach suppressions list|add|revoke
+cocalc admin crm outreach followups list|show|reschedule|complete|cancel
 cocalc admin crm outreach limits
 cocalc admin crm outreach diagnostics
 ```
@@ -722,6 +861,17 @@ CLI requirements:
 - Preview shows the exact final recipient, subject, plain text, rendered body,
   footer, opt-out URL, Zendesk routing, warnings, suppressions, cooldown, and
   effective limits.
+- `show` and stable JSON output include `first_view_observed_at`,
+  `last_view_observed_at`, `view_observation_count`, the exact associated
+  Zendesk comment ID, and a machine-readable confidence caveat.
+- `followups list` supports due-before, overdue, assignee, organization,
+  opportunity, viewed/unviewed, and replied/unreplied filters. It is an
+  outreach-specific projection of ordinary CRM tasks, not a second task model.
+- Follow-up rows include the exact `cocalc cocalc admin support show <ticket>` and
+  `cocalc admin support reply <ticket> <ticket>` commands for the linked Zendesk ticket.
+- `followups reschedule|complete|cancel` delegates to shared CRM task mutation
+  semantics; add a generic task reschedule operation rather than editing due
+  timestamps through an outreach-only shortcut.
 - Approval and queue commits require cookie-backed fresh authentication,
   expected versions, idempotency keys, and immutable reasons.
 - `queue --commit` returns after durable queueing; it does not wait for every
@@ -779,8 +929,11 @@ Show:
 - configured minute/hour/day/domain limits and current rolling consumption;
 - Zendesk provider backoff and next eligible send;
 - stale queued, failed, and indeterminate deliveries;
+- waiting, due today, and overdue no-response follow-up counts;
 - filters for owner, kind, batch, organization, opportunity, state, date, and
   Zendesk ticket;
+- engagement filters for not observed, view observed, replied, and replied
+  without a prior view observation;
 - a visible delivery kill switch status and link to site settings.
 
 ### Draft And Review
@@ -807,6 +960,9 @@ The outreach detail page shows:
 - provider attempts and actionable errors;
 - linked organization, person, opportunity, task, and Zendesk ticket;
 - last public interaction metadata and an on-demand redacted Zendesk thread;
+- a clearly labeled **View observed** timestamp/count for the opening message,
+  with a tooltip explaining proxy/scanner limitations;
+- linked follow-up owner, due time, state, and reschedule/complete actions;
 - pause, retry, cancel, suppress, and open-in-Zendesk actions;
 - append-only outreach timeline.
 
@@ -834,9 +990,15 @@ Webhook processing:
 6. Fetch current ticket metadata through the shared Zendesk client.
 7. Match only tickets with the deterministic external ID and CRM link.
 8. Append bounded activities for requester reply, staff reply, status change,
-   and closure.
-9. Create/update the internal follow-up task on the first requester reply.
-10. Mark the inbox event processed or retry with bounded exponential backoff.
+   closure, and authenticated My Read Receipts observations.
+9. Correlate every observation to the exact outbound Zendesk comment; ignore
+   uncorrelated or ambiguously parsed receipt notes.
+10. Insert the immutable engagement event, rebuild delivery projections, and
+    append the first-view CRM activity idempotently.
+11. Complete the existing no-response follow-up task on the first requester
+    reply; never create a duplicate response task.
+12. Cancel the task on a verified opt-out or hard suppression.
+13. Mark the inbox event processed or retry with bounded exponential backoff.
 
 Run periodic reconciliation for all nonterminal outreach tickets so missed or
 out-of-order webhooks do not permanently lose state. The reconciler uses a
@@ -899,11 +1061,18 @@ end-to-end test with an internal recipient.
 - missing CRM activities or external references;
 - active outreach tickets without an organization/person/opportunity link;
 - replied tickets without an open or completed follow-up task;
+- sent outreach missing its required waiting follow-up task;
+- overdue no-response follow-ups grouped by owner and age;
+- duplicate follow-up tasks for one delivery;
 - active suppressions and recently blocked deliveries;
 - templates with invalid required fields or no active revision;
 - approved content missing the required footer or opt-out token;
 - webhook event backlog, retries, and dead letters;
 - stale Zendesk reconciliation cursors.
+- read-receipt mode and configured field/integration identities without
+  secrets;
+- uncorrelated, ambiguous, malformed, or duplicate My Read Receipts events;
+- deliveries whose engagement projections disagree with immutable events.
 
 Add structured metrics for queue depth, claim latency, provider latency,
 success/failure/indeterminate rates, 429s, suppressions, replies, and webhook
@@ -928,6 +1097,10 @@ It must explain:
 - Zendesk setup and proactive notification trigger;
 - pause, retry, reconciliation, and diagnostics;
 - the meaning of `notification_requested`;
+- the meaning and limitations of `view_observed`;
+- no-response task creation, due/overdue queues, rescheduling, and human-reviewed
+  Zendesk follow-up;
+- My Read Receipts ticket-field/private-comment configuration and diagnostics;
 - why there is no direct SendGrid fallback;
 - incident response and emergency delivery shutdown.
 
@@ -941,6 +1114,9 @@ Include examples in CLI builds so agents can operate without repository access.
 - Finalize states, types, CLI JSON schemas, and audit actions.
 - Configure a Zendesk sandbox or controlled test group, form, submitter, shared
   address, tags, and proactive requester-notification trigger.
+- Inspect the installed My Read Receipts configuration and choose structured
+  ticket fields where available; otherwise capture sanitized private-comment
+  fixtures and pin the expected integration identity.
 - Define provider adapter and fake provider contracts.
 - Add site settings with all effectful flags defaulting to `no`.
 - Exit criterion: exact internal-recipient proactive ticket flow is documented
@@ -967,10 +1143,12 @@ Include examples in CLI builds so agents can operate without repository access.
 - Exit criterion: retries and simulated timeouts cannot create duplicate
   tickets.
 
-### Phase 3: Replies, Webhooks, And Suppressions
+### Phase 3: Replies, Receipts, Follow-Up, And Suppressions
 
 - Implement signed webhook ingestion and periodic reconciliation.
-- Add reply activities and follow-up tasks.
+- Add reply and view-observation activities.
+- Create waiting no-response tasks after successful proactive ticket creation
+  and complete/cancel them deterministically on reply or suppression.
 - Add opaque opt-out links and suppression management.
 - Verify webhook replay, missed events, out-of-order comments, and opt-out race
   handling.
@@ -1003,6 +1181,7 @@ Include examples in CLI builds so agents can operate without repository access.
 ### Unit Tests
 
 - State transition validity.
+- Follow-up policy validation, due-time snapshots, and owner fallback.
 - Template field allowlist and deterministic rendering.
 - Exact immutable snapshots and revision behavior.
 - Email/domain normalization and deduplication.
@@ -1021,10 +1200,19 @@ Include examples in CLI builds so agents can operate without repository access.
 - Two workers cannot exceed one shared rate budget.
 - Two queue commits cannot create duplicate deliveries.
 - Concurrent provider claim and opt-out leaves no post-opt-out provider call.
+- Provider result replay cannot create duplicate no-response tasks.
+- Reply, opt-out, task reschedule, and due processing races converge on one
+  valid task state.
 - Indeterminate operation blocks blind retry.
 - Batch pause prevents later claims.
 - Setting limits lower during a run immediately stops new claims.
 - Webhook replay and out-of-order events remain idempotent.
+- My Read Receipts field and authenticated private-comment fixtures produce the
+  same canonical `view_observed` event.
+- Arbitrary human private notes, malformed receipts, duplicate receipts, and
+  observations for unrelated comments are ignored and diagnosed.
+- Delivery first/latest/count projections rebuild exactly from engagement
+  events.
 - Customer/person merges retain suppression and delivery references.
 
 ### Provider Integration Tests
@@ -1061,11 +1249,16 @@ Using a fake Zendesk adapter or sandbox:
 5. Observe configured rate status before and after the worker claim.
 6. Verify exactly one Zendesk ticket and CRM external reference.
 7. Replay the provider result and webhook without duplicate activity.
-8. Reply as the prospect and verify the CRM follow-up task.
-9. Opt out and verify later queue attempts are suppressed.
-10. Lower the site rate to one per hour and prove a second delivery waits.
-11. Disable delivery and prove queued state remains intact.
-12. Complete the same supported operations from the admin UI.
+8. Verify the initial message created one waiting CRM follow-up task, then move
+   time beyond its due date and verify it appears in CLI and UI overdue views.
+9. Simulate My Read Receipts for the opening comment and verify CLI, UI, and
+   timeline show **View observed** with the correct caveat.
+10. Reply as the prospect and verify the existing follow-up task completes.
+11. Opt out and verify later queue attempts are suppressed and waiting follow-up
+    is cancelled.
+12. Lower the site rate to one per hour and prove a second delivery waits.
+13. Disable delivery and prove queued state remains intact.
+14. Complete the same supported operations from the admin UI.
 
 Do not send real external prospect mail from Lite, staging, or automated CI.
 
@@ -1111,6 +1304,12 @@ The CRM outreach system is complete when:
   opportunity, owner, and immutable snapshot;
 - every Zendesk ticket is linked and visible from CRM Customer 360;
 - requester replies create bounded CRM activity and actionable follow-up;
+- every sent adoption/renewal/expansion outreach creates exactly one assigned,
+  snapshotted no-response task that is visible before and after its due time and
+  resolved deterministically by reply or suppression;
+- My Read Receipts observations are correlated to exact outbound comments,
+  retained as immutable bounded engagement events, and clearly surfaced as
+  non-authoritative **View observed** signals in CRM UI and CLI;
 - suppressions and opt-outs reliably stop future outreach;
 - Zendesk remains authoritative for full public conversation content;
 - no workflow requires a personal employee mailbox, browser automation, raw
