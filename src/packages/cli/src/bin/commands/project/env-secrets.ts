@@ -186,7 +186,9 @@ export function registerProjectEnvSecretCommands(
   const secrets = project
     .command("secrets")
     .alias("secret")
-    .description("manage encrypted project secrets");
+    .description(
+      "manage encrypted project secrets; changes apply without a project restart",
+    );
 
   secrets
     .command("list")
@@ -203,7 +205,9 @@ export function registerProjectEnvSecretCommands(
 
   secrets
     .command("set <name>")
-    .description("set or replace one project secret")
+    .description(
+      "set or replace one project secret without restarting the project",
+    )
     .option("-w, --project <project>", "project id or name")
     .option("--value <value>", "secret value")
     .option("--file <path>", "read secret value from file")
@@ -239,7 +243,7 @@ export function registerProjectEnvSecretCommands(
   secrets
     .command("delete <name>")
     .alias("rm")
-    .description("delete one project secret")
+    .description("delete one project secret without restarting the project")
     .option("-w, --project <project>", "project id or name")
     .action(
       async (name: string, opts: { project?: string }, command: Command) => {
@@ -260,7 +264,7 @@ export function registerProjectEnvSecretCommands(
 
   secrets
     .command("copy")
-    .description("copy project secrets from another collaborator project")
+    .description("copy project secrets live from another collaborator project")
     .requiredOption("--from <project>", "source project id or name")
     .option("-w, --project <project>", "target project id or name")
     .option("--name <name...>", "secret name(s) to copy; default copies all")

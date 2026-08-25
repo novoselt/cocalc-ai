@@ -30,6 +30,13 @@ system will use these action ids so Codex and other agents can open the right
 panel in the current browser session instead of merely describing where to
 click.
 
+Adding, replacing, deleting, or copying a secret refreshes the mounted files in
+a running project immediately. You do not need to restart the project. A
+program that already read and cached a secret may still need its own reload. If
+the project is stopped, it receives the latest secrets the next time it starts;
+if a live refresh cannot reach the project host, the Secrets panel reports that
+the refresh is pending and offers a retry.
+
 ## Use the secret
 
 Secrets are files, not environment variables. In a terminal, notebook, or
