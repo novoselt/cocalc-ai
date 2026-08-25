@@ -1591,6 +1591,8 @@ test("software deploy static invokes Rocket with a local remote-backed bundle", 
       "static",
       "deploy-test",
       "staging",
+      "--remote",
+      "private-staging-target",
       "--env-file",
       join(dir, "missing.env"),
     ]);
@@ -1621,6 +1623,8 @@ test("software deploy static invokes Rocket with a local remote-backed bundle", 
     file.url,
     "--bundle-sha256",
     file.sha256,
+    "--remote",
+    "private-staging-target",
     "--api",
     "https://staging.cocalc.ai",
     "--yes",
@@ -1633,6 +1637,13 @@ test("software deploy static invokes Rocket with a local remote-backed bundle", 
   assert.equal(history.deployments[0].status, "succeeded");
   assert.equal(history.deployments[0].tag, "deploy-test");
   assert.equal(history.deployments[0].profile_or_channel, "staging");
+  assert.deepEqual(history.deployments[0].deployed_by, {});
+  assert.equal(history.deployments[0].target.remote, undefined);
+  const record = JSON.parse(
+    r2.objects.get(history.deployments[0].record_key)!.toString("utf8"),
+  );
+  assert.deepEqual(record.deployed_by, {});
+  assert.equal(record.target.remote, undefined);
 });
 
 test("software deploy stops before remote work when typecheck fails", async () => {

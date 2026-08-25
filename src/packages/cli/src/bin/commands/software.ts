@@ -11,8 +11,7 @@ import {
   mkdtemp,
   writeFile,
 } from "node:fs/promises";
-import { hostname } from "node:os";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Command } from "commander";
 import { humanSize } from "@cocalc/util/misc";
@@ -3236,8 +3235,6 @@ function resolveDeploySite({
   profileName: string;
   api?: string;
   remote?: string;
-  account_id?: string;
-  email_address?: string;
 } {
   if (opts.api && opts.remote) {
     return {
@@ -3254,24 +3251,6 @@ function resolveDeploySite({
     profileName,
     api,
     remote: opts.remote,
-    account_id: authProfile?.account_id,
-    email_address: authProfile?.email_address,
-  };
-}
-
-function deployedBy({
-  target,
-  deps,
-}: {
-  target: ReturnType<typeof resolveDeploySite>;
-  deps: SoftwareCommandDeps;
-}): SoftwareDeploymentRecord["deployed_by"] {
-  const env = deps.env ?? process.env;
-  return {
-    user: env.USER || env.LOGNAME || undefined,
-    host: hostname(),
-    account_id: target.account_id,
-    email_address: target.email_address,
   };
 }
 
@@ -3680,7 +3659,6 @@ function deploymentRecordBase({
   target,
   kind,
   details,
-  deps,
 }: {
   component: SoftwareDeployComponent;
   artifactComponent: SoftwareBuildComponent;
@@ -3690,7 +3668,6 @@ function deploymentRecordBase({
   target: ReturnType<typeof resolveDeploySite>;
   kind: SoftwareDeploymentRecord["target"]["kind"];
   details?: Record<string, unknown>;
-  deps: SoftwareCommandDeps;
 }): SoftwareDeploymentRecord {
   const git = artifact.remote_entry.git;
   return {
@@ -3707,14 +3684,15 @@ function deploymentRecordBase({
     artifact_id: artifact.artifact_id,
     tag: artifact.tag,
     git,
-    deployed_by: deployedBy({ target, deps }),
+    // Deployment records are published through the public software bucket.
+    // Never put operator identity, local hostnames, or SSH targets in them.
+    deployed_by: {},
     target: {
       kind,
       ...(kind === "release-channel"
         ? { channel: profileOrChannel }
         : { profile: profileOrChannel }),
       api: target.api,
-      remote: target.remote,
     },
     status: "started",
     details,
@@ -4593,7 +4571,6 @@ Supported deploy/smoke components:
                   : {}),
                 ...(starInstall ?? {}),
               },
-              deps,
             });
             const finalRecord = await runWithDeploymentHistory({
               record,
