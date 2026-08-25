@@ -310,6 +310,39 @@ function affinityWorker(req) {
   return isAvailable(worker) ? worker : undefined;
 }
 
+// A hard navigation tears down the current page's API and WebSocket traffic,
+// so it is a safe recovery boundary for worker affinity. Rotating here means a
+// browser refresh escapes a worker whose readiness probe still succeeds
+// while normal application requests are stuck. Requests made by the loaded
+// application remain pinned to the newly selected worker.
+function isTopLevelDocumentNavigation(req) {
+  if (`${req?.method ?? ""}`.toUpperCase() !== "GET") {
+    return false;
+  }
+  const mode = `${req?.headers?.["sec-fetch-mode"] ?? ""}`.toLowerCase();
+  const destination = `${req?.headers?.["sec-fetch-dest"] ?? ""}`.toLowerCase();
+  return mode === "navigate" && destination === "document";
+}
+
+function selectWorkerCandidate({ candidates, sticky, rotate, offset }) {
+  if (sticky != null && !rotate) {
+    return { worker: sticky, changed: false, nextOffset: offset };
+  }
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  const pool =
+    rotate && sticky != null && candidates.length > 1
+      ? candidates.filter((worker) => worker.id !== sticky.id)
+      : candidates;
+  const worker = pool[offset % pool.length];
+  return {
+    worker,
+    changed: sticky == null || worker.id !== sticky.id,
+    nextOffset: offset + 1,
+  };
+}
+
 function drainedWorkerIds() {
   const drained = new Set();
   if (!drainFile) {
@@ -332,16 +365,18 @@ function drainedWorkerIds() {
 
 function chooseWorker(req) {
   const sticky = req == null ? undefined : affinityWorker(req);
-  if (sticky != null) {
-    return { worker: sticky, changed: false };
-  }
   const candidates = healthyWorkers();
-  if (candidates.length === 0) {
+  const selected = selectWorkerCandidate({
+    candidates,
+    sticky,
+    rotate: isTopLevelDocumentNavigation(req),
+    offset: nextWorkerOffset,
+  });
+  if (selected == null) {
     return undefined;
   }
-  const worker = candidates[nextWorkerOffset % candidates.length];
-  nextWorkerOffset += 1;
-  return { worker, changed: true };
+  nextWorkerOffset = selected.nextOffset;
+  return { worker: selected.worker, changed: selected.changed };
 }
 
 function affinitySetCookie(worker) {
@@ -641,8 +676,10 @@ module.exports = {
   isContentAddressedStaticRequest,
   isImmutableStaticStatus,
   isPubliclyCacheable,
+  isTopLevelDocumentNavigation,
   prepareResponseHeaders,
   proxyRequestHeaders,
   recordWorkerHealth,
+  selectWorkerCandidate,
   serializeProxyRequest,
 };
