@@ -60,8 +60,8 @@ const logger = getLogger("server:commercial-orders:stripe");
 const FLOW = "commercial_order";
 const PAYMENT_METHOD_TYPES = ["card", "us_bank_account"] as const;
 
-function dueAt(order: CommercialOrder): string {
-  const date = new Date();
+function dueAt(order: CommercialOrder, from = new Date()): string {
+  const date = new Date(from.getTime());
   date.setUTCDate(
     date.getUTCDate() + Math.max(order.payment_terms_days ?? 21, 0),
   );
@@ -1133,10 +1133,16 @@ async function assertExistingStripeInvoiceCandidate(opts: {
     opts.order,
     site,
   );
+  const created = Number(opts.stripeInvoice.created);
+  if (!Number.isFinite(created) || created <= 0) {
+    throw Error("Stripe invoice does not have a valid creation date");
+  }
   assertInvoiceDeliveryConfiguration(
     opts.stripeInvoice,
     opts.order,
-    Math.floor(new Date(dueAt(opts.order)).getTime() / 1000),
+    Math.floor(
+      new Date(dueAt(opts.order, new Date(created * 1000))).getTime() / 1000,
+    ),
     false,
   );
   await assertStripeInvoiceMatchesOrder(

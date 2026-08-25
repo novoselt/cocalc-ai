@@ -197,6 +197,7 @@ function stripeInvoiceFixture(changes: Record<string, unknown> = {}) {
   return {
     id: "in_1",
     object: "invoice",
+    created: 1787443200,
     livemode: false,
     status: "draft",
     currency: "usd",
@@ -310,6 +311,10 @@ describe("commercial Stripe invoices", () => {
         },
       ],
     });
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   it("creates a Stripe draft with stable metadata and idempotency keys", async () => {
@@ -553,6 +558,7 @@ describe("commercial Stripe invoices", () => {
   });
 
   it("links only an invoice explicitly prepared for the exact commercial order", async () => {
+    jest.useFakeTimers({ now: new Date("2026-10-01T00:00:00.000Z") });
     const prepared = stripeInvoiceFixture({
       metadata: {
         flow: "commercial_order",
