@@ -1,4 +1,10 @@
-import { CSSProperties, ReactNode, useCallback, useRef } from "react";
+import {
+  CSSProperties,
+  ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+} from "react";
 import { getElement } from "./tools/tool-panel";
 import Draggable from "react-draggable";
 import { delay } from "awaiting";
@@ -38,6 +44,13 @@ export default function NotFocused({
   const { id } = element;
   const nodeRef = useRef<any>({});
   const snapRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+
+  // Clear snap lines if this component unmounts mid-drag, mirroring focused.tsx
+  useEffect(() => {
+    return () => {
+      setSnapLines?.([]);
+    };
+  }, [setSnapLines]);
   const shiftKeyRef = useRef<boolean>(false);
 
   const computeSnapForDrag = useCallback(
@@ -140,11 +153,13 @@ export default function NotFocused({
         shiftKeyRef.current = !!(e as MouseEvent).shiftKey;
       }}
       onStop={(e, data) => {
+        // Unconditionally: dragging back to the exact starting position takes
+        // the else branch below, which would otherwise leave guides on screen.
+        setSnapLines?.([]);
         if (data.x || data.y) {
           shiftKeyRef.current = !!(e as MouseEvent).shiftKey;
           computeSnapForDrag(data);
           const snap = snapRef.current;
-          setSnapLines?.([]);
           frame.actions.moveElements([element], {
             x: data.x + snap.dx,
             y: data.y + snap.dy,

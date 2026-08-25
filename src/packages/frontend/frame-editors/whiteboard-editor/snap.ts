@@ -148,7 +148,10 @@ export function computeSnap({
     h: movingRect.h,
   };
 
-  if (dx !== 0) {
+  // Gate on whether a target matched, not on whether an offset was needed:
+  // dx is 0 exactly when the element is already perfectly aligned, which is
+  // precisely when the guide is most useful.
+  if (matchedVertical.length > 0) {
     for (const m of matchedVertical) {
       const x = m.target;
       // Extend the vertical guide line to cover the moving element
@@ -168,7 +171,7 @@ export function computeSnap({
     }
   }
 
-  if (dy !== 0) {
+  if (matchedHorizontal.length > 0) {
     for (const m of matchedHorizontal) {
       const y = m.target;
       const { start, end } = getHorizontalLineExtent(

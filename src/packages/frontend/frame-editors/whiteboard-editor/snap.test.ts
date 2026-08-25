@@ -94,6 +94,34 @@ describe("computeSnap alignment", () => {
     expect(dy).toBe(0);
   });
 
+  it("still shows the guide at exact alignment", () => {
+    // Regression: guides were gated on dx !== 0, so the line vanished at the
+    // precise moment the element became aligned -- when it matters most.
+    const result = computeSnap({
+      movingRect: rect(0, 0),
+      otherElements: [elt(0, 200, 50, 50, "other")],
+      canvasScale: 1,
+    });
+    expect(result.dx).toBe(0);
+    expect(
+      result.lines.some((l) => l.orientation === "vertical" && l.position === 0),
+    ).toBe(true);
+  });
+
+  it("emits no guides when nothing is within tolerance", () => {
+    // 1010 keeps all three edge/centre points (1010, 1035, 1060) at least 10
+    // units from any major grid line, so neither the far neighbour nor the
+    // grid is in range.
+    const result = computeSnap({
+      movingRect: rect(1010, 1010),
+      otherElements: [elt(0, 0, 50, 50, "other")],
+      canvasScale: 1,
+    });
+    expect(result.lines).toHaveLength(0);
+    expect(result.dx).toBe(0);
+    expect(result.dy).toBe(0);
+  });
+
   it("aligns left edges and emits a vertical guide", () => {
     const result = computeSnap({
       movingRect: rect(3, 200),
