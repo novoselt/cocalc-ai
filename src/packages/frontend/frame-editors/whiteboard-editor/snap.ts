@@ -17,8 +17,17 @@ import { Element, Rect } from "./types";
 import { getPosition } from "./math";
 import { GRID_MAJOR, GRID_MINOR } from "./elements/grid";
 
-// Distance threshold in data coordinates within which snapping activates
-const SNAP_THRESHOLD = 8;
+// Distance within which snapping activates, in *screen* pixels. Targets and
+// rects are in data coordinates, so this is divided by canvasScale at use --
+// otherwise the tolerance would be 2 data units at 25% zoom and 32 at 400%,
+// making snapping nearly unreachable when zoomed out and far too sticky when
+// zoomed in.
+export const SNAP_THRESHOLD = 8;
+
+export function snapThreshold(canvasScale?: number): number {
+  const scale = canvasScale != null && canvasScale > 0 ? canvasScale : 1;
+  return SNAP_THRESHOLD / scale;
+}
 
 export interface SnapLine {
   // A horizontal or vertical guide line to render
@@ -77,6 +86,7 @@ export function computeSnap({
   const movingXPoints = [movingLeft, movingCenterX, movingRight];
   const movingYPoints = [movingTop, movingCenterY, movingBottom];
 
+  const threshold = snapThreshold(canvasScale);
   let bestDx = Infinity;
   let bestDy = Infinity;
   const matchedVertical: { target: number; movingVal: number }[] = [];
@@ -86,7 +96,7 @@ export function computeSnap({
     if (target.orientation === "vertical") {
       for (const mx of movingXPoints) {
         const dist = Math.abs(mx - target.position);
-        if (dist < SNAP_THRESHOLD) {
+        if (dist < threshold) {
           if (dist < Math.abs(bestDx)) {
             bestDx = target.position - mx;
             matchedVertical.length = 0;
@@ -105,7 +115,7 @@ export function computeSnap({
     } else {
       for (const my of movingYPoints) {
         const dist = Math.abs(my - target.position);
-        if (dist < SNAP_THRESHOLD) {
+        if (dist < threshold) {
           if (dist < Math.abs(bestDy)) {
             bestDy = target.position - my;
             matchedHorizontal.length = 0;
@@ -124,8 +134,8 @@ export function computeSnap({
     }
   }
 
-  const dx = Math.abs(bestDx) < SNAP_THRESHOLD ? bestDx : 0;
-  const dy = Math.abs(bestDy) < SNAP_THRESHOLD ? bestDy : 0;
+  const dx = Math.abs(bestDx) < threshold ? bestDx : 0;
+  const dy = Math.abs(bestDy) < threshold ? bestDy : 0;
 
   // Build guide lines
   const lines: SnapLine[] = [];

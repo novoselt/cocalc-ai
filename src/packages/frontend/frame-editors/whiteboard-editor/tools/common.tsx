@@ -4,6 +4,8 @@ import { Button, Popconfirm } from "antd";
 import { Tooltip } from "@cocalc/frontend/components";
 
 export const SELECTED = "#337ab7";
+// Foreground for controls rendered on top of SELECTED.
+export const SELECTED_FG = "white";
 
 export const WHITEBOARD_COMPACT_BUTTON_STYLE: CSSProperties = {
   minWidth: 0,

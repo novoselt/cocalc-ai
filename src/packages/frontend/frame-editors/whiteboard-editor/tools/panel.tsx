@@ -12,7 +12,7 @@ import { Icon } from "@cocalc/frontend/components/icon";
 import { r_join } from "@cocalc/frontend/components/r_join";
 import { useFrameContext } from "../hooks";
 import { MAX_ELEMENTS } from "../math";
-import { SELECTED } from "./common";
+import { SELECTED, SELECTED_FG } from "./common";
 import { Tool, TOOLS } from "./desc";
 export const PANEL_STYLE: CSS = {
   zIndex: MAX_ELEMENTS + 1,
@@ -125,7 +125,7 @@ function ToolButton({ tool, isSelected }) {
   );
 }
 
-function SnapToggleButton() {
+export function SnapToggleButton() {
   const { actions, id, desc } = useFrameContext();
   const snapEnabled = desc.get("snapToAlignment") !== false;
   return (
@@ -141,6 +141,8 @@ function SnapToggleButton() {
       >
         <Button
           type="text"
+          aria-label="Snap to alignment"
+          aria-pressed={snapEnabled}
           onClick={() => {
             actions.set_frame_tree({
               id,
@@ -149,7 +151,7 @@ function SnapToggleButton() {
           }}
           style={
             snapEnabled
-              ? { color: "#fff", background: SELECTED }
+              ? { color: SELECTED_FG, background: SELECTED }
               : { opacity: 0.5 }
           }
         >
