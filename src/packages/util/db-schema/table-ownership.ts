@@ -377,6 +377,7 @@ export const TABLE_OWNERSHIP = {
       "commercial_orders",
       "commercial_payments",
       "commercial_provider_operations",
+      "commercial_quotes",
       "commercial_stripe_events",
       "commercial_worker_state",
       "crm_activities",
