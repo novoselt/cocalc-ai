@@ -161,9 +161,12 @@ export default function Code({
       }
       const h = measureHeight();
       if (h == null) return;
-      if (h > elementHRef.current) {
+      if (h > elementHRef.current + 2) {
         // Grow immediately so bounding box matches content.
         // Commit when unfocused so collaborators see the change.
+        // The 2px threshold mirrors the shrink side: without it a constant
+        // sub-pixel overshoot in the measurement feeds back through the
+        // ResizeObserver and the cell grows without bound.
         shrink.cancel();
         actions.setElement({ obj: { id: element.id, h }, commit: !focused });
       } else if (!focused && h < elementHRef.current - 2) {
