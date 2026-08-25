@@ -185,9 +185,6 @@ const DEPLOY_COMPONENT_ARGUMENT = `software component (${DEPLOY_COMPONENTS_HELP}
 const INFO_COMPONENT_ARGUMENT = `software component (${INFO_COMPONENTS_HELP})`;
 const PROFILE_OR_CHANNEL_ARGUMENT =
   "site profile (see cocalc auth list) or release channel (dev, candidate or stable)";
-const KNOWN_ROCKET_REMOTES: Record<string, string> = {
-  "https://cocalc.ai": "ubuntu@10.206.0.38",
-};
 
 type SoftwareInfoComponent = SoftwareBuildComponent | SoftwareDeployComponent;
 
@@ -3227,26 +3224,6 @@ function currentCliInvocation(): { command: string; args: string[] } {
   return { command: process.execPath, args: [] };
 }
 
-function normalizeApiOrigin(api: string | undefined): string | undefined {
-  const raw = `${api ?? ""}`.trim();
-  if (!raw) return undefined;
-  try {
-    const url = new URL(
-      raw.startsWith("http://") || raw.startsWith("https://")
-        ? raw
-        : `https://${raw}`,
-    );
-    return url.origin;
-  } catch {
-    return raw.replace(/\/+$/, "");
-  }
-}
-
-function inferRocketRemote(api: string | undefined): string | undefined {
-  const origin = normalizeApiOrigin(api);
-  return origin ? KNOWN_ROCKET_REMOTES[origin] : undefined;
-}
-
 function resolveDeploySite({
   profile,
   opts,
@@ -3273,11 +3250,10 @@ function resolveDeploySite({
   const profileName = profile ?? config.current_profile ?? "default";
   const authProfile = config.profiles[profileName];
   const api = opts.api ?? authProfile?.api;
-  const remote = opts.remote ?? inferRocketRemote(api);
   return {
     profileName,
     api,
-    remote,
+    remote: opts.remote,
     account_id: authProfile?.account_id,
     email_address: authProfile?.email_address,
   };

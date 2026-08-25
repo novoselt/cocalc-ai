@@ -1719,13 +1719,7 @@ test("software deploy static accepts comma-separated profiles", async () => {
   assert.equal(firstRocket[2], "staging");
   assert.equal(firstRocket.includes("--remote"), false);
   assert.equal(secondRocket[2], "prod");
-  assert.deepEqual(
-    secondRocket.slice(
-      secondRocket.indexOf("--remote"),
-      secondRocket.indexOf("--remote") + 2,
-    ),
-    ["--remote", "ubuntu@10.206.0.38"],
-  );
+  assert.equal(secondRocket.includes("--remote"), false);
   const payload = JSON.parse(logs.at(-1) ?? "{}");
   assert.equal(payload.ok, true);
   assert.deepEqual(payload.data.targets, ["staging", "prod"]);
@@ -2432,7 +2426,7 @@ test("software deploy resolves API from auth profile without a hardcoded bay rem
   );
 });
 
-test("software deploy hub pushes a local-only artifact before Rocket deploy", async () => {
+test("software deploy leaves the bay remote to named Rocket cluster config", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-deploy-hub-"));
   const localStore = join(dir, "store");
   const source = join(dir, "hub.tar.xz");
@@ -2485,8 +2479,6 @@ test("software deploy hub pushes a local-only artifact before Rocket deploy", as
     file.url,
     "--bundle-sha256",
     file.sha256,
-    "--remote",
-    "ubuntu@10.206.0.38",
     "--api",
     "https://cocalc.ai",
     "--yes",
@@ -3274,8 +3266,6 @@ test("software deploy bay uses the full bay Rocket scope", async () => {
     file.url,
     "--bundle-sha256",
     file.sha256,
-    "--remote",
-    "ubuntu@10.206.0.38",
     "--api",
     "https://cocalc.ai",
     "--yes",
