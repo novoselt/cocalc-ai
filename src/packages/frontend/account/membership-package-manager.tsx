@@ -4048,6 +4048,7 @@ function SiteLicenseManagersEditor({
           </Text>
           <Space wrap>
             <Select
+              aria-label="Search site-license delegates"
               showSearch
               filterOption={false}
               value={selectedAccountId || undefined}

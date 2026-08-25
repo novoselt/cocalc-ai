@@ -1893,12 +1893,9 @@ describe("membership package managers", () => {
     });
 
     fireEvent.click(screen.getByText("Campus License"));
-    const search = screen
-      .getAllByRole("combobox")
-      .find((element) => !element.hasAttribute("readonly"));
-    if (search == null) {
-      throw Error("missing delegate account search input");
-    }
+    const search = await screen.findByRole("combobox", {
+      name: "Search site-license delegates",
+    });
     fireEvent.change(search, { target: { value: "ada@example.edu" } });
 
     await waitFor(() => {
