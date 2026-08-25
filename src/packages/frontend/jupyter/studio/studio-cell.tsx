@@ -29,6 +29,7 @@ import { COLORS } from "@cocalc/util/theme";
 import { CellOutput } from "@cocalc/frontend/jupyter/cell-output";
 import { CellToolbar } from "@cocalc/frontend/jupyter/cell-toolbar";
 import { CellInput } from "@cocalc/frontend/jupyter/cell-input";
+import { CellHiddenPart } from "@cocalc/frontend/jupyter/cell-hidden-part";
 import { attachmentTransform } from "@cocalc/frontend/jupyter/attachment-transform";
 
 import { AgentCellTool } from "@cocalc/frontend/jupyter/ai";
@@ -747,6 +748,7 @@ export const StudioCell: React.FC<StudioCellProps> = React.memo((props) => {
                       isDragging={isDragging}
                       stdin={stdin}
                       runOverlay={runOverlay}
+                      readOnly={read_only}
                     />
                   </ScrollToBottomOutput>
                 )}
@@ -1006,23 +1008,24 @@ export const StudioCell: React.FC<StudioCellProps> = React.memo((props) => {
                       />
                     )}
                     {isCode && !isActiveEditing && sourceHidden && (
-                      <div
-                        style={{
-                          color: COLORS.GRAY_L,
-                          fontSize: "14px",
-                          padding: "4px 8px",
-                          cursor: "pointer",
-                        }}
-                        title="Input is hidden — click to show"
-                        onClick={() => {
-                          actions?.toggle_jupyter_metadata_boolean(
-                            id,
-                            "source_hidden",
-                          );
-                        }}
-                      >
-                        <Icon name="ellipsis" />
-                      </div>
+                      <CellHiddenPart
+                        onReveal={
+                          actions != null && !read_only
+                            ? () =>
+                                actions.set_jupyter_metadata(
+                                  id,
+                                  "source_hidden",
+                                  undefined,
+                                )
+                            : undefined
+                        }
+                        revealLabel="Show hidden cell input"
+                        title={
+                          actions == null || read_only
+                            ? "Input is hidden."
+                            : "Input is hidden. Click to show it."
+                        }
+                      />
                     )}
                     {isCode && isActiveEditing && (
                       <div

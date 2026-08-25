@@ -43,6 +43,7 @@ interface CellOutputProps {
   isDragging?: boolean;
   stdin?;
   runOverlay?: RunCellOverlay;
+  readOnly?: boolean;
 }
 
 function isRunningState(state: string | undefined): boolean {
@@ -65,6 +66,7 @@ export function CellOutput({
   isDragging,
   stdin,
   runOverlay,
+  readOnly,
 }: CellOutputProps) {
   const outputRef = useRef<HTMLDivElement | null>(null);
   const [stableOutputHeight, setStableOutputHeight] = useState<number>(0);
@@ -122,11 +124,19 @@ export function CellOutput({
   }, [running]);
 
   if (cell.getIn(["metadata", "jupyter", "outputs_hidden"])) {
+    const onReveal =
+      actions != null && !readOnly
+        ? () => actions.set_jupyter_metadata(id, "outputs_hidden", undefined)
+        : undefined;
     return (
       <div key="out" style={{ minHeight }}>
         <CellHiddenPart
+          onReveal={onReveal}
+          revealLabel="Show hidden cell output"
           title={
-            "Output is hidden; show via Edit --> Toggle hide output in the menu."
+            onReveal == null
+              ? "Output is hidden."
+              : "Output is hidden. Click to show it."
           }
         />
       </div>

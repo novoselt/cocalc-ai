@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 
 import { Map, fromJS } from "immutable";
-import { render } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 import { CellInput } from "../cell-input";
 
@@ -71,7 +71,12 @@ jest.mock("../cell-buttonbar", () => ({
 }));
 
 jest.mock("../cell-hidden-part", () => ({
-  CellHiddenPart: () => null,
+  CellHiddenPart: ({ onReveal, revealLabel }) =>
+    onReveal == null ? (
+      <span data-testid="hidden-cell-input" />
+    ) : (
+      <button aria-label={revealLabel} onClick={onReveal} type="button" />
+    ),
 }));
 
 jest.mock("../cell-toolbar", () => ({
@@ -90,7 +95,7 @@ jest.mock("../run-cell-overlay", () => ({
   getDisplayedCellExecCount: () => null,
 }));
 
-describe("Jupyter markdown cell input", () => {
+describe("Jupyter cell input", () => {
   beforeEach(() => {
     latestMarkdownInputProps = null;
   });
@@ -188,5 +193,93 @@ describe("Jupyter markdown cell input", () => {
     );
 
     expect(latestMarkdownInputProps.autoFocus).toBe(true);
+  });
+});
+
+describe("Jupyter hidden cell input", () => {
+  const cmOptions = fromJS({
+    markdown: {},
+    options: {},
+  }) as Map<string, any>;
+
+  function hiddenCell(id: string) {
+    return fromJS({
+      id,
+      cell_type: "code",
+      input: `print(${JSON.stringify(id)})`,
+      metadata: { jupyter: { source_hidden: true } },
+    }) as Map<string, any>;
+  }
+
+  it("reveals only the hidden cell whose ellipsis is clicked", () => {
+    const set_jupyter_metadata = jest.fn();
+    const actions = { set_jupyter_metadata } as any;
+
+    render(
+      <>
+        <CellInput
+          actions={actions}
+          cell={hiddenCell("cell-1")}
+          cm_options={cmOptions}
+          font_size={14}
+          id="cell-1"
+          index={0}
+          input_is_readonly={false}
+          is_current={false}
+          is_focused={false}
+          is_markdown_edit={false}
+          is_readonly={false}
+        />
+        <CellInput
+          actions={actions}
+          cell={hiddenCell("cell-2")}
+          cm_options={cmOptions}
+          font_size={14}
+          id="cell-2"
+          index={1}
+          input_is_readonly={false}
+          is_current={false}
+          is_focused={false}
+          is_markdown_edit={false}
+          is_readonly={false}
+        />
+      </>,
+    );
+
+    const revealButtons = screen.getAllByRole("button", {
+      name: "Show hidden cell input",
+    });
+    revealButtons[1].focus();
+    expect(revealButtons[1]).toHaveFocus();
+    fireEvent.click(revealButtons[1]);
+
+    expect(set_jupyter_metadata).toHaveBeenCalledTimes(1);
+    expect(set_jupyter_metadata).toHaveBeenCalledWith(
+      "cell-2",
+      "source_hidden",
+      undefined,
+    );
+  });
+
+  it("does not offer a reveal action in a read-only notebook", () => {
+    render(
+      <CellInput
+        actions={{ set_jupyter_metadata: jest.fn() } as any}
+        cell={hiddenCell("cell-1")}
+        cm_options={cmOptions}
+        font_size={14}
+        id="cell-1"
+        index={0}
+        input_is_readonly={false}
+        is_current={false}
+        is_focused={false}
+        is_markdown_edit={false}
+        is_readonly
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Show hidden cell input" }),
+    ).toBeNull();
   });
 });
