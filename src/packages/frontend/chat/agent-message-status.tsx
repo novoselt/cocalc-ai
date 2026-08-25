@@ -221,6 +221,29 @@ export function resolveLiveRunStartMs({
     : date;
 }
 
+export function resolveActivityDurationLabel({
+  generating,
+  durationLabel,
+  runStartMs,
+  lastActivityAtMs,
+}: {
+  generating: boolean;
+  durationLabel: string;
+  runStartMs: number;
+  lastActivityAtMs?: number;
+}): string {
+  if (durationLabel.trim()) return durationLabel;
+  if (
+    !generating &&
+    typeof lastActivityAtMs === "number" &&
+    Number.isFinite(lastActivityAtMs) &&
+    lastActivityAtMs > runStartMs
+  ) {
+    return formatElapsed(lastActivityAtMs - runStartMs);
+  }
+  return durationLabel;
+}
+
 export function describeLastActivity({
   generating,
   lastActivityAtMs,
@@ -516,10 +539,16 @@ export function AgentMessageStatus({
   const [tick, setTick] = useState(0);
   const runStartMs = resolveLiveRunStartMs({ startedAtMs, date });
   const liveDurationLabel = useMemo(() => {
-    if (!generating) return durationLabel;
-    if (!Number.isFinite(runStartMs) || runStartMs <= 0) return durationLabel;
-    return formatElapsed(Date.now() - runStartMs);
-  }, [runStartMs, durationLabel, generating, tick]);
+    if (generating && Number.isFinite(runStartMs) && runStartMs > 0) {
+      return formatElapsed(Date.now() - runStartMs);
+    }
+    return resolveActivityDurationLabel({
+      generating,
+      durationLabel,
+      runStartMs,
+      lastActivityAtMs,
+    });
+  }, [runStartMs, durationLabel, generating, lastActivityAtMs, tick]);
   const setActivitySize = (size: number) => {
     setActivitySize0(size);
     try {

@@ -610,6 +610,67 @@ describe("response text helpers", () => {
     expect(getLiveResponseMarkdown(events)).toBe(
       "Live Codex output reaches the chat UI through the log.",
     );
+    expect(getLiveResponseBlocks(events)).toEqual([
+      {
+        kind: "agent",
+        text: "Live Codex output reaches the chat UI through the log.",
+        time: undefined,
+        state: undefined,
+      },
+    ]);
+  });
+
+  test("preserves exact whitespace in recovered deltas interleaved with terminal output", () => {
+    const events: AcpStreamMessage[] = [
+      textEvent(
+        "message",
+        "It has deterministic cleanup and compile-time",
+        1002,
+        { delta: true },
+      ),
+      {
+        type: "event",
+        seq: 1003,
+        event: {
+          type: "terminal",
+          terminalId: "background-build",
+          phase: "data",
+          chunk: "building...",
+        },
+      } as any,
+      textEvent(
+        "message",
+        " owner-escape rejection. I would prototype one witness now",
+        1054,
+        { delta: true },
+      ),
+      {
+        type: "event",
+        seq: 1055,
+        event: {
+          type: "terminal",
+          terminalId: "background-build",
+          phase: "data",
+          chunk: "still building...",
+        },
+      } as any,
+      textEvent(
+        "message",
+        "\u2014preferably one exact coordinate vector.",
+        1127,
+        { delta: true },
+      ),
+      { type: "status", state: "running", seq: 1128 } as any,
+    ];
+
+    expect(getLiveResponseBlocks(events)).toEqual([
+      {
+        kind: "agent",
+        text: "It has deterministic cleanup and compile-time owner-escape rejection. I would prototype one witness now\u2014preferably one exact coordinate vector.",
+        time: undefined,
+        state: undefined,
+      },
+    ]);
   });
 
   test("appends generated blob images to live and final response markdown", () => {

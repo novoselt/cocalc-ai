@@ -524,7 +524,7 @@ describe("PublicApp", () => {
     ).not.toBeNull();
     expect(
       screen.getByText(
-        "AI integration included; AI usage requires your ChatGPT plan or API key.",
+        "Codex with Luna Medium is included for everyone at no cost, with higher limits on paid plans. Connect your ChatGPT plan or API key to use additional models.",
       ),
     ).not.toBeNull();
     expect(screen.getAllByText("Member").length).toBeGreaterThan(0);
