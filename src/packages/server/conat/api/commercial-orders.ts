@@ -6,6 +6,7 @@
 import type {
   CommercialBackfillRequest,
   CommercialBackfillResponse,
+  CommercialBillingDetailsUpdateRequest,
   CommercialDiagnosticsRequest,
   CommercialAssigneeListRequest,
   CommercialFulfillmentPlan,
@@ -28,6 +29,12 @@ import type {
   CommercialOrderTransitionRequest,
   CommercialOrderUpdateRequest,
   CommercialProvisionRequest,
+  CommercialQuoteDocument,
+  CommercialQuoteDocumentRequest,
+  CommercialQuoteIssueRequest,
+  CommercialQuotePreview,
+  CommercialQuotePreviewRequest,
+  CommercialQuoteVoidRequest,
   CommercialReconcilePreview,
   CommercialReconcilePreviewRequest,
   CommercialStripeEventRetryRequest,
@@ -214,6 +221,15 @@ export async function addNote(
   return await invoke("addNote", opts, { capability: "mutate" });
 }
 
+export async function updateBillingDetails(
+  opts: CommercialBillingDetailsUpdateRequest,
+): Promise<CommercialOrder> {
+  return await invoke("updateBillingDetails", opts, {
+    fresh: true,
+    capability: "mutate",
+  });
+}
+
 export async function approve(
   opts: CommercialOrderTransitionRequest,
 ): Promise<CommercialOrder> {
@@ -227,6 +243,36 @@ export async function cancel(
   opts: CommercialOrderTransitionRequest,
 ): Promise<CommercialOrder> {
   return await invoke("cancel", opts, { fresh: true, capability: "mutate" });
+}
+
+export async function quotePreview(
+  opts: CommercialQuotePreviewRequest,
+): Promise<CommercialQuotePreview> {
+  return await invoke("quotePreview", opts);
+}
+
+export async function issueQuote(
+  opts: CommercialQuoteIssueRequest,
+): Promise<CommercialOrder> {
+  return await invoke("issueQuote", opts, {
+    fresh: true,
+    capability: "mutate",
+  });
+}
+
+export async function voidQuote(
+  opts: CommercialQuoteVoidRequest,
+): Promise<CommercialOrder> {
+  return await invoke("voidQuote", opts, {
+    fresh: true,
+    capability: "mutate",
+  });
+}
+
+export async function quoteDocument(
+  opts: CommercialQuoteDocumentRequest,
+): Promise<CommercialQuoteDocument> {
+  return await invoke("quoteDocument", opts);
 }
 
 export async function invoicePreview(

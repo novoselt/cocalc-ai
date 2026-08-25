@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -36,6 +36,7 @@ function order(overrides: Record<string, unknown> = {}) {
     version: 7,
     items: [],
     contacts: [],
+    quotes: [],
     invoices: [],
     payments: [],
     ...overrides,
@@ -186,6 +187,168 @@ test("receivables create previews without mutating and commits explicitly", asyn
   assert.equal(calls, 1);
   assert.equal(captured.reason, "accepted pilot");
   assert.match(captured.idempotency_key, /^receivables-create-/);
+});
+
+test("receivables billing correction previews and commits explicitly", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cocalc-ar-billing-"));
+  const file = join(directory, "billing.json");
+  await writeFile(
+    file,
+    JSON.stringify({
+      billing_contacts: [
+        {
+          role: "billing",
+          name_snapshot: "Accounts Payable",
+          email_snapshot: "ap@example.edu",
+        },
+      ],
+      billing_address: {
+        line1: "100 College Avenue",
+        city: "Example",
+        state: "PA",
+        postal_code: "19000",
+        country: "US",
+      },
+    }),
+  );
+  let calls = 0;
+  let captured: any;
+  const api = {
+    get: async () => order({ fulfillment_state: "provisioned" }),
+    updateBillingDetails: async (request: any) => {
+      calls += 1;
+      captured = request;
+      return order();
+    },
+  };
+
+  const dryRun = setup(api);
+  await dryRun.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "billing",
+    "update",
+    "AR-2026-000123",
+    "--file",
+    file,
+    "--reason",
+    "correct procurement recipient",
+  ]);
+  assert.equal(calls, 0);
+  assert.equal(dryRun.output().operation, "billing-update");
+  assert.equal(
+    dryRun.output().request.billing_contacts[0].email_snapshot,
+    "ap@example.edu",
+  );
+
+  const commit = setup(api);
+  await commit.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "billing",
+    "update",
+    "AR-2026-000123",
+    "--file",
+    file,
+    "--reason",
+    "correct procurement recipient",
+    "--expected-version",
+    "7",
+    "--commit",
+  ]);
+  assert.equal(calls, 1);
+  assert.equal(captured.expected_version, 7);
+  assert.match(captured.idempotency_key, /^receivables-billing-update-/);
+});
+
+test("receivables quote issue previews inputs and stored PDFs download", async () => {
+  const quote = {
+    id: "44444444-4444-4444-8444-444444444444",
+    quote_number: "Q-2026-000123-01",
+    document_filename: "Q-2026-000123-01.pdf",
+    document_sha256: "a".repeat(64),
+  };
+  const quotePreview = {
+    order_id: order().id,
+    order_number: order().order_number,
+    organization_name: order().organization_name,
+    billing_contacts: [],
+    items: [],
+    currency: "usd",
+    subtotal: "3900",
+    total: "3900",
+    default_valid_until: "2026-09-30T00:00:00.000Z",
+    ready: true,
+    blockers: [],
+  };
+  let issueCalls = 0;
+  const api = {
+    get: async () => order(),
+    quotePreview: async () => quotePreview,
+    issueQuote: async () => {
+      issueCalls += 1;
+      return order();
+    },
+    quoteDocument: async () => ({
+      quote,
+      content_base64: Buffer.from("%PDF-test").toString("base64"),
+    }),
+  };
+
+  const dryRun = setup(api);
+  await dryRun.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "quote",
+    "issue",
+    "AR-2026-000123",
+    "--reason",
+    "send procurement quote",
+  ]);
+  assert.equal(issueCalls, 0);
+  assert.deepEqual(dryRun.output().quote_preview, quotePreview);
+
+  const commit = setup(api);
+  await commit.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "quote",
+    "issue",
+    "AR-2026-000123",
+    "--reason",
+    "send procurement quote",
+    "--expected-version",
+    "7",
+    "--commit",
+  ]);
+  assert.equal(issueCalls, 1);
+
+  const directory = await mkdtemp(join(tmpdir(), "cocalc-ar-quote-"));
+  const outputFile = join(directory, "quote.pdf");
+  const download = setup(api);
+  await download.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "quote",
+    "download",
+    "AR-2026-000123",
+    "--quote-id",
+    quote.id,
+    "--output",
+    outputFile,
+  ]);
+  assert.equal((await readFile(outputFile)).toString(), "%PDF-test");
+  assert.equal(download.output().quote_number, quote.quote_number);
 });
 
 test("committed approval requires reviewed optimistic concurrency", async () => {

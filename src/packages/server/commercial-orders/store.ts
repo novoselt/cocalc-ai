@@ -11,6 +11,7 @@ import { getConfiguredClusterSeedBayId } from "@cocalc/server/cluster-config";
 import type {
   CommercialBackfillRequest,
   CommercialBackfillResponse,
+  CommercialBillingDetailsUpdateRequest,
   CommercialInvoiceMutationRequest,
   CommercialManualInvoiceIssueRequest,
   CommercialManualPaymentRequest,
@@ -27,6 +28,12 @@ import type {
   CommercialOrderRevisionRequest,
   CommercialOrderTransitionRequest,
   CommercialOrderUpdateRequest,
+  CommercialQuoteDocument,
+  CommercialQuoteDocumentRequest,
+  CommercialQuoteIssueRequest,
+  CommercialQuotePreview,
+  CommercialQuotePreviewRequest,
+  CommercialQuoteVoidRequest,
   CommercialStripeEventRetryRequest,
   CommercialStripeEventRetryResult,
 } from "@cocalc/conat/hub/api/commercial-orders";
@@ -42,6 +49,7 @@ import type {
   CommercialOrderItem,
   CommercialOrderSummary,
   CommercialPayment,
+  CommercialQuote,
   CommercialWorkflowState,
 } from "@cocalc/util/commercial-orders";
 import {
@@ -70,6 +78,7 @@ import {
   validateIndependentStates,
 } from "./state";
 import { recordCommercialOperator } from "./observability";
+import { renderCommercialQuotePdf } from "./quote-document";
 
 type Queryable = PoolClient | ReturnType<typeof getPool>;
 
@@ -77,6 +86,7 @@ type RawOrder = Omit<
   CommercialOrder,
   | "items"
   | "contacts"
+  | "quotes"
   | "invoices"
   | "payments"
   | "created_at"
@@ -167,7 +177,10 @@ function money(value: unknown): string {
 
 function normalizeOrderRow(
   row: RawOrder,
-): Omit<CommercialOrder, "items" | "contacts" | "invoices" | "payments"> {
+): Omit<
+  CommercialOrder,
+  "items" | "contacts" | "quotes" | "invoices" | "payments"
+> {
   return {
     ...row,
     agreed_subtotal: money(row.agreed_subtotal),
@@ -203,6 +216,21 @@ function normalizeItemRow(row: any): CommercialOrderItem {
 function normalizeContactRow(row: any): CommercialOrderContact {
   return {
     ...row,
+    created_at: iso(row.created_at)!,
+    updated_at: iso(row.updated_at)!,
+  };
+}
+
+function normalizeQuoteRow(row: any): CommercialQuote {
+  const { document_data: _documentData, ...metadata } = row;
+  return {
+    ...metadata,
+    subtotal: money(row.subtotal),
+    total: money(row.total),
+    issued_at: iso(row.issued_at)!,
+    valid_until: iso(row.valid_until)!,
+    voided_at: iso(row.voided_at),
+    snapshot: row.snapshot ?? {},
     created_at: iso(row.created_at)!,
     updated_at: iso(row.updated_at)!,
   };
@@ -438,31 +466,43 @@ async function loadOrder(
   forUpdate = false,
 ): Promise<CommercialOrder> {
   const orderId = await resolveOrderId(client, id, forUpdate);
-  const [orderResult, items, contacts, invoices, payments] = await Promise.all([
-    client.query<RawOrder>("SELECT * FROM commercial_orders WHERE id=$1", [
-      orderId,
-    ]),
-    client.query(
-      "SELECT * FROM commercial_order_items WHERE commercial_order_id=$1 ORDER BY position,id",
-      [orderId],
-    ),
-    client.query(
-      "SELECT * FROM commercial_order_contacts WHERE commercial_order_id=$1 ORDER BY role,id",
-      [orderId],
-    ),
-    client.query(
-      "SELECT * FROM commercial_invoices WHERE commercial_order_id=$1 ORDER BY created_at DESC,id",
-      [orderId],
-    ),
-    client.query(
-      "SELECT * FROM commercial_payments WHERE commercial_order_id=$1 ORDER BY received_at DESC,id",
-      [orderId],
-    ),
-  ]);
+  const [orderResult, items, contacts, quotes, invoices, payments] =
+    await Promise.all([
+      client.query<RawOrder>("SELECT * FROM commercial_orders WHERE id=$1", [
+        orderId,
+      ]),
+      client.query(
+        "SELECT * FROM commercial_order_items WHERE commercial_order_id=$1 ORDER BY position,id",
+        [orderId],
+      ),
+      client.query(
+        "SELECT * FROM commercial_order_contacts WHERE commercial_order_id=$1 ORDER BY role,id",
+        [orderId],
+      ),
+      client.query(
+        `SELECT id,commercial_order_id,quote_number,status,currency,subtotal,total,
+              issued_at,valid_until,voided_at,document_filename,
+              document_mime_type,document_sha256,document_size,snapshot,
+              created_by_account_id,voided_by_account_id,idempotency_key,
+              created_at,updated_at
+         FROM commercial_quotes
+        WHERE commercial_order_id=$1 ORDER BY issued_at DESC,id`,
+        [orderId],
+      ),
+      client.query(
+        "SELECT * FROM commercial_invoices WHERE commercial_order_id=$1 ORDER BY created_at DESC,id",
+        [orderId],
+      ),
+      client.query(
+        "SELECT * FROM commercial_payments WHERE commercial_order_id=$1 ORDER BY received_at DESC,id",
+        [orderId],
+      ),
+    ]);
   const order = {
     ...normalizeOrderRow(orderResult.rows[0]),
     items: items.rows.map(normalizeItemRow),
     contacts: contacts.rows.map(normalizeContactRow),
+    quotes: quotes.rows.map(normalizeQuoteRow),
     invoices: invoices.rows.map(normalizeInvoiceRow),
     payments: payments.rows.map(normalizePaymentRow),
   } as CommercialOrder;
@@ -1101,6 +1141,339 @@ export async function addCommercialOrderNote(
   return await mutateOrder("note-added", opts, async () => ({
     metadata: { note },
   }));
+}
+
+function quoteDetailsFromOrder(order: CommercialOrder): {
+  billing_address?: CommercialQuotePreview["billing_address"];
+  quote_memo?: string;
+} {
+  const invoice = order.terms_snapshot.invoice;
+  const quote = order.terms_snapshot.quote;
+  const invoiceRecord =
+    invoice != null && typeof invoice === "object" && !Array.isArray(invoice)
+      ? (invoice as Record<string, unknown>)
+      : {};
+  const quoteRecord =
+    quote != null && typeof quote === "object" && !Array.isArray(quote)
+      ? (quote as Record<string, unknown>)
+      : {};
+  const billingAddress = invoiceRecord.billing_address;
+  return {
+    billing_address:
+      billingAddress != null &&
+      typeof billingAddress === "object" &&
+      !Array.isArray(billingAddress)
+        ? (billingAddress as CommercialQuotePreview["billing_address"])
+        : undefined,
+    quote_memo:
+      typeof quoteRecord.memo === "string"
+        ? quoteRecord.memo
+        : typeof invoiceRecord.memo === "string"
+          ? invoiceRecord.memo
+          : undefined,
+  };
+}
+
+function buildCommercialQuotePreview(
+  order: CommercialOrder,
+  now = new Date(),
+): CommercialQuotePreview {
+  const billingContacts = order.contacts.filter(
+    ({ role }) => role === "billing",
+  );
+  const blockers: string[] = [];
+  if (["complete", "cancelled"].includes(order.workflow_state)) {
+    blockers.push(`the order is ${order.workflow_state}`);
+  }
+  if (billingContacts.length !== 1) {
+    blockers.push("exactly one billing contact is required");
+  }
+  if (!order.items.length) blockers.push("at least one line item is required");
+  if (moneyCompare(order.agreed_total, 0) <= 0) {
+    blockers.push("the quote total must be positive");
+  }
+  const defaultValidUntil = new Date(now);
+  defaultValidUntil.setUTCDate(defaultValidUntil.getUTCDate() + 30);
+  return {
+    order_id: order.id,
+    order_number: order.order_number,
+    organization_name: order.organization_name,
+    billing_contacts: billingContacts,
+    items: order.items,
+    currency: order.currency,
+    subtotal: order.agreed_subtotal,
+    total: order.agreed_total,
+    service_starts_at: order.service_starts_at,
+    service_ends_at: order.service_ends_at,
+    po_number: order.po_number,
+    customer_reference: order.customer_reference,
+    ...quoteDetailsFromOrder(order),
+    default_valid_until: defaultValidUntil.toISOString(),
+    ready: blockers.length === 0,
+    blockers,
+  };
+}
+
+export async function commercialQuotePreview(
+  opts: CommercialQuotePreviewRequest,
+): Promise<CommercialQuotePreview> {
+  requireReason(opts.reason);
+  return buildCommercialQuotePreview(await getCommercialOrder(opts.id));
+}
+
+export async function updateCommercialBillingDetails(
+  opts: CommercialBillingDetailsUpdateRequest,
+): Promise<CommercialOrder> {
+  return await mutateOrder(
+    "billing-details-updated",
+    opts,
+    async (client, before) => {
+      assertOrderNotTerminal(before, "billing-details update");
+      await assertNoUnresolvedProviderOperations(
+        client,
+        before.id,
+        "billing-details update",
+      );
+      if (
+        before.invoices.some(
+          ({ status }) => !["void", "failed"].includes(status),
+        )
+      ) {
+        throw Error(
+          "billing details are locked after an invoice is created; void it before correcting future invoice recipients",
+        );
+      }
+      if (!Array.isArray(opts.billing_contacts)) {
+        throw Error("billing_contacts is required");
+      }
+      if (!Array.isArray(opts.procurement_contacts ?? [])) {
+        throw Error("procurement_contacts must be an array");
+      }
+      const billingContacts = normalizeContacts(opts.billing_contacts);
+      const procurementContacts = normalizeContacts(
+        opts.procurement_contacts ?? [],
+      );
+      if (
+        billingContacts.length !== 1 ||
+        billingContacts.some(({ role }) => role !== "billing")
+      ) {
+        throw Error(
+          "exactly one billing contact with role billing is required",
+        );
+      }
+      if (procurementContacts.some(({ role }) => role !== "procurement")) {
+        throw Error(
+          "procurement_contacts may only contain contacts with role procurement",
+        );
+      }
+      const invoiceBefore = before.terms_snapshot.invoice;
+      const invoice =
+        invoiceBefore != null &&
+        typeof invoiceBefore === "object" &&
+        !Array.isArray(invoiceBefore)
+          ? { ...(invoiceBefore as Record<string, unknown>) }
+          : {};
+      if (opts.billing_address !== undefined) {
+        if (opts.billing_address == null) delete invoice.billing_address;
+        else invoice.billing_address = opts.billing_address;
+      }
+      if (opts.invoice_memo !== undefined) {
+        if (opts.invoice_memo == null || !opts.invoice_memo.trim()) {
+          delete invoice.memo;
+        } else {
+          invoice.memo = opts.invoice_memo.trim();
+        }
+      }
+      const termsSnapshot = {
+        ...before.terms_snapshot,
+        invoice,
+      };
+      assertInvoiceTermsSnapshot(termsSnapshot);
+      await client.query(
+        `DELETE FROM commercial_order_contacts
+          WHERE commercial_order_id=$1 AND role IN ('billing','procurement')`,
+        [before.id],
+      );
+      await insertContacts(client, before.id, [
+        ...billingContacts,
+        ...procurementContacts,
+      ]);
+      return {
+        changes: { terms_snapshot: termsSnapshot },
+        metadata: {
+          billing_email: billingContacts[0].email_snapshot,
+          procurement_contact_count: procurementContacts.length,
+        },
+      };
+    },
+  );
+}
+
+function quoteValidUntil(value: string | undefined, fallback: string): string {
+  const date = new Date(value ?? fallback);
+  if (!Number.isFinite(date.valueOf())) {
+    throw Error("valid_until must be an ISO-8601 timestamp");
+  }
+  const now = Date.now();
+  if (date.valueOf() <= now) throw Error("valid_until must be in the future");
+  const maximum = new Date(now);
+  maximum.setUTCFullYear(maximum.getUTCFullYear() + 1);
+  if (date > maximum) throw Error("valid_until must be within one year");
+  return date.toISOString();
+}
+
+export async function issueCommercialQuote(
+  opts: CommercialQuoteIssueRequest,
+): Promise<CommercialOrder> {
+  return await mutateOrder("quote-issued", opts, async (client, before) => {
+    assertOrderNotTerminal(before, "quote issuance");
+    const preview = buildCommercialQuotePreview(before);
+    if (!preview.ready) {
+      throw Error(`quote is not ready: ${preview.blockers.join("; ")}`);
+    }
+    if (!opts.account_id) throw Error("account_id is required");
+    const validUntil = quoteValidUntil(
+      opts.valid_until,
+      preview.default_valid_until,
+    );
+    const { rows } = await client.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM commercial_quotes WHERE commercial_order_id=$1",
+      [before.id],
+    );
+    const sequence = Number(rows[0]?.count ?? 0) + 1;
+    const quoteNumber = `Q-${before.order_number.replace(/^AR-/i, "")}-${`${sequence}`.padStart(2, "0")}`;
+    const issuedAt = new Date().toISOString();
+    const document = await renderCommercialQuotePdf({
+      quote_number: quoteNumber,
+      issued_at: issuedAt,
+      valid_until: validUntil,
+      preview,
+    });
+    if (!document.length || document.length > 2_097_152) {
+      throw Error("generated quote document exceeds the 2 MiB storage limit");
+    }
+    const id = randomUUID();
+    const documentSha256 = createHash("sha256").update(document).digest("hex");
+    const documentFilename = `${quoteNumber}.pdf`;
+    const snapshot = {
+      order_version: before.version,
+      order_id: before.id,
+      order_number: before.order_number,
+      organization_name: before.organization_name,
+      billing_contacts: preview.billing_contacts,
+      billing_address: preview.billing_address ?? null,
+      items: preview.items,
+      currency: preview.currency,
+      subtotal: preview.subtotal,
+      total: preview.total,
+      service_starts_at: preview.service_starts_at ?? null,
+      service_ends_at: preview.service_ends_at ?? null,
+      po_number: preview.po_number ?? null,
+      customer_reference: preview.customer_reference ?? null,
+      quote_memo: preview.quote_memo ?? null,
+    };
+    const idempotencyKey = commercialIdempotencyKey(
+      "quote-document",
+      opts as any,
+    );
+    await client.query(
+      `INSERT INTO commercial_quotes
+         (id,commercial_order_id,quote_number,status,currency,subtotal,total,
+          issued_at,valid_until,document_filename,document_mime_type,
+          document_sha256,document_size,document_data,snapshot,
+          created_by_account_id,idempotency_key,created_at,updated_at)
+       VALUES ($1,$2,$3,'issued',$4,$5,$6,$7,$8,$9,'application/pdf',$10,$11,
+               $12,$13,$14,$15,NOW(),NOW())`,
+      [
+        id,
+        before.id,
+        quoteNumber,
+        before.currency,
+        before.agreed_subtotal,
+        before.agreed_total,
+        issuedAt,
+        validUntil,
+        documentFilename,
+        documentSha256,
+        document.length,
+        document,
+        snapshot,
+        opts.account_id,
+        idempotencyKey,
+      ],
+    );
+    return {
+      metadata: {
+        commercial_quote_id: id,
+        quote_number: quoteNumber,
+        valid_until: validUntil,
+        document_filename: documentFilename,
+        document_sha256: documentSha256,
+        document_size: document.length,
+      },
+    };
+  });
+}
+
+export async function voidCommercialQuote(
+  opts: CommercialQuoteVoidRequest,
+): Promise<CommercialOrder> {
+  return await mutateOrder("quote-voided", opts, async (client, before) => {
+    if (!opts.account_id) throw Error("account_id is required");
+    const { rows } = await client.query<{
+      id: string;
+      quote_number: string;
+      status: string;
+    }>(
+      `SELECT id,quote_number,status FROM commercial_quotes
+        WHERE id=$1 AND commercial_order_id=$2 FOR UPDATE`,
+      [opts.commercial_quote_id, before.id],
+    );
+    const quote = rows[0];
+    if (!quote) throw Error("commercial quote not found for this order");
+    if (quote.status === "void")
+      throw Error("commercial quote is already void");
+    await client.query(
+      `UPDATE commercial_quotes SET status='void',voided_at=NOW(),
+              voided_by_account_id=$2,updated_at=NOW() WHERE id=$1`,
+      [quote.id, opts.account_id],
+    );
+    return {
+      metadata: {
+        commercial_quote_id: quote.id,
+        quote_number: quote.quote_number,
+      },
+    };
+  });
+}
+
+export async function getCommercialQuoteDocument(
+  opts: CommercialQuoteDocumentRequest,
+): Promise<CommercialQuoteDocument> {
+  assertSeedAuthority();
+  requireReason(opts.reason);
+  const orderId = await resolveOrderId(getPool(), opts.id);
+  const { rows } = await getPool().query<any>(
+    `SELECT * FROM commercial_quotes
+      WHERE id=$1 AND commercial_order_id=$2`,
+    [opts.commercial_quote_id, orderId],
+  );
+  const row = rows[0];
+  if (!row) throw Error("commercial quote not found for this order");
+  if (!Buffer.isBuffer(row.document_data)) {
+    throw Error("commercial quote document is not available");
+  }
+  if (row.document_data.length > 2_097_152) {
+    throw Error("commercial quote document exceeds the download limit");
+  }
+  const sha256 = createHash("sha256").update(row.document_data).digest("hex");
+  if (sha256 !== row.document_sha256) {
+    throw Error("commercial quote document failed its integrity check");
+  }
+  return {
+    quote: normalizeQuoteRow(row),
+    content_base64: row.document_data.toString("base64"),
+  };
 }
 
 export async function approveCommercialOrder(

@@ -4,11 +4,12 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { Command } from "commander";
 
 import type {
   CommercialBackfillRequest,
+  CommercialBillingDetailsUpdateRequest,
   CommercialInvoiceLinkRequest,
   CommercialManualInvoiceIssueRequest,
   CommercialInvoiceMutationRequest,
@@ -19,6 +20,8 @@ import type {
   CommercialOrderRevisionRequest,
   CommercialOrderUpdateRequest,
   CommercialProvisionRequest,
+  CommercialQuoteIssueRequest,
+  CommercialQuoteVoidRequest,
 } from "@cocalc/conat/hub/api/commercial-orders";
 import {
   COMMERCIAL_COLLECTION_STATES,
@@ -65,6 +68,8 @@ const READ_REASONS = {
   show: "Review commercial order",
   events: "Review commercial order audit events",
   invoicePreview: "Review commercial invoice preview",
+  quotePreview: "Review commercial quote preview",
+  quoteDocument: "Download stored commercial quote document",
   fulfillmentPreview: "Review commercial fulfillment preview",
   diagnostics: "Review commercial receivables diagnostics",
 } as const;
@@ -1062,6 +1067,198 @@ function registerInvoiceCommands(
   });
 }
 
+function registerBillingCommands(
+  receivables: Command,
+  deps: ReceivablesCommandDeps,
+) {
+  const billing = receivables
+    .command("billing")
+    .description("future invoice recipient and billing-address corrections");
+
+  mutationOptions(
+    billing
+      .command("update <order>")
+      .description(
+        "preview or correct billing details without reopening fulfilled terms",
+      )
+      .requiredOption(
+        "--file <path>",
+        "JSON with billing_contacts and optional procurement_contacts, billing_address, and invoice_memo",
+      ),
+    "correct future invoice billing details",
+  ).action(
+    async (
+      orderRef: string,
+      opts: MutationOptions & { file: string },
+      command: Command,
+    ) => {
+      await deps.withContext(
+        command,
+        "admin receivables billing update",
+        async (ctx) => {
+          const reason = requireReason(opts.reason);
+          const order = await ctx.hub.commercialOrders.get({
+            id: normalizeOrderReference(orderRef),
+            reason,
+          });
+          const body = requireObject(await readJsonFile(opts.file), "--file");
+          if (!Array.isArray(body.billing_contacts)) {
+            throw new Error("--file must contain a billing_contacts array");
+          }
+          const request = {
+            id: order.id,
+            ...commonMutationRequest("billing-update", order, opts, body),
+          } as unknown as CommercialBillingDetailsUpdateRequest;
+          if (!opts.commit) {
+            return preview(
+              "billing-update",
+              order,
+              request as unknown as JsonObject,
+              {
+                safety:
+                  "This preserves approval and fulfillment, changes only future invoice recipient details, and is rejected after a live invoice exists.",
+              },
+            );
+          }
+          return await ctx.hub.commercialOrders.updateBillingDetails(request);
+        },
+      );
+    },
+  );
+}
+
+function registerQuoteCommands(
+  receivables: Command,
+  deps: ReceivablesCommandDeps,
+) {
+  const quote = receivables
+    .command("quote")
+    .description("generate and retain first-class commercial quote PDFs");
+
+  quote
+    .command("preview <order>")
+    .description("preview authoritative quote inputs and readiness")
+    .option("--reason <text>", "audit reason for this admin read")
+    .action(async (orderRef: string, opts: any, command: Command) => {
+      await deps.withContext(
+        command,
+        "admin receivables quote preview",
+        async (ctx) =>
+          await ctx.hub.commercialOrders.quotePreview({
+            id: normalizeOrderReference(orderRef),
+            reason: readReason(opts.reason, READ_REASONS.quotePreview),
+          }),
+      );
+    });
+
+  mutationOptions(
+    quote
+      .command("issue <order>")
+      .description("preview or issue and store an immutable quote PDF")
+      .option(
+        "--valid-until <iso>",
+        "quote expiration timestamp; defaults to 30 days",
+      ),
+    "issue and store the commercial quote",
+  ).action(async (orderRef: string, opts: any, command: Command) => {
+    await deps.withContext(
+      command,
+      "admin receivables quote issue",
+      async (ctx) => {
+        const reason = requireReason(opts.reason);
+        const order = await ctx.hub.commercialOrders.get({
+          id: normalizeOrderReference(orderRef),
+          reason,
+        });
+        const request = {
+          id: order.id,
+          ...commonMutationRequest("quote-issue", order, opts, {
+            ...(opts.validUntil
+              ? {
+                  valid_until: normalizeIso(opts.validUntil, "--valid-until"),
+                }
+              : {}),
+          }),
+        } as CommercialQuoteIssueRequest;
+        if (!opts.commit) {
+          return preview(
+            "quote-issue",
+            order,
+            request as unknown as JsonObject,
+            {
+              quote_preview: await ctx.hub.commercialOrders.quotePreview({
+                id: order.id,
+                reason,
+              }),
+            },
+          );
+        }
+        return await ctx.hub.commercialOrders.issueQuote(request);
+      },
+    );
+  });
+
+  quote
+    .command("download <order>")
+    .description("download and verify a stored quote PDF")
+    .requiredOption("--quote-id <uuid>", "internal commercial quote id")
+    .requiredOption("--output <path>", "destination PDF path")
+    .option("--force", "replace an existing output file", false)
+    .option("--reason <text>", "audit reason for this admin read")
+    .action(async (orderRef: string, opts: any, command: Command) => {
+      await deps.withContext(
+        command,
+        "admin receivables quote download",
+        async (ctx) => {
+          const document = await ctx.hub.commercialOrders.quoteDocument({
+            id: normalizeOrderReference(orderRef),
+            commercial_quote_id: `${opts.quoteId ?? ""}`.trim(),
+            reason: readReason(opts.reason, READ_REASONS.quoteDocument),
+          });
+          const content = Buffer.from(document.content_base64, "base64");
+          await writeFile(opts.output, content, {
+            flag: opts.force ? "w" : "wx",
+          });
+          return {
+            quote_number: document.quote.quote_number,
+            output: opts.output,
+            bytes: content.length,
+            sha256: document.quote.document_sha256,
+          };
+        },
+      );
+    });
+
+  mutationOptions(
+    quote
+      .command("void <order>")
+      .description("preview or void a previously issued quote")
+      .requiredOption("--quote-id <uuid>", "internal commercial quote id"),
+    "void the issued commercial quote",
+  ).action(async (orderRef: string, opts: any, command: Command) => {
+    await deps.withContext(
+      command,
+      "admin receivables quote void",
+      async (ctx) => {
+        const order = await ctx.hub.commercialOrders.get({
+          id: normalizeOrderReference(orderRef),
+          reason: requireReason(opts.reason),
+        });
+        const request = {
+          id: order.id,
+          ...commonMutationRequest("quote-void", order, opts, {
+            commercial_quote_id: `${opts.quoteId ?? ""}`.trim(),
+          }),
+        } as CommercialQuoteVoidRequest;
+        if (!opts.commit) {
+          return preview("quote-void", order, request as unknown as JsonObject);
+        }
+        return await ctx.hub.commercialOrders.voidQuote(request);
+      },
+    );
+  });
+}
+
 function registerPaymentCommands(
   receivables: Command,
   deps: ReceivablesCommandDeps,
@@ -1393,7 +1590,7 @@ export function registerReceivablesCommand(
 Safety workflow:
   1. Run a mutation without --commit and review its order version and request.
   2. Re-run with --expected-version <version>, --reason <audit reason>, and --commit.
-  3. Invoice, payment, approval, cancellation, fulfillment, and backfill actions
+  3. Quote, invoice, payment, approval, cancellation, fulfillment, and backfill actions
      never take effect without explicit --commit.
 
 Bundled operations guide:
@@ -1404,6 +1601,8 @@ Bundled operations guide:
 Examples:
   cocalc admin receivables list --state ready-to-invoice,overdue --json
   cocalc admin receivables show AR-2026-000123 --json
+  cocalc admin receivables quote preview AR-2026-000123
+  cocalc admin receivables quote issue AR-2026-000123 --reason "formal quote"
   cocalc admin receivables invoice preview AR-2026-000123
   cocalc admin receivables payment record AR-2026-000123 --amount 3900 \\
     --method check --reference CHECK-123 --reason "check deposited"
@@ -1411,6 +1610,8 @@ Examples:
     );
   registerReadCommands(receivables, deps);
   registerOrderMutationCommands(receivables, deps);
+  registerBillingCommands(receivables, deps);
+  registerQuoteCommands(receivables, deps);
   registerInvoiceCommands(receivables, deps);
   registerPaymentCommands(receivables, deps);
   registerFulfillmentCommands(receivables, deps);

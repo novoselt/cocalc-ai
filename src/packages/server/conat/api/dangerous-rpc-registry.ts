@@ -229,6 +229,11 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-not-required",
     reason: "adds an admin-only immutable coordination note",
   },
+  "commercialOrders.updateBillingDetails": {
+    decision: "fresh-auth-required",
+    reason:
+      "changes the future customer-facing invoice recipient and billing address",
+  },
   "commercialOrders.approve": {
     decision: "fresh-auth-required",
     reason: "approves institutional commercial terms for invoicing",
@@ -258,6 +263,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason:
       "adopts and reconciles an existing external Stripe invoice into commercial state",
+  },
+  "commercialOrders.issueQuote": {
+    decision: "fresh-auth-required",
+    reason: "issues and stores an immutable customer-facing commercial quote",
   },
   "commercialOrders.issueManualInvoice": {
     decision: "fresh-auth-required",
@@ -299,6 +308,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   "commercialOrders.sendInvoice": {
     decision: "fresh-auth-required",
     reason: "finalizes and sends a customer-facing institutional invoice",
+  },
+  "commercialOrders.voidQuote": {
+    decision: "fresh-auth-required",
+    reason: "voids a previously issued customer-facing commercial quote",
   },
   "commercialOrders.update": {
     decision: "fresh-auth-required",
