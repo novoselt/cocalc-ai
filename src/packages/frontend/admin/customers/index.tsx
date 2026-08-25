@@ -60,7 +60,9 @@ import {
   useAccountDisplayNames,
 } from "../receivables/account-names";
 import { SiteLicenseSelector } from "../receivables/site-license-reference";
+import { crmMutationContext, filterCrmActivities } from "./helpers";
 import { CustomerSelector } from "./selector";
+import { TimelineFilter } from "./timeline-filter";
 import "./customers.css";
 
 export { CustomerSelector } from "./selector";
@@ -389,13 +391,12 @@ function CustomerActionModal({
     commit: boolean,
     previous?: MutationPreview,
   ) {
-    const common = {
-      reason: values.reason,
-      source: "admin-ui" as const,
+    const common = crmMutationContext({
+      browserId: webapp_client.browser_id,
       commit,
-      expected_version: previous?.expected_version,
-      idempotency_key: previous?.idempotency_key,
-    };
+      previous,
+      reason: values.reason,
+    });
     switch (action?.kind) {
       case "create-customer":
         return await api.createOrganization({
@@ -1173,13 +1174,25 @@ function CustomerQueue({
             </Title>
             <Paragraph style={{ fontSize: 16, marginBottom: 0 }}>
               Reviewed identity, contacts, opportunities, follow-up,
-              receivables, licenses, and support references in one seed-global
-              record.
+              receivables, licenses, and support references in one record.
             </Paragraph>
           </div>
-          <Button icon={<Icon name="plus" />} onClick={onCreate} size="large">
-            Create customer
-          </Button>
+          <Space wrap>
+            <Button
+              ghost
+              href="/app-docs/admin/crm-ui"
+              icon={<Icon name="book" />}
+              size="large"
+            >
+              UI guide
+            </Button>
+            <Button ghost href="/app-docs/admin/crm" size="large">
+              Agent and CLI runbook
+            </Button>
+            <Button icon={<Icon name="plus" />} onClick={onCreate} size="large">
+              Create customer
+            </Button>
+          </Space>
         </Flex>
       </section>
 
@@ -1342,6 +1355,7 @@ function CustomerDetail({
   const [customer, setCustomer] = useState<CrmCustomer360 | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>("");
+  const [timelineFilter, setTimelineFilter] = useState("");
   const accountIds = customer
     ? [
         customer.organization.relationship_owner_account_id,
@@ -1394,16 +1408,34 @@ function CustomerDetail({
   const pipelineProgress = customer.opportunities.length
     ? Math.round((closedPipeline / customer.opportunities.length) * 100)
     : 0;
+  const filteredActivities = filterCrmActivities(
+    customer.activities,
+    timelineFilter,
+  );
+  const visibleActivities = filteredActivities.slice(
+    0,
+    timelineFilter.trim() ? 100 : 40,
+  );
 
   return (
     <Flex className="crm-shell" vertical gap={18}>
-      <Button
-        icon={<Icon name="arrow-left" />}
-        onClick={onBack}
-        style={{ alignSelf: "flex-start" }}
-      >
-        Customer queue
-      </Button>
+      <Flex align="center" gap={8} justify="space-between" wrap>
+        <Button icon={<Icon name="arrow-left" />} onClick={onBack}>
+          Customer queue
+        </Button>
+        <Space wrap>
+          <Button
+            href="/app-docs/admin/crm-ui"
+            icon={<Icon name="book" />}
+            size="small"
+          >
+            UI guide
+          </Button>
+          <Button href="/app-docs/admin/crm" size="small">
+            Agent and CLI runbook
+          </Button>
+        </Space>
+      </Flex>
       <section className="crm-hero" aria-labelledby="crm-customer-title">
         <Flex align="start" gap={18} justify="space-between" wrap>
           <div>
@@ -1856,26 +1888,39 @@ function CustomerDetail({
             </SectionHeader>
             <Divider />
             {customer.activities.length ? (
-              <div className="crm-activity-rail">
-                {customer.activities.slice(0, 40).map((activity) => (
-                  <div className="crm-activity-item" key={activity.id}>
-                    <Text strong>{activity.summary}</Text>
-                    <br />
-                    <Text type="secondary">
-                      {humanize(activity.kind)} ·{" "}
-                      <TimeAgo date={activity.occurred_at} />
-                    </Text>
-                    {activity.details ? (
-                      <Paragraph
-                        ellipsis={{ rows: 3, expandable: true }}
-                        style={{ margin: "6px 0 0" }}
-                      >
-                        {activity.details}
-                      </Paragraph>
-                    ) : null}
+              <Flex vertical gap={12}>
+                <TimelineFilter
+                  matchingCount={filteredActivities.length}
+                  onChange={setTimelineFilter}
+                  totalCount={customer.activities.length}
+                  value={timelineFilter}
+                  visibleCount={visibleActivities.length}
+                />
+                {visibleActivities.length ? (
+                  <div className="crm-activity-rail">
+                    {visibleActivities.map((activity) => (
+                      <div className="crm-activity-item" key={activity.id}>
+                        <Text strong>{activity.summary}</Text>
+                        <br />
+                        <Text type="secondary">
+                          {humanize(activity.kind)} ·{" "}
+                          <TimeAgo date={activity.occurred_at} />
+                        </Text>
+                        {activity.details ? (
+                          <Paragraph
+                            ellipsis={{ rows: 3, expandable: true }}
+                            style={{ margin: "6px 0 0" }}
+                          >
+                            {activity.details}
+                          </Paragraph>
+                        ) : null}
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                ) : (
+                  <Empty description="No timeline events match this filter" />
+                )}
+              </Flex>
             ) : (
               <Empty description="No customer activity" />
             )}

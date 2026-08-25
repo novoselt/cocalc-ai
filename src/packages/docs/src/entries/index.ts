@@ -51,6 +51,7 @@ const DOCS_ENTRY_IDS = [
   "admin.users",
   "admin.cocalc-cli",
   "admin.accounts-receivable",
+  "admin.crm-ui",
   "admin.crm",
   "admin.cocalc-software",
   "admin.bay-ops",

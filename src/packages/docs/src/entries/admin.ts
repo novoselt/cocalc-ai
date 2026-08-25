@@ -10,6 +10,7 @@ import {
   ADMIN_BAY_OPS_BODY,
   ADMIN_CLI_BODY,
   ADMIN_CRM_BODY,
+  ADMIN_CRM_UI_BODY,
   ADMIN_MANAGED_EGRESS_BODY,
   ADMIN_MEMBERSHIP_AND_LICENSES_BODY,
   ADMIN_NEWS_BODY,
@@ -163,6 +164,27 @@ export const ADMIN_ENTRIES: DocsEntry[] = [
     summary:
       "Operate the shared commercial-order, invoicing, collection, and site-license fulfillment workflow safely.",
     title: "Operate accounts receivable",
+    visibility: "admin",
+  },
+  {
+    audiences: ["teams"],
+    body: ADMIN_CRM_UI_BODY.trim(),
+    category: "Admin",
+    id: "admin.crm-ui",
+    image: docsIcon(
+      "/public/docs/collaborators-8ce1955f.webp",
+      "A customer relationship workspace with people, pipeline, follow-up, linked systems, and timeline",
+    ),
+    lastReviewed: "2026-08-25",
+    noActionReason:
+      "Admin UI guide; perform the documented workflow in Admin -> Customers.",
+    searchKeywords:
+      "CRM customer relationship UI Customer 360 organization institution contacts opportunity adoption pilot renewal task timeline Zendesk commercial orders site licenses",
+    slug: "admin/crm-ui",
+    status: "ready",
+    summary:
+      "Use the Customers queue and Customer 360 workspace to coordinate institutional relationships safely.",
+    title: "Use the customer relationships workspace",
     visibility: "admin",
   },
   {

@@ -514,6 +514,77 @@ Enable visibility first, then normal mutations, and only then export/backfill.
 Rollback should disable effectful controls while preserving read visibility.
 `;
 
+export const ADMIN_CRM_UI_BODY = String.raw`
+## What the Customers workspace is for
+
+Open **Admin → Customers** to see the shared operational record for an
+institution or other customer. The workspace brings together reviewed
+identity, contacts, opportunities, follow-up tasks, support references,
+commercial orders, site licenses, and a chronological timeline. Zendesk,
+Accounts Receivable, Stripe, and site-license administration remain the
+authoritative systems for their own work.
+
+The customer number, such as \`CRM-2026-000123\`, is the stable identifier to
+use when discussing a record with another admin or an agent.
+
+## Find the right customer first
+
+1. Choose a **View** to narrow the queue to prospects, pilots, renewals,
+   expansions, overdue follow-up, or another operational group.
+2. Search by customer name, alias, domain, contact, or customer number.
+3. Open the record and verify its domains, contacts, linked systems, and
+   relationship owner before adding anything.
+4. Create a customer only when search shows that no appropriate record exists.
+
+The summary cards describe the currently visible queue. **Data quality and
+follow-up diagnostics** finds records that need ownership, tasks, or system
+links; it does not change data.
+
+## Work in Customer 360
+
+The customer page is organized around the team's normal workflow:
+
+- **People** records decision makers, instructors, billing contacts, and other
+  reviewed contacts. A contact may also link to a verified CoCalc account.
+- **Pipeline** records a constrained opportunity such as an adoption pilot,
+  renewal, or expansion. When terms are accepted, hand the won opportunity to
+  Accounts Receivable instead of copying payment details into CRM.
+- **Follow-up** records the next internal action with an admin assignee and due
+  date. Use concise, actionable subjects such as “Obtain purchase order”.
+- **Commercial and support systems** links stable Zendesk, Stripe, commercial
+  order, and site-license identifiers. The linked systems retain authority for
+  conversation, payment, fulfillment, and entitlement state.
+- **Timeline** is an append-only operational history. Use its filter to find
+  events by summary, details, source, type, date, or ticket/order identifier.
+
+Use **Add note** for durable internal context that is not itself a task. Never
+store card data, banking credentials, passwords, private keys, or unrestricted
+provider payloads in CRM.
+
+## Review and confirm changes
+
+CRM changes use a two-step safety flow:
+
+1. Complete the form and choose **Review change**.
+2. Read the proposed fields, warnings, and audit reason in the preview.
+3. Choose **Confirm with fresh auth** and complete the browser verification.
+
+If the record changed after preview, refresh it and review a new proposal rather
+than retrying stale data. Closing a preview makes no change. The audit reason
+should explain why the action is appropriate, not merely repeat the button
+label.
+
+## Common handoffs
+
+- Continue support conversations and ticket status changes in Zendesk.
+- Continue invoicing, collection, payment verification, and fulfillment in
+  **Admin → Accounts Receivable**.
+- Continue seat pools, domains, managers, and entitlement details in
+  site-license administration.
+- Use the [agent and CLI runbook](/app-docs/admin/crm) for automation, exact
+  commands, diagnostics, merges, backfill, and system boundaries.
+`;
+
 export const ADMIN_SOFTWARE_COMMAND_BODY = `
 ## What cocalc software is for
 
