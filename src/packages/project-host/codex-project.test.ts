@@ -394,7 +394,7 @@ describe("initCodexProjectRunner", () => {
     expect(restrictedEgressCloseMock).toHaveBeenCalledTimes(1);
   });
 
-  it("adds a resolvable host alias to a newly created Codex container", async () => {
+  it("adds the host alias and protected auth mount to a Codex container", async () => {
     const proc = new FakeProc();
     spawnMock.mockReturnValue(proc);
     execFileMock.mockImplementation((_cmd, args, _opts, cb) => {
@@ -415,6 +415,10 @@ describe("initCodexProjectRunner", () => {
     await fs.writeFile(path.join(bin, "codex"), "");
     const home = path.join(tmp, "home");
     await fs.mkdir(home, { recursive: true });
+    const codexHome = path.join(tmp, "subscription-home");
+    await fs.mkdir(codexHome, { recursive: true });
+    await fs.writeFile(path.join(codexHome, "auth.json"), "{}\n");
+    await fs.writeFile(path.join(codexHome, "config.toml"), "");
     const imageFile = path.join(tmp, "image-name.txt");
     await fs.writeFile(imageFile, "buildpack-deps:noble-scm\n");
     filesystem.localPath.mockResolvedValue({ home, scratch: undefined });
@@ -433,9 +437,10 @@ describe("initCodexProjectRunner", () => {
         ({ source, target }) => `--volume=${source}:${target}`,
       );
     auth.resolveCodexAuthRuntime.mockResolvedValue({
-      source: "account-api-key",
+      source: "subscription",
       contextId: "host-alias-test",
-      env: { OPENAI_API_KEY: "secret-key" },
+      codexHome,
+      env: {},
     });
     process.env.COCALC_BIN_PATH = bin;
 
@@ -460,6 +465,7 @@ describe("initCodexProjectRunner", () => {
         "--network=pasta:--map-gw",
         "--add-host",
         "host.containers.internal:10.206.0.1",
+        `--volume=${codexHome}:/run/cocalc/codex-subscription`,
       ]),
     );
 

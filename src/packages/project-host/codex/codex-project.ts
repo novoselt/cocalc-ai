@@ -64,6 +64,7 @@ import {
   startRestrictedCodexEgressProxySession,
   type RestrictedCodexEgressProxySession,
 } from "./restricted-egress-proxy";
+import { PROJECT_RUNTIME_SUBSCRIPTION_CODEX_HOME } from "./codex-runtime-paths";
 import type {
   CodexSiteFundedTurnRequest,
   CodexSiteFundedTurnRuntime,
@@ -1458,6 +1459,15 @@ async function ensureContainer({
     }
   }
   if (codexHome && authRuntime.source === "subscription") {
+    // Device login uses this non-overlapping mount as CODEX_HOME. Do not put
+    // it below /home/user: the project-home bind mount can shadow nested file
+    // mounts, causing Codex to write account credentials into project storage.
+    args.push(
+      mountArg({
+        source: codexHome,
+        target: PROJECT_RUNTIME_SUBSCRIPTION_CODEX_HOME,
+      }),
+    );
     // Subscription auth should not live in project storage. Mount only the auth
     // files from secrets, while keeping project-local sessions in the runtime home.
     const authPath = join(codexHome, "auth.json");
@@ -1560,6 +1570,7 @@ export type SpawnCodexInProjectContainerOptions = {
   args: string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  execOnlyEnv?: NodeJS.ProcessEnv;
   authRuntime?: CodexAuthRuntime;
   touchReason?: string | false;
   forceRefreshSiteKey?: boolean;
@@ -1583,6 +1594,7 @@ export async function spawnCodexInProjectContainer({
   args,
   cwd,
   env: extraEnv,
+  execOnlyEnv,
   authRuntime: explicitAuthRuntime,
   touchReason = "codex",
   forceRefreshSiteKey = false,
@@ -1646,7 +1658,11 @@ export async function spawnCodexInProjectContainer({
     "-e",
     `LOGNAME=${DEFAULT_PROJECT_RUNTIME_USER}`,
   ];
-  const execEnv = { ...authRuntime.env, ...toStringEnv(extraEnv) };
+  const execEnv = {
+    ...authRuntime.env,
+    ...toStringEnv(extraEnv),
+    ...toStringEnv(execOnlyEnv),
+  };
   let restrictedEgress: RestrictedCodexEgressProxySession | undefined;
   const cliBearer = await resolveProjectCliBearer({
     projectId,

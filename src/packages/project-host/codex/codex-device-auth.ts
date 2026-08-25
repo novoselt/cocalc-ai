@@ -10,6 +10,7 @@ import {
 import { pushSubscriptionAuthToRegistry } from "./codex-auth-registry";
 import { touchSubscriptionCacheUsage } from "./codex-subscription-cache-gc";
 import { spawnCodexInProjectContainer } from "./codex-project";
+import { PROJECT_RUNTIME_SUBSCRIPTION_CODEX_HOME } from "./codex-runtime-paths";
 
 const logger = getLogger("project-host:codex-device-auth");
 
@@ -187,6 +188,11 @@ export async function startCodexDeviceAuth(
     projectId,
     accountId,
     args: ["login", "--device-auth"],
+    // Keep this process-specific. Normal Codex turns retain project-local
+    // sessions, while device login writes only to the protected host cache.
+    execOnlyEnv: {
+      CODEX_HOME: PROJECT_RUNTIME_SUBSCRIPTION_CODEX_HOME,
+    },
     authRuntime,
     touchReason: "codex-device-auth",
   });
