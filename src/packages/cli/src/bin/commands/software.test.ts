@@ -3442,10 +3442,7 @@ test("software deploy host-bootstrap separates publish from rollout", async () =
   const artifactId = "20260614T235912Z-e882d124-bootstrap-fix";
   const artifactKey = `software/artifacts/host-bootstrap/${artifactId}/files/bootstrap.py`;
   assert.equal(r2.objects.get(artifactKey)!.toString("utf8"), bootstrapBody);
-  assert.equal(
-    r2.objects.get("software/bootstrap/latest/bootstrap.py")!.toString("utf8"),
-    bootstrapBody,
-  );
+  assert.equal(r2.objects.has("software/bootstrap/latest/bootstrap.py"), false);
   assert.equal(
     r2.objects
       .get(`software/bootstrap/${artifactId}/bootstrap.py`)!
@@ -3454,10 +3451,8 @@ test("software deploy host-bootstrap separates publish from rollout", async () =
   );
   const sha256 = createHash("sha256").update(bootstrapBody).digest("hex");
   assert.equal(
-    r2.objects
-      .get("software/bootstrap/latest/bootstrap.py.sha256")!
-      .toString("utf8"),
-    `${sha256}  bootstrap.py\n`,
+    r2.objects.has("software/bootstrap/latest/bootstrap.py.sha256"),
+    false,
   );
   assert.equal(
     r2.objects
@@ -3511,6 +3506,7 @@ test("software deploy host-bootstrap separates publish from rollout", async () =
   );
   assert.equal(record.details.host_bootstrap_reconcile, false);
   assert.equal(record.details.host_bootstrap_scope, undefined);
+  assert.equal(record.details.host_bootstrap_publish_channel, undefined);
 
   runs.length = 0;
   process.argv[1] = "software";
@@ -3524,6 +3520,8 @@ test("software deploy host-bootstrap separates publish from rollout", async () =
       "--rollout",
       "--bootstrap-scope",
       "helpers",
+      "--bootstrap-publish-channel",
+      "staging",
       "host-bootstrap:bootstrap-fix",
       "staging",
       "--env-file",
@@ -3558,6 +3556,11 @@ test("software deploy host-bootstrap separates publish from rollout", async () =
   );
   assert.equal(record.details.host_bootstrap_reconcile, true);
   assert.equal(record.details.host_bootstrap_scope, "helpers");
+  assert.equal(record.details.host_bootstrap_publish_channel, "staging");
+  assert.equal(
+    r2.objects.get("software/bootstrap/staging/bootstrap.py")!.toString("utf8"),
+    bootstrapBody,
+  );
 });
 
 test("software deploy host-bootstrap requires scope only with rollout", async () => {
@@ -3596,6 +3599,34 @@ test("software deploy host-bootstrap requires scope only with rollout", async ()
       "staging",
     ]),
     /--bootstrap-scope requires --rollout/,
+  );
+  await assert.rejects(
+    program.parseAsync([
+      "node",
+      "test",
+      "--quiet",
+      "software",
+      "deploy",
+      "--bootstrap-publish-channel",
+      "candidate",
+      "host-bootstrap",
+      "staging",
+    ]),
+    /--bootstrap-publish-channel must be latest or staging/,
+  );
+  await assert.rejects(
+    program.parseAsync([
+      "node",
+      "test",
+      "--quiet",
+      "software",
+      "deploy",
+      "--bootstrap-publish-channel",
+      "staging",
+      "hub",
+      "staging",
+    ]),
+    /--bootstrap-publish-channel is only valid when deploying host-bootstrap/,
   );
 });
 

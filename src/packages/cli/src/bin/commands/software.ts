@@ -138,6 +138,7 @@ type DeployOptions = {
   rolloutCanaryStabilizeSeconds?: string;
   rolloutStabilizeSeconds?: string;
   bootstrapScope?: string;
+  bootstrapPublishChannel?: string;
 };
 
 function parseHostBootstrapScope(
@@ -148,6 +149,14 @@ function parseHostBootstrapScope(
     return value;
   }
   throw new Error("--bootstrap-scope must be full, helpers, or environment");
+}
+
+function parseHostBootstrapPublishChannel(
+  value: string | undefined,
+): "latest" | "staging" | undefined {
+  if (value == null) return undefined;
+  if (value === "latest" || value === "staging") return value;
+  throw new Error("--bootstrap-publish-channel must be latest or staging");
 }
 
 type HistoryOptions = {
@@ -585,7 +594,8 @@ function rawSoftwareComponentInfo(
       lifecycle: [
         "Record packages/server/cloud/bootstrap/bootstrap.py as an immutable software artifact.",
         "Push the artifact to the R2 software artifact store.",
-        "Publish software/bootstrap/latest/bootstrap.py and bootstrap.py.sha256.",
+        "Publish immutable bootstrap.py and bootstrap.py.sha256 objects.",
+        "Optionally publish a mutable latest or staging channel only when explicitly requested.",
         "Reconcile online project hosts so they refresh bootstrap-managed host state.",
       ],
       commands: {
@@ -606,7 +616,7 @@ function rawSoftwareComponentInfo(
       related_components: ["project-host"],
       operator_notes: [
         "This replaces the old manual publish:bootstrap step for normal deploys.",
-        "The latest bootstrap URL is mutable, so deploy history is the audit trail for what changed.",
+        "Mutable bootstrap channels are never inferred from a site profile; pass --bootstrap-publish-channel explicitly when promotion is intentional.",
         "Deploy updates desired state without touching running hosts unless --rollout is explicit.",
         "A rollout requires --bootstrap-scope so daemon restart behavior is explicit.",
         "Use helpers for privileged helper, sudo, networking, I/O, and host logging policy changes; it does not restart project-host, Conat, or ACP.",
@@ -950,7 +960,7 @@ function softwareComponentDescription(
     case "bay-scaffold":
       return "The bay scaffold is the systemd units, scripts, and environment templates that define how bay services run. Deploy this when operational wiring changes but application runtime code does not need a full rollout.";
     case "host-bootstrap":
-      return "Host-bootstrap is the mutable bootstrap.py entry point project hosts download for host-level setup and helper refreshes. Deploying it publishes software/bootstrap/latest/bootstrap.py and reconciles online project hosts.";
+      return "Host-bootstrap is the bootstrap.py entry point project hosts download for host-level setup and helper refreshes. Deploying it publishes immutable objects and reconciles online project hosts; mutable channel promotion is explicit.";
     case "host-conat-router":
       return "This component targets the project-host-local Conat router managed component, not the bay router. It uses a project-host artifact and reconciles the managed component across online project hosts.";
     case "host-conat-persist":
@@ -2660,6 +2670,9 @@ function rollbackDeployArgs({
   if (opts.envFile) args.push("--env-file", opts.envFile);
   if (component === "host-bootstrap") {
     const bootstrapScope = parseHostBootstrapScope(opts.bootstrapScope);
+    const bootstrapPublishChannel = parseHostBootstrapPublishChannel(
+      opts.bootstrapPublishChannel,
+    );
     if (opts.rollout && !bootstrapScope) {
       throw new Error(
         "software rollback host-bootstrap --rollout requires --bootstrap-scope full, helpers, or environment",
@@ -2672,6 +2685,9 @@ function rollbackDeployArgs({
     }
     if (opts.rollout) {
       args.push("--rollout", "--bootstrap-scope", bootstrapScope!);
+    }
+    if (bootstrapPublishChannel) {
+      args.push("--bootstrap-publish-channel", bootstrapPublishChannel);
     }
   }
   if (component === "plus") {
@@ -4084,6 +4100,10 @@ Supported deploy/smoke components:
       "--bootstrap-scope <scope>",
       "with host-bootstrap --rollout: full restarts project-host; helpers updates privileged helpers without daemon restarts",
     )
+    .option(
+      "--bootstrap-publish-channel <channel>",
+      "with host-bootstrap: explicitly update the mutable latest or staging bootstrap channel",
+    )
     .option("--local-store <path>", "local artifact store")
     .option("--config <path>", "rocket config path")
     .option("--remote <ssh-target>", "bay SSH target")
@@ -4131,6 +4151,9 @@ Supported deploy/smoke components:
           );
         }
         const bootstrapScope = parseHostBootstrapScope(opts.bootstrapScope);
+        const bootstrapPublishChannel = parseHostBootstrapPublishChannel(
+          opts.bootstrapPublishChannel,
+        );
         const deploysHostBootstrap = components.includes("host-bootstrap");
         if (deploysHostBootstrap && opts.rollout && !bootstrapScope) {
           throw new Error(
@@ -4145,6 +4168,11 @@ Supported deploy/smoke components:
         if (!deploysHostBootstrap && bootstrapScope) {
           throw new Error(
             "--bootstrap-scope is only valid when deploying host-bootstrap",
+          );
+        }
+        if (!deploysHostBootstrap && bootstrapPublishChannel) {
+          throw new Error(
+            "--bootstrap-publish-channel is only valid when deploying host-bootstrap",
           );
         }
         await runDeployTypecheck(deps);
@@ -4549,6 +4577,11 @@ Supported deploy/smoke components:
                 ...(hostBootstrapSha256Url
                   ? { host_bootstrap_sha256_url: hostBootstrapSha256Url }
                   : {}),
+                ...(bootstrapPublishChannel
+                  ? {
+                      host_bootstrap_publish_channel: bootstrapPublishChannel,
+                    }
+                  : {}),
                 ...(releaseProduct ? { release_product: releaseProduct } : {}),
                 ...(releaseChannel ? { release_channel: releaseChannel } : {}),
                 ...(releaseInstall ?? {}),
@@ -4705,11 +4738,14 @@ Supported deploy/smoke components:
                     entry: artifact.remote_entry,
                     selector: artifact.artifact_id,
                   });
-                  await publishHostBootstrapArtifact({
-                    client,
-                    config,
-                    entry: artifact.remote_entry,
-                  });
+                  if (bootstrapPublishChannel) {
+                    await publishHostBootstrapArtifact({
+                      client,
+                      config,
+                      entry: artifact.remote_entry,
+                      selector: bootstrapPublishChannel,
+                    });
+                  }
                   hostBootstrapUrl = published.url;
                   hostBootstrapSha256Url = published.sha256_url;
                   record.details = {
@@ -4717,6 +4753,12 @@ Supported deploy/smoke components:
                     host_bootstrap_selector: published.selector,
                     host_bootstrap_url: hostBootstrapUrl,
                     host_bootstrap_sha256_url: hostBootstrapSha256Url,
+                    ...(bootstrapPublishChannel
+                      ? {
+                          host_bootstrap_publish_channel:
+                            bootstrapPublishChannel,
+                        }
+                      : {}),
                     host_bootstrap_reconcile: opts.rollout === true,
                     ...(bootstrapScope
                       ? { host_bootstrap_scope: bootstrapScope }
@@ -4788,6 +4830,11 @@ Supported deploy/smoke components:
                 : {}),
               ...(hostBootstrapSha256Url
                 ? { host_bootstrap_sha256_url: hostBootstrapSha256Url }
+                : {}),
+              ...(bootstrapPublishChannel
+                ? {
+                    host_bootstrap_publish_channel: bootstrapPublishChannel,
+                  }
                 : {}),
               ...(hostBootstrapTarget
                 ? {
@@ -4943,6 +4990,10 @@ Supported deploy/smoke components:
     .option(
       "--bootstrap-scope <scope>",
       "with host-bootstrap --rollout: full, helpers, or environment",
+    )
+    .option(
+      "--bootstrap-publish-channel <channel>",
+      "with host-bootstrap: explicitly update the mutable latest or staging bootstrap channel",
     )
     .option(
       "--rollout",
