@@ -47,6 +47,27 @@ export interface Data {
 
 const pinchMax = 100;
 
+// Approximate pixels per unit for the non-pixel wheel delta modes.
+const WHEEL_LINE_HEIGHT = 16;
+const WHEEL_PAGE_HEIGHT = 800;
+
+// Firefox and some mouse drivers report wheel deltas in lines (deltaMode 1,
+// typically +-3) or pages (deltaMode 2) rather than pixels. Treating those raw
+// values as pixels makes ctrl+wheel zoom nearly inert, so normalize to pixels.
+export function normalizeWheelDeltaY(e: {
+  deltaY: number;
+  deltaMode?: number;
+}): number {
+  switch (e.deltaMode) {
+    case 1:
+      return e.deltaY * WHEEL_LINE_HEIGHT;
+    case 2:
+      return e.deltaY * WHEEL_PAGE_HEIGHT;
+    default:
+      return e.deltaY;
+  }
+}
+
 export default function usePinchToZoom({
   target,
   min = 5,
@@ -124,7 +145,7 @@ export default function usePinchToZoom({
       // Multiplicative scaling: each tick changes zoom by a percentage.
       // Cap the exponent to prevent fast-scroll jumps.
       const MAX_STEP = 0.16 * wheelSpeed;
-      const rawExp = (-e.deltaY / 750) * wheelSpeed;
+      const rawExp = (-normalizeWheelDeltaY(e) / 750) * wheelSpeed;
       const clampedExp = Math.max(-MAX_STEP, Math.min(MAX_STEP, rawExp));
       const newSize = Math.min(
         max,
