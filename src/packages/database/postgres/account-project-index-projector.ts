@@ -424,6 +424,8 @@ export async function drainAccountProjectIndexProjection(opts?: {
       };
     }
 
+    // The collaborator projector can briefly lock the same outbox rows. Wait
+    // for the oldest event so newer project state cannot overtake it.
     const { rows } = await client.query<ProjectOutboxEventRow>(
       `SELECT
          event_id,
@@ -440,7 +442,7 @@ export async function drainAccountProjectIndexProjection(opts?: {
         AND published_at IS NULL
       ORDER BY created_at ASC, event_id ASC
       LIMIT $2
-      FOR UPDATE SKIP LOCKED`,
+      FOR UPDATE`,
       [bay_id, limit],
     );
 
