@@ -58,6 +58,10 @@ import type {
   MembershipAllocationDailyRow,
   MembershipAllocationSeries,
   MembershipAllocationSeriesQuery,
+  ComputeRevenueDailyRow,
+  ComputeRevenueSeries,
+  ComputeRevenueSeriesQuery,
+  ComputeUsageDailyRow,
   MembershipAnalyticsEventRow,
   MembershipAnalyticsEventsQuery,
   MembershipAnalyticsEventSummaryRow,
@@ -161,6 +165,10 @@ import {
   getMembershipAllocationSeriesLocal,
   membershipAllocationSeriesRange,
 } from "@cocalc/server/membership/allocation-analytics-series";
+import {
+  computeRevenueSeriesRange,
+  getComputeRevenueSeriesLocal,
+} from "@cocalc/server/purchases/compute-revenue-analytics-series";
 import type {
   MembershipPackageDetails,
   SiteLicenseAffiliationReverificationSeat,
@@ -622,6 +630,88 @@ async function getMembershipAllocationSeriesForBay({
     : await getInterBayBridge()
         .bayOps(bay_id, { timeout_ms: 15_000 })
         .getMembershipAllocationSeries({ ...query, account_id });
+}
+
+async function getComputeRevenueSeriesForBay({
+  account_id,
+  bay_id,
+  currentBayId,
+  query,
+}: {
+  account_id?: string;
+  bay_id: string;
+  currentBayId: string;
+  query: ComputeRevenueSeriesQuery;
+}): Promise<
+  Pick<
+    ComputeRevenueSeries,
+    "start" | "end" | "complete_through" | "revenue" | "usage"
+  >
+> {
+  return bay_id === currentBayId
+    ? await getComputeRevenueSeriesLocal({ query })
+    : await getInterBayBridge()
+        .bayOps(bay_id, { timeout_ms: 15_000 })
+        .getComputeRevenueSeries({ ...query, account_id });
+}
+
+function aggregateComputeRevenueRows(
+  reports: Array<Pick<ComputeRevenueSeries, "revenue">>,
+): ComputeRevenueDailyRow[] {
+  const rows = new Map<string, ComputeRevenueDailyRow>();
+  for (const report of reports) {
+    for (const row of report.revenue) {
+      const key = [
+        dateKey(row.day),
+        row.product,
+        row.provider,
+        row.cost_component,
+      ].join("\0");
+      const aggregate = rows.get(key) ?? {
+        ...row,
+        day: dateKey(row.day),
+        revenue_cents: 0,
+        purchase_count: 0,
+      };
+      aggregate.revenue_cents += numberValue(row.revenue_cents);
+      aggregate.purchase_count += numberValue(row.purchase_count);
+      rows.set(key, aggregate);
+    }
+  }
+  return [...rows.values()].sort((a, b) =>
+    [dateKey(a.day), a.product, a.provider, a.cost_component]
+      .join("\0")
+      .localeCompare(
+        [dateKey(b.day), b.product, b.provider, b.cost_component].join("\0"),
+      ),
+  );
+}
+
+function aggregateComputeUsageRows(
+  reports: Array<Pick<ComputeRevenueSeries, "usage">>,
+): ComputeUsageDailyRow[] {
+  const rows = new Map<string, ComputeUsageDailyRow>();
+  for (const report of reports) {
+    for (const row of report.usage) {
+      const key = [dateKey(row.day), row.product, row.provider].join("\0");
+      const aggregate = rows.get(key) ?? {
+        ...row,
+        day: dateKey(row.day),
+        running_unit_seconds: 0,
+        distinct_running_units: 0,
+      };
+      aggregate.running_unit_seconds += numberValue(row.running_unit_seconds);
+      aggregate.distinct_running_units += numberValue(
+        row.distinct_running_units,
+      );
+      rows.set(key, aggregate);
+    }
+  }
+  return [...rows.values()].sort((a, b) =>
+    [dateKey(a.day), a.product, a.provider]
+      .join("\0")
+      .localeCompare([dateKey(b.day), b.product, b.provider].join("\0")),
+  );
 }
 
 async function getMembershipAnalyticsEventsForBay({
@@ -1087,6 +1177,72 @@ export async function getMembershipAllocationSeries(
     end: end.toISOString(),
     bays,
     rows: aggregateMembershipAllocationRows(reports),
+  };
+}
+
+export async function getComputeRevenueSeries(
+  query: ComputeRevenueSeriesQuery = {},
+): Promise<ComputeRevenueSeries> {
+  await requireAdmin(query.account_id);
+  assertMembershipTierAdminBay();
+  const currentBayId = getConfiguredBayId();
+  const seedBayId = getSeedBayId();
+  const { start, end } = computeRevenueSeriesRange(query);
+  const seriesQuery: ComputeRevenueSeriesQuery = { ...query, start, end };
+  const bayIds = await getConfiguredBayIdsForMembershipAllocationSeries();
+  const settled = await Promise.allSettled(
+    bayIds.map((bay_id) =>
+      getComputeRevenueSeriesForBay({
+        account_id: query.account_id,
+        bay_id,
+        currentBayId,
+        query: seriesQuery,
+      }),
+    ),
+  );
+  const reports: Array<
+    Pick<ComputeRevenueSeries, "complete_through" | "revenue" | "usage">
+  > = [];
+  const bays: MembershipAnalyticsOverviewBay[] = bayIds.map((bay_id, index) => {
+    const result = settled[index];
+    if (result.status === "fulfilled") {
+      reports.push(result.value);
+      return { bay_id, ok: true };
+    }
+    return { bay_id, ok: false, error: `${result.reason}` };
+  });
+  const completed = reports.map(({ complete_through }) =>
+    complete_through == null ? null : dateKey(complete_through),
+  );
+  const completeThrough =
+    completed.length > 0 && completed.every((value) => value != null)
+      ? completed.sort()[0]
+      : null;
+  const visibleReports = reports.map((report) => ({
+    ...report,
+    revenue:
+      completeThrough == null
+        ? []
+        : report.revenue.filter(({ day }) => dateKey(day) <= completeThrough),
+    usage:
+      completeThrough == null
+        ? []
+        : report.usage.filter(({ day }) => dateKey(day) <= completeThrough),
+  }));
+  const aggregateEnd = completeThrough
+    ? new Date(`${completeThrough}T00:00:00.000Z`).valueOf() +
+      24 * 60 * 60 * 1000
+    : start.valueOf();
+  return {
+    checked_at: new Date().toISOString(),
+    current_bay_id: currentBayId,
+    seed_bay_id: seedBayId,
+    start: start.toISOString(),
+    end: new Date(Math.min(end.valueOf(), aggregateEnd)).toISOString(),
+    complete_through: completeThrough,
+    bays,
+    revenue: aggregateComputeRevenueRows(visibleReports),
+    usage: aggregateComputeUsageRows(visibleReports),
   };
 }
 

@@ -174,6 +174,7 @@ import {
   crmActionCapabilities,
 } from "@cocalc/server/crm/feature-flags";
 import { getMembershipAllocationSeriesLocal } from "@cocalc/server/membership/allocation-analytics-series";
+import { getComputeRevenueSeriesLocal } from "@cocalc/server/purchases/compute-revenue-analytics-series";
 import { getActiveUserMapOverview } from "@cocalc/server/account-presence-locations";
 import {
   getActiveUserMapHistorySeries,
@@ -666,6 +667,13 @@ async function startBayOpsService(): Promise<void> {
     }),
     getMembershipAllocationSeries: async (opts) => ({
       ...(await getMembershipAllocationSeriesLocal({ query: opts })),
+      checked_at: new Date().toISOString(),
+      current_bay_id: bay_id,
+      seed_bay_id: getConfiguredClusterSeedBayId(),
+      bays: [{ bay_id, ok: true }],
+    }),
+    getComputeRevenueSeries: async (opts) => ({
+      ...(await getComputeRevenueSeriesLocal({ query: opts })),
       checked_at: new Date().toISOString(),
       current_bay_id: bay_id,
       seed_bay_id: getConfiguredClusterSeedBayId(),
