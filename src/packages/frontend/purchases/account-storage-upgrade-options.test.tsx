@@ -86,6 +86,18 @@ const tiers: MembershipTierLike[] = [
       total_storage_hard_bytes: 100 * GB,
     },
   },
+  {
+    id: "monthly-only",
+    label: "Monthly only",
+    priority: 30,
+    store_visible: true,
+    price_monthly: 30,
+    project_defaults: { disk_quota: 20_000 },
+    usage_limits: {
+      total_storage_soft_bytes: 60 * GB,
+      total_storage_hard_bytes: 70 * GB,
+    },
+  },
 ];
 
 describe("account storage upgrade options", () => {
@@ -93,6 +105,10 @@ describe("account storage upgrade options", () => {
     expect(getAccountStorageUpgradeOptions(warning, tiers)).toEqual([
       expect.objectContaining({ id: "basic", annual_savings_percent: 25 }),
       expect.objectContaining({ id: "member", annual_savings_percent: 25 }),
+      expect.objectContaining({
+        id: "monthly-only",
+        price_yearly: undefined,
+      }),
     ]);
   });
 
@@ -128,7 +144,15 @@ describe("account storage upgrade options", () => {
     fireEvent.click(
       within(basic).getByRole("button", { name: "Choose Basic" }),
     );
-    expect(onSelect).toHaveBeenCalledWith("basic");
+    expect(onSelect).toHaveBeenCalledWith("basic", "year");
+    const monthlyOnly = screen.getByRole("article", {
+      name: "Monthly only storage upgrade",
+    });
+    expect(monthlyOnly).toHaveTextContent("Monthly billing: $30/month");
+    fireEvent.click(
+      within(monthlyOnly).getByRole("button", { name: "Choose Monthly only" }),
+    );
+    expect(onSelect).toHaveBeenCalledWith("monthly-only", "month");
     expect(screen.queryByText("Hidden")).not.toBeInTheDocument();
     expect(screen.queryByText("Mixed limits")).not.toBeInTheDocument();
   });

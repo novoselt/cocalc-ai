@@ -7,6 +7,7 @@ import { Button, Modal, Progress, Space, Typography } from "antd";
 import { useEffect, useMemo, useState } from "react";
 
 import MembershipPurchaseModal from "@cocalc/frontend/account/membership-purchase-modal";
+import type { BillingInterval } from "@cocalc/frontend/account/membership-pricing-chooser";
 import {
   getWarningMembershipDetails,
   shouldPollUsageWarnings,
@@ -178,6 +179,8 @@ export const AccountStorageWarning: React.FC<{
   const [open, setOpen] = useState(false);
   const [purchaseOpen, setPurchaseOpen] = useState(false);
   const [purchaseTarget, setPurchaseTarget] = useState<string>();
+  const [purchaseInterval, setPurchaseInterval] =
+    useState<BillingInterval>("year");
   const [dismissedWarningKey, setDismissedWarningKey] = useState<
     string | undefined
   >();
@@ -327,6 +330,7 @@ export const AccountStorageWarning: React.FC<{
             type="primary"
             onClick={() => {
               setPurchaseTarget(undefined);
+              setPurchaseInterval("year");
               setOpen(false);
               setPurchaseOpen(true);
             }}
@@ -424,8 +428,9 @@ export const AccountStorageWarning: React.FC<{
           {open ? (
             <AccountStorageUpgradeOptionsLoader
               context={warning}
-              onSelect={(tierId) => {
+              onSelect={(tierId, interval) => {
                 setPurchaseTarget(tierId);
+                setPurchaseInterval(interval);
                 setOpen(false);
                 setPurchaseOpen(true);
               }}
@@ -435,7 +440,7 @@ export const AccountStorageWarning: React.FC<{
       </Modal>
       <MembershipPurchaseModal
         initialTargetClass={purchaseTarget}
-        initialTargetInterval="year"
+        initialTargetInterval={purchaseInterval}
         open={purchaseOpen}
         onClose={() => {
           setPurchaseOpen(false);
