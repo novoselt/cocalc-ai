@@ -597,7 +597,7 @@ commits it. Use \`result.id\` from the committed batch response as
 cocalc admin crm outreach batch create \
   --name "Example University adoption pilot" \
   --purpose "Offer a reviewed institutional adoption pilot" \
-  --kind adoption-pilot --owner admin@example.com \
+  --kind adoption_pilot --owner admin@example.com \
   --template adoption-pilot \
   --reason "Prepare a reviewed pilot offer" --json
 
@@ -605,20 +605,20 @@ cocalc admin crm outreach batch create \
 cocalc admin crm outreach batch create \
   --name "Example University adoption pilot" \
   --purpose "Offer a reviewed institutional adoption pilot" \
-  --kind adoption-pilot --owner admin@example.com \
+  --kind adoption_pilot --owner admin@example.com \
   --template adoption-pilot \
   --reason "Prepare a reviewed pilot offer" \
   --expected-version <expected-version-from-preview> \
   --idempotency-key <idempotency-key-from-preview> --commit --json
 
 # Preview adding one reviewed recipient; this does not add the recipient.
-cocalc admin crm outreach draft <batch-id> \
+cocalc admin crm outreach batch add <batch-id> \
   --person ada@example.edu --organization CRM-2026-000123 \
   --opportunity <opportunity-id> \
   --reason "Ada is the reviewed institutional contact" --json
 
 # Commit the same recipient after reviewing the rendered proposal.
-cocalc admin crm outreach draft <batch-id> \
+cocalc admin crm outreach batch add <batch-id> \
   --person ada@example.edu --organization CRM-2026-000123 \
   --opportunity <opportunity-id> \
   --reason "Ada is the reviewed institutional contact" \
