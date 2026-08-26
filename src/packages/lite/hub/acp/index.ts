@@ -7639,7 +7639,15 @@ async function persistQueuedUserMessageProjection({
       if (currentDate && currentSender) {
         const currentState =
           syncdbField<string | null>(current, "acp_state") ?? null;
-        const nextState = queued && waitingInLine ? "queued" : null;
+        const deliveredAtMs = Number(
+          syncdbField(current, "acp_guidance_delivered_at_ms"),
+        );
+        const nextState =
+          queued && waitingInLine
+            ? "queued"
+            : Number.isFinite(deliveredAtMs) && deliveredAtMs > 0
+              ? "sent"
+              : null;
         if (currentState !== nextState) {
           syncdb.set({
             event: "chat",
@@ -8623,6 +8631,108 @@ async function patchThreadAutomationProjection(opts: {
       await syncdb.save();
     },
   });
+}
+
+async function persistAcpGuidanceDeliveryProjection({
+  client,
+  request,
+  deliveredAtMs,
+}: {
+  client: ConatClient;
+  request: AcpSteerRequest;
+  deliveredAtMs: number;
+}): Promise<boolean> {
+  const chat = request.chat;
+  const userMessageId = `${chat?.parent_message_id ?? ""}`.trim();
+  const threadId = `${chat?.thread_id ?? ""}`.trim();
+  const projectId = `${chat?.project_id ?? request.project_id ?? ""}`.trim();
+  const path = `${chat?.path ?? ""}`.trim();
+  if (
+    !userMessageId ||
+    !threadId ||
+    !projectId ||
+    !path ||
+    !Number.isFinite(deliveredAtMs) ||
+    deliveredAtMs <= 0
+  ) {
+    return false;
+  }
+  return await withChatSyncDB({
+    client,
+    project_id: projectId,
+    path,
+    fn: async (syncdb) => {
+      const current = findChatRowByMessageId(syncdb, userMessageId);
+      const currentDate = normalizeIsoDateString(
+        syncdbField<string>(current, "date"),
+      );
+      const currentSender = syncdbField<string>(current, "sender_id");
+      if (!currentDate || !currentSender) return false;
+      const existingDeliveredAtMs = Number(
+        syncdbField(current, "acp_guidance_delivered_at_ms"),
+      );
+      const effectiveDeliveredAtMs =
+        Number.isFinite(existingDeliveredAtMs) && existingDeliveredAtMs > 0
+          ? existingDeliveredAtMs
+          : Math.floor(deliveredAtMs);
+      const currentState = `${syncdbField(current, "acp_state") ?? ""}`;
+      const currentSendMode = `${syncdbField(current, "acp_send_mode") ?? ""}`;
+      if (
+        existingDeliveredAtMs === effectiveDeliveredAtMs &&
+        currentState === "sent" &&
+        currentSendMode === "immediate"
+      ) {
+        return false;
+      }
+      const versionCountBefore = syncdbVersionCount(syncdb);
+      syncdb.set({
+        event: "chat",
+        date: currentDate,
+        sender_id: currentSender,
+        message_id: userMessageId,
+        thread_id: syncdbField<string>(current, "thread_id") ?? chat.thread_id,
+        acp_send_mode: "immediate",
+        acp_state: "sent",
+        acp_guidance_delivered_at_ms: effectiveDeliveredAtMs,
+      });
+      syncdb.commit();
+      await syncdb.save();
+      logSyncdbPatchflowDelta({
+        syncdb,
+        before: versionCountBefore,
+        phase: "guidance-delivered",
+        extra: {
+          project_id: projectId,
+          path,
+          thread_id: threadId,
+          user_message_id: userMessageId,
+          delivered_at_ms: effectiveDeliveredAtMs,
+        },
+      });
+      return true;
+    },
+  });
+}
+
+async function recordAcpGuidanceDelivered(
+  request: AcpSteerRequest,
+): Promise<void> {
+  if (!conatClient) return;
+  try {
+    await persistAcpGuidanceDeliveryProjection({
+      client: conatClient,
+      request,
+      deliveredAtMs: Date.now(),
+    });
+  } catch (err) {
+    logger.warn("failed to persist ACP guidance delivery time", {
+      project_id: request.chat?.project_id ?? request.project_id,
+      path: request.chat?.path,
+      thread_id: request.chat?.thread_id,
+      user_message_id: request.chat?.parent_message_id,
+      err,
+    });
+  }
 }
 
 async function prepareQueuedUserMessageForExecution({
@@ -9620,6 +9730,7 @@ async function processPendingAcpSteersOnce(): Promise<void> {
           candidateIds,
         });
         if (result.state === "steered") {
+          await recordAcpGuidanceDelivered(request);
           markAcpSteerHandled({ id: row.id });
           continue;
         }
@@ -9829,6 +9940,7 @@ async function attemptAcpSteerRequest(
     candidateIds,
   });
   if (result.state === "steered") {
+    await recordAcpGuidanceDelivered(request);
     return result;
   }
   if (result.state === "not_steerable") {
@@ -10593,6 +10705,7 @@ export const acpTestInternals = {
   hasOtherWorkerRunningAcpTurn,
   nextQueuedAcpJobForThread,
   noteDetachedWorkerQueuePoll,
+  persistAcpGuidanceDeliveryProjection,
   persistQueuedUserMessageProjection,
   prepareQueuedUserMessageForExecution,
   terminalTurnNeedsPeriodicRepair,

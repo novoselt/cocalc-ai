@@ -327,6 +327,7 @@ describe("ChatLog immediate steer rendering", () => {
     sentMessages.set("3000", {
       ...sentMessages.get("3000"),
       acp_state: "sent",
+      acp_guidance_delivered_at_ms: 4500,
     });
     rerender(
       <ChatLog
@@ -344,7 +345,38 @@ describe("ChatLog immediate steer rendering", () => {
       latestVirtuosoProps.computeItemKey(1, latestVirtuosoProps.data[1]),
     ).not.toBe(whileSendingKey);
     expect(lastRenderedMessageProps("assistant-1")?.activitySteers).toEqual([
-      expect.objectContaining({ messageId: "steer-1", state: "sent" }),
+      expect.objectContaining({
+        messageId: "steer-1",
+        state: "sent",
+        date: 4500,
+      }),
+    ]);
+
+    const correctedDeliveryMessages = new Map(sentMessages);
+    correctedDeliveryMessages.set("3000", {
+      ...correctedDeliveryMessages.get("3000"),
+      acp_guidance_delivered_at_ms: 5000,
+    });
+    const sentKey = latestVirtuosoProps.computeItemKey(
+      1,
+      latestVirtuosoProps.data[1],
+    );
+    rerender(
+      <ChatLog
+        {...props}
+        acpState={new Map([["message:steer-1", "sent"]]) as any}
+        messages={correctedDeliveryMessages}
+      />,
+    );
+    expect(
+      latestVirtuosoProps.computeItemKey(1, latestVirtuosoProps.data[1]),
+    ).not.toBe(sentKey);
+    expect(lastRenderedMessageProps("assistant-1")?.activitySteers).toEqual([
+      expect.objectContaining({
+        messageId: "steer-1",
+        state: "sent",
+        date: 5000,
+      }),
     ]);
   });
 
