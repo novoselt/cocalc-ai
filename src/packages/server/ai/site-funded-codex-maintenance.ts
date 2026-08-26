@@ -6,7 +6,10 @@
 import getLogger from "@cocalc/backend/logger";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { getConfiguredClusterSeedBayId } from "@cocalc/server/cluster-config";
-import { expireAbandonedSiteFundedCodexReservations } from "./site-funded-codex-reservations";
+import {
+  expireAbandonedSiteFundedCodexReservations,
+  reconcileTerminalSiteFundedCodexReservations,
+} from "./site-funded-codex-reservations";
 
 const logger = getLogger("server:ai:site-funded-codex-maintenance");
 const INTERVAL_MS = 60_000;
@@ -23,6 +26,12 @@ export function startSiteFundedCodexMaintenance(): void {
       if (expired > 0) {
         logger.info("expired abandoned site-funded Codex reservations", {
           expired,
+        });
+      }
+      const reconciled = await reconcileTerminalSiteFundedCodexReservations();
+      if (reconciled > 0) {
+        logger.info("reconciled terminal site-funded Codex reservations", {
+          reconciled,
         });
       }
     } catch (err) {

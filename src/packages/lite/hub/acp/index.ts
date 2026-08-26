@@ -2768,6 +2768,7 @@ export class ChatStreamWriter {
             payment_source_id: paymentSource.id,
             payment_source_label: paymentSource.label,
             payment_source_owner_account_id: paymentSource.owner_account_id,
+            site_funded_reservation_id: event.siteFundedReservationId,
             model: event.model,
             agent_kind: "codex",
             run_kind: this.metadata.automation_id
