@@ -27,6 +27,11 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "appends an immutable internal customer activity",
   },
+  "adminCrm.addOutreachRecipient": {
+    decision: "fresh-auth-required",
+    reason:
+      "adds reviewed prospect identity and immutable message content to an outreach batch",
+  },
   "adminCrm.archiveOrganization": {
     decision: "fresh-auth-required",
     reason: "archives a canonical customer relationship record",
@@ -48,6 +53,14 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   "adminCrm.createOrganization": {
     decision: "fresh-auth-required",
     reason: "creates a canonical customer identity",
+  },
+  "adminCrm.createOutreachBatch": {
+    decision: "fresh-auth-required",
+    reason: "creates a durable reviewed prospect outreach workflow",
+  },
+  "adminCrm.createOutreachTemplate": {
+    decision: "fresh-auth-required",
+    reason: "creates a durable prospect message template revision",
   },
   "adminCrm.createPerson": {
     decision: "fresh-auth-required",
@@ -85,6 +98,35 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "changes customer contact PII",
   },
+  "adminCrm.mutateContactSuppression": {
+    decision: "fresh-auth-required",
+    reason: "adds or revokes a durable outbound contact suppression",
+  },
+  "adminCrm.mutateOutreachDelivery": {
+    decision: "fresh-auth-required",
+    reason: "retries, reconciles, or cancels a reviewed provider delivery",
+  },
+  "adminCrm.removeOutreachRecipient": {
+    decision: "fresh-auth-required",
+    reason: "removes a reviewed recipient from a draft outreach batch",
+  },
+  "adminCrm.sendOutreachFollowup": {
+    decision: "fresh-auth-required",
+    reason: "queues a reviewed public follow-up in a prospect Zendesk thread",
+  },
+  "adminCrm.syncOutreachDelivery": {
+    decision: "fresh-auth-required",
+    reason: "reconciles provider state for a prospect conversation",
+  },
+  "adminCrm.transitionOutreachBatch": {
+    decision: "fresh-auth-required",
+    reason:
+      "approves, queues, pauses, resumes, or cancels reviewed outreach",
+  },
+  "adminCrm.transitionOutreachTemplate": {
+    decision: "fresh-auth-required",
+    reason: "activates or retires a prospect message template revision",
+  },
   "adminCrm.transitionOpportunity": {
     decision: "fresh-auth-required",
     reason: "changes a durable commercial pipeline stage",
@@ -100,6 +142,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   "adminCrm.updateOrganization": {
     decision: "fresh-auth-required",
     reason: "changes canonical customer identity and ownership",
+  },
+  "adminCrm.updateOutreachBatch": {
+    decision: "fresh-auth-required",
+    reason: "changes reviewed outreach purpose, ownership, or template state",
   },
   "adminCrm.updatePerson": {
     decision: "fresh-auth-required",
