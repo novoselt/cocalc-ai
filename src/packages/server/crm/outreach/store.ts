@@ -475,9 +475,12 @@ async function resolvePerson(db: Db, selector: string): Promise<any> {
   const value = bounded(selector, "person", 500);
   const normalized = value.toLowerCase();
   const { rows } = await db.query(
-    `SELECT DISTINCT p.* FROM crm_people p
-       LEFT JOIN crm_person_emails e ON e.person_id=p.id
-      WHERE p.id::text=$1 OR lower(p.display_name)=lower($1) OR e.normalized_email=$2
+    `SELECT p.* FROM crm_people p
+      WHERE p.id::text=$1 OR lower(p.display_name)=lower($1)
+         OR EXISTS (
+           SELECT 1 FROM crm_person_emails e
+            WHERE e.person_id=p.id AND e.normalized_email=$2
+         )
       ORDER BY p.status='active' DESC LIMIT 2`,
     [value, normalized],
   );
