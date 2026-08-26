@@ -19,10 +19,14 @@ import {
   type SiteFundedCodexUsageRecordResult,
 } from "@cocalc/util/ai/site-funded-codex";
 import { uuid } from "@cocalc/util/misc";
+import { ensureAiSessionsSchema } from "./acp-sessions";
 
 const logger = getLogger("server:ai:site-funded-codex-reservations");
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const GLOBAL_POOL_ID = "site-funded-codex-global" as const;
+const TERMINAL_SESSION_GRACE_MS = 60_000;
+const STALE_RESERVATION_HEARTBEAT_MS = 2 * 60_000;
+const ORPHANED_RESERVATION_HEARTBEAT_MS = 5 * 60_000;
 
 type DbClient = PoolClient;
 
@@ -233,6 +237,149 @@ async function expireCurrentPeriodReservations({
   }
 }
 
+function terminalReservationStatus(
+  state: string,
+): FinishSiteFundedCodexTurnOptions["status"] {
+  if (state === "completed") return "committed";
+  if (state === "interrupted" || state === "canceled") {
+    return "interrupted";
+  }
+  return "failed";
+}
+
+async function reconcileTerminalReservationsForPeriod({
+  client,
+  poolId,
+  periodStart,
+  terminalGraceMs = TERMINAL_SESSION_GRACE_MS,
+  staleHeartbeatMs = STALE_RESERVATION_HEARTBEAT_MS,
+  orphanedHeartbeatMs = ORPHANED_RESERVATION_HEARTBEAT_MS,
+}: {
+  client: DbClient;
+  poolId: SiteFundedCodexPoolId;
+  periodStart: Date;
+  terminalGraceMs?: number;
+  staleHeartbeatMs?: number;
+  orphanedHeartbeatMs?: number;
+}): Promise<number> {
+  const now = Date.now();
+  const terminalCutoff = new Date(now - Math.max(0, terminalGraceMs));
+  const heartbeatCutoff = new Date(now - Math.max(0, staleHeartbeatMs));
+  const orphanedHeartbeatCutoff = new Date(
+    now - Math.max(0, orphanedHeartbeatMs),
+  );
+  // Terminal session publication may beat the durable usage outbox, so exact
+  // matches wait briefly. Timing matches support old hosts during rollout;
+  // reservations with no session require a longer stale-heartbeat threshold.
+  const { rows } = await client.query(
+    `
+      SELECT r.reservation_id, r.reserved_microusd,
+             r.pool_reserved_microusd, r.committed_microusd,
+             terminal_session.state AS session_state,
+             terminal_session.exact_match
+      FROM site_ai_turn_reservations r
+      LEFT JOIN LATERAL (
+        SELECT s.state,
+               (s.site_funded_reservation_id = r.reservation_id) AS exact_match,
+               COALESCE(s.finished_at, s.updated_at) AS terminal_at
+        FROM ai_sessions s
+        WHERE s.terminal IS TRUE
+          AND (
+            s.site_funded_reservation_id = r.reservation_id
+            OR (
+              s.site_funded_reservation_id IS NULL
+              AND s.account_id = r.account_id
+              AND s.project_id = r.project_id
+              AND (s.host_id = r.host_id OR s.host_id IS NULL)
+              AND s.started_at >= r.started_at - INTERVAL '10 seconds'
+              AND s.started_at <= r.started_at + INTERVAL '2 minutes'
+              AND COALESCE(s.finished_at, s.updated_at) >= r.heartbeat_at
+            )
+          )
+        ORDER BY (s.site_funded_reservation_id = r.reservation_id) DESC,
+                 COALESCE(s.finished_at, s.updated_at) DESC
+        LIMIT 1
+      ) AS terminal_session ON TRUE
+      WHERE r.pool_id = $1 AND r.period_start = $2 AND r.status = 'active'
+        AND (
+          (
+            terminal_session.terminal_at <= $3::TIMESTAMPTZ
+            AND (
+              terminal_session.exact_match
+              OR (
+                r.heartbeat_at <= $4::TIMESTAMPTZ
+                AND NOT EXISTS (
+                  SELECT 1 FROM ai_sessions live
+                  WHERE live.account_id = r.account_id
+                    AND live.terminal IS NOT TRUE
+                    AND COALESCE(live.last_heartbeat_at, live.updated_at) >
+                        $4::TIMESTAMPTZ
+                )
+              )
+            )
+          )
+          OR (
+            terminal_session.terminal_at IS NULL
+            AND r.heartbeat_at <= $5::TIMESTAMPTZ
+            AND NOT EXISTS (
+              SELECT 1 FROM ai_sessions live
+              WHERE live.account_id = r.account_id
+                AND live.terminal IS NOT TRUE
+                AND COALESCE(live.last_heartbeat_at, live.updated_at) >
+                    $4::TIMESTAMPTZ
+            )
+          )
+        )
+      FOR UPDATE OF r
+    `,
+    [
+      poolId,
+      periodStart,
+      terminalCutoff,
+      heartbeatCutoff,
+      orphanedHeartbeatCutoff,
+    ],
+  );
+  let released = 0;
+  let committed = 0;
+  let reconciled = 0;
+  for (const row of rows) {
+    const reservationCommitted = int(row.committed_microusd);
+    const status = terminalReservationStatus(`${row.session_state ?? ""}`);
+    const result = await client.query(
+      `UPDATE site_ai_turn_reservations
+       SET status = $2, completed_at = NOW(), heartbeat_at = NOW(), outcome = $3
+       WHERE reservation_id = $1 AND status = 'active'`,
+      [
+        row.reservation_id,
+        status,
+        row.session_state == null
+          ? "stale reservation had no live AI session"
+          : row.exact_match
+            ? "reconciled from terminal AI session"
+            : "reconciled from terminal AI session during reservation rollout",
+      ],
+    );
+    if ((result.rowCount ?? 0) === 0) continue;
+    released += int(row.pool_reserved_microusd ?? row.reserved_microusd);
+    committed += reservationCommitted;
+    reconciled += 1;
+  }
+  if (reconciled > 0) {
+    await client.query(
+      `
+        UPDATE site_ai_funding_periods
+        SET reserved_microusd = GREATEST(0, reserved_microusd - $3),
+            committed_microusd = committed_microusd + $4,
+            updated_at = NOW()
+        WHERE pool_id = ANY($1::TEXT[]) AND period_start = $2
+      `,
+      [[poolId, GLOBAL_POOL_ID], periodStart, released, committed],
+    );
+  }
+  return reconciled;
+}
+
 function denied(
   code: Exclude<SiteFundedCodexAdmission, { allowed: true }>["code"],
   reason: string,
@@ -243,7 +390,10 @@ function denied(
 export async function reserveSiteFundedCodexTurn(
   opts: ReserveSiteFundedCodexTurnOptions,
 ): Promise<SiteFundedCodexAdmission> {
-  await ensureSiteFundedCodexReservationTables();
+  await Promise.all([
+    ensureSiteFundedCodexReservationTables(),
+    ensureAiSessionsSchema(),
+  ]);
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
@@ -311,6 +461,11 @@ export async function reserveSiteFundedCodexTurn(
       );
     }
     await expireCurrentPeriodReservations({
+      client,
+      poolId: opts.poolId,
+      periodStart: start,
+    });
+    await reconcileTerminalReservationsForPeriod({
       client,
       poolId: opts.poolId,
       periodStart: start,
@@ -713,6 +868,55 @@ export async function getSiteFundedCodexPoolStatus(): Promise<
       utilization: limit > 0 ? (reserved + committed) / limit : 1,
     };
   });
+}
+
+export async function reconcileTerminalSiteFundedCodexReservations({
+  terminalGraceMs = TERMINAL_SESSION_GRACE_MS,
+  staleHeartbeatMs = STALE_RESERVATION_HEARTBEAT_MS,
+  orphanedHeartbeatMs = ORPHANED_RESERVATION_HEARTBEAT_MS,
+}: {
+  terminalGraceMs?: number;
+  staleHeartbeatMs?: number;
+  orphanedHeartbeatMs?: number;
+} = {}): Promise<number> {
+  await Promise.all([
+    ensureSiteFundedCodexReservationTables(),
+    ensureAiSessionsSchema(),
+  ]);
+  const { rows } = await getPool().query(
+    `SELECT DISTINCT pool_id, period_start
+     FROM site_ai_turn_reservations
+     WHERE status = 'active'`,
+  );
+  let reconciled = 0;
+  for (const row of rows) {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      for (const poolId of [GLOBAL_POOL_ID, row.pool_id]) {
+        await client.query(
+          `SELECT pool_id FROM site_ai_funding_periods
+           WHERE pool_id = $1 AND period_start = $2 FOR UPDATE`,
+          [poolId, row.period_start],
+        );
+      }
+      reconciled += await reconcileTerminalReservationsForPeriod({
+        client,
+        poolId: row.pool_id,
+        periodStart: row.period_start,
+        terminalGraceMs,
+        staleHeartbeatMs,
+        orphanedHeartbeatMs,
+      });
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+  return reconciled;
 }
 
 export async function expireAbandonedSiteFundedCodexReservations(): Promise<number> {

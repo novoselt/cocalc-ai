@@ -24,6 +24,7 @@ export interface AcpSessionRow {
   payment_source_id?: string | null;
   payment_source_label?: string | null;
   payment_source_owner_account_id?: string | null;
+  site_funded_reservation_id?: string | null;
   model?: string | null;
   agent_kind: string;
   run_kind?: string | null;
@@ -54,6 +55,7 @@ export interface UpsertAcpSessionOptions {
   payment_source_id?: string | null;
   payment_source_label?: string | null;
   payment_source_owner_account_id?: string | null;
+  site_funded_reservation_id?: string | null;
   model?: string | null;
   agent_kind?: string | null;
   run_kind?: string | null;
@@ -122,6 +124,7 @@ function init(): void {
       payment_source_id TEXT,
       payment_source_label TEXT,
       payment_source_owner_account_id TEXT,
+      site_funded_reservation_id TEXT,
       model TEXT,
       agent_kind TEXT NOT NULL DEFAULT 'codex',
       run_kind TEXT,
@@ -136,6 +139,16 @@ function init(): void {
       metadata_json TEXT
     )
   `);
+  const columns = new Set(
+    (
+      db.prepare(`PRAGMA table_info(${TABLE})`).all() as Array<{
+        name?: string;
+      }>
+    ).map(({ name }) => `${name ?? ""}`),
+  );
+  if (!columns.has("site_funded_reservation_id")) {
+    db.exec(`ALTER TABLE ${TABLE} ADD COLUMN site_funded_reservation_id TEXT`);
+  }
   db.exec(
     `CREATE INDEX IF NOT EXISTS acp_sessions_account_state_updated_idx ON ${TABLE}(account_id, terminal, updated_at)`,
   );
@@ -144,6 +157,9 @@ function init(): void {
   );
   db.exec(
     `CREATE INDEX IF NOT EXISTS acp_sessions_payment_state_updated_idx ON ${TABLE}(payment_source_kind, payment_source_id, terminal, updated_at)`,
+  );
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS acp_sessions_site_funded_reservation_idx ON ${TABLE}(site_funded_reservation_id) WHERE site_funded_reservation_id IS NOT NULL`,
   );
   db.exec(
     `CREATE INDEX IF NOT EXISTS acp_sessions_host_state_updated_idx ON ${TABLE}(host_id, terminal, updated_at)`,
@@ -302,8 +318,8 @@ export function upsertAcpSession(opts: UpsertAcpSessionOptions): AcpSessionRow {
   const metadata = metadataJson(opts.metadata);
   db.prepare(
     `INSERT INTO ${TABLE}
-      (session_key, session_id, op_id, project_id, account_id, approver_account_id, host_id, path, thread_id, message_id, parent_message_id, state, terminal, payment_source_kind, payment_source_id, payment_source_label, payment_source_owner_account_id, model, agent_kind, run_kind, title, prompt_snippet, queued_at, started_at, updated_at, last_heartbeat_at, finished_at, error, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (session_key, session_id, op_id, project_id, account_id, approver_account_id, host_id, path, thread_id, message_id, parent_message_id, state, terminal, payment_source_kind, payment_source_id, payment_source_label, payment_source_owner_account_id, site_funded_reservation_id, model, agent_kind, run_kind, title, prompt_snippet, queued_at, started_at, updated_at, last_heartbeat_at, finished_at, error, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(session_key) DO UPDATE SET
         session_id = COALESCE(excluded.session_id, ${TABLE}.session_id),
         op_id = COALESCE(excluded.op_id, ${TABLE}.op_id),
@@ -326,6 +342,7 @@ export function upsertAcpSession(opts: UpsertAcpSessionOptions): AcpSessionRow {
         payment_source_id = COALESCE(excluded.payment_source_id, ${TABLE}.payment_source_id),
         payment_source_label = COALESCE(excluded.payment_source_label, ${TABLE}.payment_source_label),
         payment_source_owner_account_id = COALESCE(excluded.payment_source_owner_account_id, ${TABLE}.payment_source_owner_account_id),
+        site_funded_reservation_id = COALESCE(excluded.site_funded_reservation_id, ${TABLE}.site_funded_reservation_id),
         model = COALESCE(excluded.model, ${TABLE}.model),
         agent_kind = COALESCE(excluded.agent_kind, ${TABLE}.agent_kind),
         run_kind = COALESCE(excluded.run_kind, ${TABLE}.run_kind),
@@ -359,6 +376,7 @@ export function upsertAcpSession(opts: UpsertAcpSessionOptions): AcpSessionRow {
     clean(opts.payment_source_id),
     clean(opts.payment_source_label),
     clean(opts.payment_source_owner_account_id),
+    clean(opts.site_funded_reservation_id),
     clean(opts.model),
     clean(opts.agent_kind) ?? "codex",
     clean(opts.run_kind),

@@ -232,6 +232,7 @@ describe("acp session registry", () => {
       payment_source_id: request.account_id,
       payment_source_label: "ChatGPT Plan",
       payment_source_owner_account_id: request.account_id,
+      site_funded_reservation_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     });
 
     upsertAcpSessionFromRequest({
@@ -245,5 +246,8 @@ describe("acp session registry", () => {
     expect(row?.state).toBe("completed");
     expect(row?.payment_source_kind).toBe("account_plan");
     expect(row?.payment_source_label).toBe("ChatGPT Plan");
+    expect(row?.site_funded_reservation_id).toBe(
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    );
   });
 });

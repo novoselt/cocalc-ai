@@ -60,6 +60,7 @@ function serializeSession(
     payment_source_label: row.payment_source_label ?? null,
     payment_source_owner_account_id:
       row.payment_source_owner_account_id ?? null,
+    site_funded_reservation_id: row.site_funded_reservation_id ?? null,
     updated_at: toIso(row.updated_at),
     last_heartbeat_at: toIso(row.last_heartbeat_at),
     started_at: toIso(row.started_at),

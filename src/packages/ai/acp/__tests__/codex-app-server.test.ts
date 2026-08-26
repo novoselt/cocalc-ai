@@ -5498,6 +5498,7 @@ describe("CodexAppServerAgent", () => {
             model: "gpt-5.6-luna",
             reasoning: "medium",
             serviceTier: "standard",
+            siteFundedReservationId: "reservation-1",
           }),
         }),
       ]),
