@@ -365,6 +365,26 @@ describe("course managed project reconciliation", () => {
     expect(users[EXTRA]).toEqual({ group: "collaborator" });
   });
 
+  it("rejects assigning a course manager as a student", async () => {
+    const { reconcileCourseManagedProjectLocal } =
+      await import("./reconcile-managed-project");
+
+    await expect(
+      reconcileCourseManagedProjectLocal(
+        request({
+          desired_account_ids: [MANAGER],
+          course: {
+            type: "student",
+            project_id: COURSE,
+            path: "classes/main.course",
+            datastore: false,
+            account_id: MANAGER,
+          },
+        }),
+      ),
+    ).rejects.toThrow("course manager cannot also be assigned as a student");
+  });
+
   it("removes student access when the roster explicitly deletes the student", async () => {
     const { reconcileCourseManagedProjectLocal } =
       await import("./reconcile-managed-project");
