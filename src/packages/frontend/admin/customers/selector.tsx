@@ -7,14 +7,22 @@ import { Select } from "antd";
 import { useEffect, useRef, useState } from "react";
 
 import { webapp_client } from "@cocalc/frontend/webapp-client";
-import type { CrmOrganizationSummary, CrmPerson } from "@cocalc/util/crm";
+import type {
+  CrmOpportunity,
+  CrmOrganizationSummary,
+  CrmPerson,
+} from "@cocalc/util/crm";
 
 export function CustomerSelector({
+  ariaLabel,
   disabled,
+  id,
   onChange,
   value,
 }: {
+  ariaLabel?: string;
   disabled?: boolean;
+  id?: string;
   onChange?: (value?: string) => void;
   value?: string;
 }) {
@@ -45,9 +53,10 @@ export function CustomerSelector({
   return (
     <Select
       allowClear
-      aria-label="Customer organization"
+      aria-label={ariaLabel ?? "Customer organization"}
       disabled={disabled}
       filterOption={false}
+      id={id}
       loading={loading}
       onChange={onChange}
       onSearch={(query) => void search(query)}
@@ -64,13 +73,17 @@ export function CustomerSelector({
 }
 
 export function PersonSelector({
+  ariaLabel,
   disabled,
+  id,
   onChange,
   onSelectPerson,
   organization,
   value,
 }: {
+  ariaLabel?: string;
   disabled?: boolean;
+  id?: string;
   onChange?: (value?: string) => void;
   onSelectPerson?: (person?: CrmPerson) => void;
   organization?: string;
@@ -105,9 +118,10 @@ export function PersonSelector({
   return (
     <Select
       allowClear
-      aria-label="CRM contact"
+      aria-label={ariaLabel ?? "Reviewed contact"}
       disabled={disabled}
       filterOption={false}
+      id={id}
       loading={loading}
       onChange={(next) => {
         onChange?.(next);
@@ -126,6 +140,72 @@ export function PersonSelector({
         };
       })}
       placeholder="Search reviewed customer contacts"
+      showSearch
+      style={{ width: "100%" }}
+      value={value || undefined}
+    />
+  );
+}
+
+export function OpportunitySelector({
+  ariaLabel,
+  disabled,
+  id,
+  onChange,
+  organization,
+  value,
+}: {
+  ariaLabel?: string;
+  disabled?: boolean;
+  id?: string;
+  onChange?: (value?: string) => void;
+  organization?: string;
+  value?: string;
+}) {
+  const [options, setOptions] = useState<CrmOpportunity[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!organization) {
+      setOptions([]);
+      return;
+    }
+    setLoading(true);
+    void webapp_client.conat_client.hub.adminCrm
+      .listOpportunities({
+        organization,
+        reason: "List CRM opportunities for selector",
+        limit: 50,
+      })
+      .then((result) => {
+        if (!cancelled) setOptions(result.opportunities);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [organization]);
+
+  return (
+    <Select
+      allowClear
+      aria-label={ariaLabel ?? "Opportunity"}
+      disabled={disabled || !organization}
+      id={id}
+      loading={loading}
+      onChange={onChange}
+      options={options.map((opportunity) => ({
+        label: `${opportunity.name} · ${opportunity.stage.replace(/_/g, " ")}`,
+        value: opportunity.id,
+      }))}
+      placeholder={
+        organization
+          ? "Select a customer opportunity"
+          : "Select an organization first"
+      }
       showSearch
       style={{ width: "100%" }}
       value={value || undefined}

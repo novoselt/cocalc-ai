@@ -53,6 +53,8 @@ const DOCS_ENTRY_IDS = [
   "admin.accounts-receivable",
   "admin.crm-ui",
   "admin.crm",
+  "admin.crm-outreach",
+  "admin.crm-outreach-ui",
   "admin.cocalc-software",
   "admin.bay-ops",
   "admin.rootfs",

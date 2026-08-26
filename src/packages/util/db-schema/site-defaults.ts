@@ -135,6 +135,34 @@ export type SiteSettingsKeys =
   | "crm_metric_projections_enabled"
   | "crm_exports_enabled"
   | "crm_backfill_enabled"
+  | "crm_outreach_enabled"
+  | "crm_outreach_mutations_enabled"
+  | "crm_outreach_delivery_enabled"
+  | "crm_outreach_webhook_enabled"
+  | "crm_outreach_max_recipients_per_batch"
+  | "crm_outreach_send_per_minute"
+  | "crm_outreach_send_per_hour"
+  | "crm_outreach_send_per_day"
+  | "crm_outreach_send_per_domain_per_day"
+  | "crm_outreach_contact_cooldown_days"
+  | "crm_outreach_default_followup_days"
+  | "crm_outreach_default_max_followups"
+  | "crm_outreach_default_final_review_days"
+  | "crm_outreach_worker_concurrency"
+  | "crm_outreach_worker_batch_size"
+  | "crm_outreach_retry_max_attempts"
+  | "crm_outreach_retry_base_seconds"
+  | "crm_outreach_zendesk_submitter_id"
+  | "crm_outreach_zendesk_group_id"
+  | "crm_outreach_zendesk_form_id"
+  | "crm_outreach_zendesk_support_address"
+  | "crm_outreach_company_postal_address"
+  | "crm_outreach_footer_markdown"
+  | "crm_outreach_zendesk_webhook_secret"
+  | "crm_outreach_read_receipts_enabled"
+  | "crm_outreach_read_receipts_mode"
+  | "crm_outreach_read_receipts_ticket_field_ids"
+  | "crm_outreach_read_receipts_integration_id"
   | "project_hosts_google-cloud_enabled"
   | "project_hosts_hyperstack_enabled"
   | "project_hosts_lambda_enabled"
@@ -1084,6 +1112,297 @@ export const site_settings_conf: SiteSettings = {
     tags: ["Commercialization"],
     group: "Billing & Commerce",
     subgroup: "Customer Relationships",
+  },
+  crm_outreach_enabled: {
+    name: "Show CRM outreach",
+    desc: "Show reviewed proactive Zendesk outreach drafts, queues, engagement evidence, and follow-up work.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_mutations_enabled: {
+    name: "Enable CRM outreach mutations",
+    desc: "Allow fresh-auth template, draft, approval, queue, follow-up, and suppression mutations. Provider delivery has a separate emergency switch.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_delivery_enabled: {
+    name: "Enable CRM outreach delivery",
+    desc: "Allow the seed worker to create proactive Zendesk tickets and reviewed follow-up comments. Disable this emergency switch to stop new provider calls without losing queued work.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_webhook_enabled: {
+    name: "Enable CRM outreach webhook processing",
+    desc: "Accept and reconcile authenticated Zendesk outreach reply, status, and My Read Receipts events.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_max_recipients_per_batch: {
+    name: "CRM outreach maximum recipients per batch",
+    desc: "Hard reviewed-recipient limit for one outreach batch (1 to 500). Start at 1 for a production canary.",
+    default: "25",
+    valid: (value) => only_pos_int(value) && to_int(value) <= 500,
+    to_val: to_int,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_send_per_minute: {
+    name: "CRM outreach sends per minute",
+    desc: "Seed-global rolling-minute limit for Zendesk provider calls (1 to 60).",
+    default: "5",
+    valid: (value) => only_pos_int(value) && to_int(value) <= 60,
+    to_val: to_int,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_send_per_hour: {
+    name: "CRM outreach sends per hour",
+    desc: "Seed-global rolling-hour limit for Zendesk provider calls (1 to 1000).",
+    default: "50",
+    valid: (value) => only_pos_int(value) && to_int(value) <= 1000,
+    to_val: to_int,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_send_per_day: {
+    name: "CRM outreach sends per day",
+    desc: "Seed-global rolling-24-hour limit for Zendesk provider calls (1 to 5000).",
+    default: "200",
+    valid: (value) => only_pos_int(value) && to_int(value) <= 5000,
+    to_val: to_int,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_send_per_domain_per_day: {
+    name: "CRM outreach sends per domain per day",
+    desc: "Rolling-24-hour provider-call limit for one normalized recipient domain (1 to 500).",
+    default: "20",
+    valid: (value) => only_pos_int(value) && to_int(value) <= 500,
+    to_val: to_int,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_contact_cooldown_days: {
+    name: "CRM outreach contact cooldown days",
+    desc: "Default minimum interval between initiated outreach to one reviewed email (1 to 730 days).",
+    default: "90",
+    valid: (value) => only_pos_int(value) && to_int(value) <= 730,
+    to_val: to_int,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_default_followup_days: {
+    name: "CRM outreach default follow-up days",
+    desc: "Default calendar-day wait before no-response follow-up becomes due (1 to 90).",
+    default: "7",
+    valid: (value) => only_pos_int(value) && to_int(value) <= 90,
+    to_val: to_int,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_default_max_followups: {
+    name: "CRM outreach default maximum follow-ups",
+    desc: "Default maximum human-reviewed same-thread follow-up messages (1 to 5).",
+    default: "2",
+    valid: (value) => only_pos_int(value) && to_int(value) <= 5,
+    to_val: to_int,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_default_final_review_days: {
+    name: "CRM outreach default final-review days",
+    desc: "Wait after the final reviewed follow-up before explicit no-response review (1 to 90 days).",
+    default: "14",
+    valid: (value) => only_pos_int(value) && to_int(value) <= 90,
+    to_val: to_int,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_worker_concurrency: {
+    name: "CRM outreach worker concurrency",
+    desc: "Maximum local effectful Zendesk calls in flight (1 to 10). Durable global rate limits still apply.",
+    default: "1",
+    valid: (value) => only_pos_int(value) && to_int(value) <= 10,
+    to_val: to_int,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+    advanced: true,
+  },
+  crm_outreach_worker_batch_size: {
+    name: "CRM outreach worker batch size",
+    desc: "Maximum rows considered during one worker cycle (1 to 100).",
+    default: "10",
+    valid: (value) => only_pos_int(value) && to_int(value) <= 100,
+    to_val: to_int,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+    advanced: true,
+  },
+  crm_outreach_retry_max_attempts: {
+    name: "CRM outreach retry maximum attempts",
+    desc: "Maximum provider and reconciliation attempts before operator review (1 to 20).",
+    default: "8",
+    valid: (value) => only_pos_int(value) && to_int(value) <= 20,
+    to_val: to_int,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+    advanced: true,
+  },
+  crm_outreach_retry_base_seconds: {
+    name: "CRM outreach retry base seconds",
+    desc: "Base for bounded exponential provider retry delay (10 to 3600 seconds).",
+    default: "60",
+    valid: (value) =>
+      only_pos_int(value) && to_int(value) >= 10 && to_int(value) <= 3600,
+    to_val: to_int,
+    tags: ["Commercialization", "Zendesk"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+    advanced: true,
+  },
+  crm_outreach_zendesk_submitter_id: {
+    name: "CRM outreach Zendesk submitter ID",
+    desc: "Zendesk agent ID used as submitter for proactive outreach tickets.",
+    default: "",
+    valid: (value) => !to_trimmed_str(value) || only_pos_int(value),
+    to_val: to_trimmed_str,
+    tags: ["Zendesk", "Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_zendesk_group_id: {
+    name: "CRM outreach Zendesk group ID",
+    desc: "Zendesk Partnerships/Sales group ID for proactive tickets.",
+    default: "",
+    valid: (value) => !to_trimmed_str(value) || only_pos_int(value),
+    to_val: to_trimmed_str,
+    tags: ["Zendesk", "Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_zendesk_form_id: {
+    name: "CRM outreach Zendesk form ID",
+    desc: "Optional Zendesk ticket form ID for proactive outreach.",
+    default: "",
+    valid: (value) => !to_trimmed_str(value) || only_pos_int(value),
+    to_val: to_trimmed_str,
+    tags: ["Zendesk", "Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_zendesk_support_address: {
+    name: "CRM outreach shared support address",
+    desc: "Verified Zendesk support address used as the customer-visible sender and reply path, for example partnerships@cocalc.com.",
+    default: "",
+    valid: (value) => !to_trimmed_str(value) || is_valid_email_address(value),
+    to_val: to_trimmed_str,
+    tags: ["Zendesk", "Email", "Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_company_postal_address: {
+    name: "CRM outreach company postal address",
+    desc: "Company postal address included in every approved outreach footer.",
+    default: "",
+    to_val: to_trimmed_str,
+    multiline: 3,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_footer_markdown: {
+    name: "CRM outreach footer",
+    desc: "Reviewed Markdown footer appended to every outreach message. The server also adds the postal address and opaque opt-out link.",
+    default: "Best wishes,\n\nThe CoCalc Team",
+    to_val: to_trimmed_str,
+    multiline: 5,
+    tags: ["Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_zendesk_webhook_secret: {
+    name: "CRM outreach Zendesk webhook secret",
+    desc: "Secret used to validate timestamped Zendesk outreach webhook requests.",
+    default: "",
+    to_val: to_trimmed_str,
+    password: true,
+    tags: ["Zendesk", "Security", "Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_read_receipts_enabled: {
+    name: "Enable CRM outreach view observations",
+    desc: "Import bounded My Read Receipts observations as non-authoritative engagement evidence.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Zendesk", "Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_read_receipts_mode: {
+    name: "CRM outreach read receipt mode",
+    desc: "Use structured Zendesk ticket fields when available; private-comment parsing requires a pinned integration identity.",
+    default: "ticket_fields",
+    valid: ["ticket_fields", "private_comments"],
+    to_val: to_trimmed_str,
+    tags: ["Zendesk", "Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+  },
+  crm_outreach_read_receipts_ticket_field_ids: {
+    name: "CRM outreach read receipt ticket field IDs",
+    desc: "Comma-separated numeric Zendesk ticket-field IDs used by the installed My Read Receipts configuration.",
+    default: "",
+    valid: (value) =>
+      !to_trimmed_str(value) ||
+      to_trimmed_str(value)
+        .split(",")
+        .every((item) => /^\d+$/.test(item.trim())),
+    to_val: to_trimmed_str,
+    tags: ["Zendesk", "Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+    advanced: true,
+  },
+  crm_outreach_read_receipts_integration_id: {
+    name: "CRM outreach read receipt integration ID",
+    desc: "Expected Zendesk integration or user ID when authenticated private-comment receipt parsing is enabled.",
+    default: "",
+    valid: (value) => !to_trimmed_str(value) || only_pos_int(value),
+    to_val: to_trimmed_str,
+    tags: ["Zendesk", "Commercialization"],
+    group: "Billing & Commerce",
+    subgroup: "CRM Outreach",
+    advanced: true,
   },
   commercial_receivables_mutations_enabled: {
     name: "Enable commercial order mutations",

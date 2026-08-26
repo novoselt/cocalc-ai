@@ -37,11 +37,13 @@ function mergeAccounts(
 
 export function AccountSelector({
   accountKind,
+  ariaLabel,
   disabled,
   onChange,
   value,
 }: {
   accountKind: "admin" | "customer";
+  ariaLabel?: string;
   disabled?: boolean;
   onChange?: (value?: string) => void;
   value?: string;
@@ -126,7 +128,8 @@ export function AccountSelector({
       <Select
         allowClear
         aria-label={
-          accountKind === "admin" ? "Assignee" : "Customer CoCalc account"
+          ariaLabel ??
+          (accountKind === "admin" ? "Assignee" : "Customer CoCalc account")
         }
         disabled={disabled}
         filterOption={

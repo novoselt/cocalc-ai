@@ -167,6 +167,8 @@ import {
 } from "@cocalc/server/membership/analytics";
 import { dispatchCommercialSeedRequest } from "@cocalc/server/commercial-orders/dispatch";
 import { dispatchCrmSeedRequest } from "@cocalc/server/crm/dispatch";
+import { applyOutreachOptOut } from "@cocalc/server/crm/outreach/opt-out";
+import { enqueueOutreachZendeskEvent } from "@cocalc/server/crm/outreach/webhook";
 import {
   assertCrmCapability,
   crmActionCapabilities,
@@ -773,6 +775,18 @@ async function startBayOpsService(): Promise<void> {
         await assertCommercialReceivablesCapability(capability);
       }
       return await dispatchCommercialSeedRequest(opts);
+    },
+    ingestCrmOutreachZendeskEventInternal: async ({ event }) => {
+      if (bay_id !== getConfiguredClusterSeedBayId()) {
+        throw Error("CRM outreach is authoritative on the seed bay");
+      }
+      await enqueueOutreachZendeskEvent(event);
+    },
+    applyCrmOutreachOptOutInternal: async ({ token }) => {
+      if (bay_id !== getConfiguredClusterSeedBayId()) {
+        throw Error("CRM outreach is authoritative on the seed bay");
+      }
+      await applyOutreachOptOut(token);
     },
     crm: async (opts) => {
       if (bay_id !== getConfiguredClusterSeedBayId()) {
