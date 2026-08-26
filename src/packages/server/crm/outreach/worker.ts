@@ -19,6 +19,7 @@ import {
   batchRow,
   deliveryRow,
   loadOutreachConfiguration,
+  outreachFollowupIneligibilityReason,
 } from "./store";
 import {
   recordOutreachEngagement,
@@ -39,6 +40,9 @@ import {
 const logger = getLogger("server:crm:outreach:worker");
 const INTERVAL_MS = 10_000;
 const LEASE_MS = 2 * 60_000;
+const RECONCILIATION_ABSENCE_GRACE_MS = 5 * 60_000;
+const RECONCILIATION_ABSENCE_RETRY_MS = 60_000;
+const RECONCILIATION_ABSENCE_MIN_OBSERVATIONS = 3;
 const WORKER_KEY = "zendesk";
 const WORKER_OWNER = `${process.pid}:${randomUUID()}`;
 let timer: NodeJS.Timeout | undefined;
@@ -52,6 +56,92 @@ interface ClaimedOperation {
   delivery: CrmOutreachDelivery;
   batch: CrmOutreachBatch;
   customer_number: string;
+}
+
+interface WorkerQueryable {
+  query: (
+    text: string,
+    values?: any[],
+  ) => Promise<{ rows: any[]; rowCount: number | null }>;
+}
+
+export interface ReconciliationAbsenceObservation {
+  definitive: boolean;
+  next_not_before: string;
+  request_payload: Record<string, unknown>;
+}
+
+export function observeCreateTicketAbsence(
+  requestPayload: Record<string, unknown>,
+  now = Date.now(),
+): ReconciliationAbsenceObservation {
+  const parsedFirst = Date.parse(
+    `${requestPayload.absence_first_observed_at ?? ""}`,
+  );
+  const firstObservedAt = Number.isFinite(parsedFirst) ? parsedFirst : now;
+  const previousCount = Number(requestPayload.absence_observation_count);
+  const observationCount =
+    (Number.isInteger(previousCount) && previousCount >= 0
+      ? previousCount
+      : 0) + 1;
+  return {
+    definitive:
+      observationCount >= RECONCILIATION_ABSENCE_MIN_OBSERVATIONS &&
+      now - firstObservedAt >= RECONCILIATION_ABSENCE_GRACE_MS,
+    next_not_before: new Date(
+      now + RECONCILIATION_ABSENCE_RETRY_MS,
+    ).toISOString(),
+    request_payload: {
+      ...requestPayload,
+      absence_first_observed_at: new Date(firstObservedAt).toISOString(),
+      absence_last_observed_at: new Date(now).toISOString(),
+      absence_observation_count: observationCount,
+    },
+  };
+}
+
+export async function recoverExpiredProviderOperations(
+  db: WorkerQueryable = getPool() as unknown as WorkerQueryable,
+): Promise<{
+  effectful_indeterminate: number;
+  reconciliation_requeued: number;
+}> {
+  const effectful = await db.query(
+    `UPDATE crm_outreach_provider_operations SET state='indeterminate',
+      provider_status='worker_lease_expired',error_category='indeterminate',
+      error_text='Worker lease expired after the provider effect may have started',
+      lease_owner=NULL,lease_expires_at=NULL,not_before=NOW(),finished_at=NOW(),updated_at=NOW()
+     WHERE state='started' AND operation IN ('create_ticket','add_comment')
+       AND lease_expires_at IS NOT NULL AND lease_expires_at<NOW()
+     RETURNING id`,
+  );
+  const reconciliation = await db.query(
+    `UPDATE crm_outreach_provider_operations SET state='queued',
+      provider_status='worker_lease_expired_requeued',error_category=NULL,
+      error_text=NULL,lease_owner=NULL,lease_expires_at=NULL,not_before=NOW(),
+      started_at=NULL,finished_at=NULL,updated_at=NOW()
+     WHERE state='started' AND operation='reconcile_ticket'
+       AND lease_expires_at IS NOT NULL AND lease_expires_at<NOW()
+     RETURNING id`,
+  );
+  return {
+    effectful_indeterminate: effectful.rowCount ?? 0,
+    reconciliation_requeued: reconciliation.rowCount ?? 0,
+  };
+}
+
+export async function reclaimStaleWebhookEvents(
+  db: WorkerQueryable = getPool() as unknown as WorkerQueryable,
+): Promise<number> {
+  const result = await db.query(
+    `UPDATE crm_outreach_zendesk_events SET state='failed',next_attempt_at=NOW(),
+      last_error='Webhook worker lease expired; retrying safely',updated_at=NOW()
+     WHERE state='processing'
+       AND updated_at<NOW()-($1::int * INTERVAL '1 millisecond')
+     RETURNING event_id`,
+    [LEASE_MS],
+  );
+  return result.rowCount ?? 0;
 }
 
 function assertSeed(): void {
@@ -109,7 +199,40 @@ async function touchHeartbeat(
   );
 }
 
-async function claimOne(): Promise<ClaimedOperation | undefined> {
+export async function cancelIneligibleQueuedFollowups(
+  retryMaxAttempts: number,
+  db: WorkerQueryable = getPool() as unknown as WorkerQueryable,
+): Promise<number> {
+  const result = await db.query(
+    `UPDATE crm_outreach_provider_operations p SET state='cancelled',
+      provider_status='cancelled_preflight',error_category='ineligible_followup',
+      error_text=CASE
+        WHEN d.replied_at IS NOT NULL THEN 'Recipient already replied'
+        WHEN d.state<>'notification_requested' THEN 'Delivery is no longer waiting for a response'
+        WHEN d.follow_up_attempt_count>=d.max_followups THEN 'Maximum reviewed follow-ups reached'
+        WHEN p.attempt_number>$1 THEN 'Maximum provider attempts reached'
+        WHEN NOT EXISTS(SELECT 1 FROM crm_tasks t WHERE t.id=d.task_id AND t.state IN ('open','waiting'))
+          THEN 'Follow-up task is no longer open or waiting'
+        ELSE 'Recipient is suppressed' END,
+      lease_owner=NULL,lease_expires_at=NULL,finished_at=NOW(),updated_at=NOW()
+     FROM crm_outreach_deliveries d
+    WHERE p.delivery_id=d.id AND p.operation='add_comment' AND p.state='queued' AND (
+      d.replied_at IS NOT NULL OR d.state<>'notification_requested' OR
+      d.follow_up_attempt_count>=d.max_followups OR p.attempt_number>$1 OR
+      NOT EXISTS(SELECT 1 FROM crm_tasks t WHERE t.id=d.task_id AND t.state IN ('open','waiting')) OR
+      EXISTS(SELECT 1 FROM crm_contact_suppressions s WHERE s.active AND (
+        (s.scope='email' AND s.normalized_scope_value=d.normalized_email) OR
+        (s.scope='domain' AND s.normalized_scope_value=d.recipient_domain) OR
+        (s.scope='person' AND s.person_id=d.person_id) OR
+        (s.scope='organization' AND s.organization_id=d.organization_id) OR
+        s.person_email_id=d.person_email_id)))
+    RETURNING p.id`,
+    [retryMaxAttempts],
+  );
+  return result.rowCount ?? 0;
+}
+
+async function claimOneEffectful(): Promise<ClaimedOperation | undefined> {
   assertSeed();
   return await transaction(async (client) => {
     await client.query(
@@ -117,6 +240,10 @@ async function claimOne(): Promise<ClaimedOperation | undefined> {
     );
     const config = await loadOutreachConfiguration();
     if (!config.enabled || !config.delivery_enabled) return;
+    await cancelIneligibleQueuedFollowups(
+      config.retry_max_attempts,
+      client as unknown as WorkerQueryable,
+    );
     const backoff = await client.query(
       "SELECT not_before FROM crm_outreach_worker_state WHERE provider=$1 FOR UPDATE",
       [WORKER_KEY],
@@ -132,7 +259,9 @@ async function claimOne(): Promise<ClaimedOperation | undefined> {
          count(*) FILTER (WHERE p.started_at>=NOW()-INTERVAL '1 hour')::int AS hour,
          count(*) FILTER (WHERE p.started_at>=NOW()-INTERVAL '24 hours')::int AS day
        FROM crm_outreach_provider_operations p
-       WHERE p.started_at IS NOT NULL AND p.state<>'cancelled'`,
+       WHERE p.operation IN ('create_ticket','add_comment')
+         AND p.started_at IS NOT NULL
+         AND p.state IN ('started','succeeded','indeterminate')`,
     );
     if (
       usage.rows[0].minute >= config.send_per_minute ||
@@ -143,20 +272,49 @@ async function claimOne(): Promise<ClaimedOperation | undefined> {
     }
 
     const existingOperation = await client.query(
-      `SELECT p.*,d AS delivery,b AS batch,o.customer_number
+      `SELECT p.*,d AS delivery,b AS batch,o.customer_number,t.state AS task_state,
+        (SELECT count(*)::int FROM crm_outreach_provider_operations used
+          JOIN crm_outreach_deliveries used_delivery ON used_delivery.id=used.delivery_id
+         WHERE used.operation IN ('create_ticket','add_comment')
+           AND used.started_at>=NOW()-INTERVAL '24 hours'
+           AND used.state IN ('started','succeeded','indeterminate')
+           AND used_delivery.recipient_domain=d.recipient_domain) AS domain_usage
          FROM crm_outreach_provider_operations p
          JOIN crm_outreach_deliveries d ON d.id=p.delivery_id
          JOIN crm_outreach_batches b ON b.id=d.batch_id
          JOIN crm_organizations o ON o.id=d.organization_id
+         JOIN crm_tasks t ON t.id=d.task_id AND t.state IN ('open','waiting')
         WHERE p.state='queued' AND p.not_before<=NOW()
           AND (p.lease_expires_at IS NULL OR p.lease_expires_at<NOW())
-          AND p.operation IN ('add_comment','reconcile_ticket')
-        ORDER BY p.not_before,p.created_at,p.id FOR UPDATE OF p SKIP LOCKED LIMIT 1`,
+          AND p.operation='add_comment' AND p.attempt_number<=$2
+          AND d.state='notification_requested' AND d.replied_at IS NULL
+          AND d.follow_up_attempt_count<d.max_followups
+          AND NOT EXISTS(SELECT 1 FROM crm_contact_suppressions s WHERE s.active AND (
+            (s.scope='email' AND s.normalized_scope_value=d.normalized_email) OR
+            (s.scope='domain' AND s.normalized_scope_value=d.recipient_domain) OR
+            (s.scope='person' AND s.person_id=d.person_id) OR
+            (s.scope='organization' AND s.organization_id=d.organization_id) OR
+            s.person_email_id=d.person_email_id))
+          AND (SELECT count(*) FROM crm_outreach_provider_operations used
+            JOIN crm_outreach_deliveries used_delivery ON used_delivery.id=used.delivery_id
+           WHERE used.operation IN ('create_ticket','add_comment')
+             AND used.started_at>=NOW()-INTERVAL '24 hours'
+             AND used.state IN ('started','succeeded','indeterminate')
+             AND used_delivery.recipient_domain=d.recipient_domain)<$1
+        ORDER BY p.not_before,p.created_at,p.id
+        FOR UPDATE OF p,d,t SKIP LOCKED LIMIT 1`,
+      [config.send_per_domain_per_day, config.retry_max_attempts],
     );
     let operation = existingOperation.rows[0];
     if (!operation) {
       const deliveryResult = await client.query(
-        `SELECT d AS delivery,b AS batch,o.customer_number
+        `SELECT d AS delivery,b AS batch,o.customer_number,
+          (SELECT count(*)::int FROM crm_outreach_provider_operations used
+            JOIN crm_outreach_deliveries used_delivery ON used_delivery.id=used.delivery_id
+           WHERE used.operation IN ('create_ticket','add_comment')
+             AND used.started_at>=NOW()-INTERVAL '24 hours'
+             AND used.state IN ('started','succeeded','indeterminate')
+             AND used_delivery.recipient_domain=d.recipient_domain) AS domain_usage
            FROM crm_outreach_deliveries d
            JOIN crm_outreach_batches b ON b.id=d.batch_id
            JOIN crm_organizations o ON o.id=d.organization_id
@@ -175,18 +333,18 @@ async function claimOne(): Promise<ClaimedOperation | undefined> {
                 (s.scope='person' AND s.person_id=d.person_id) OR
                 (s.scope='organization' AND s.organization_id=d.organization_id) OR
                 s.person_email_id=d.person_email_id))
+            AND (SELECT count(*) FROM crm_outreach_provider_operations used
+              JOIN crm_outreach_deliveries used_delivery ON used_delivery.id=used.delivery_id
+             WHERE used.operation IN ('create_ticket','add_comment')
+               AND used.started_at>=NOW()-INTERVAL '24 hours'
+               AND used.state IN ('started','succeeded','indeterminate')
+               AND used_delivery.recipient_domain=d.recipient_domain)<$1
           ORDER BY d.next_attempt_at,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1`,
+        [config.send_per_domain_per_day],
       );
       const selected = deliveryResult.rows[0];
       if (!selected) return;
       const delivery = deliveryRow(selected.delivery);
-      const domainUsage = await client.query(
-        `SELECT count(*)::int AS count FROM crm_outreach_provider_operations p
-          JOIN crm_outreach_deliveries d ON d.id=p.delivery_id
-         WHERE p.started_at>=NOW()-INTERVAL '24 hours' AND p.state<>'cancelled' AND d.recipient_domain=$1`,
-        [delivery.recipient_domain],
-      );
-      if (domainUsage.rows[0].count >= config.send_per_domain_per_day) return;
       const operationId = randomUUID();
       const attemptNumber = delivery.attempt_count + 1;
       const snapshot = {
@@ -194,7 +352,7 @@ async function claimOne(): Promise<ClaimedOperation | undefined> {
         send_per_hour: config.send_per_hour,
         send_per_day: config.send_per_day,
         send_per_domain_per_day: config.send_per_domain_per_day,
-        rolling_usage: { ...usage.rows[0], domain: domainUsage.rows[0].count },
+        rolling_usage: { ...usage.rows[0], domain: selected.domain_usage },
       };
       await client.query(
         `INSERT INTO crm_outreach_provider_operations
@@ -245,13 +403,25 @@ async function claimOne(): Promise<ClaimedOperation | undefined> {
     }
 
     const delivery = deliveryRow(operation.delivery);
-    const domainUsage = await client.query(
-      `SELECT count(*)::int AS count FROM crm_outreach_provider_operations p
-        JOIN crm_outreach_deliveries d ON d.id=p.delivery_id
-       WHERE p.started_at>=NOW()-INTERVAL '24 hours' AND p.state<>'cancelled' AND d.recipient_domain=$1`,
-      [delivery.recipient_domain],
-    );
-    if (domainUsage.rows[0].count >= config.send_per_domain_per_day) return;
+    const ineligible = outreachFollowupIneligibilityReason({
+      delivery_state: delivery.state,
+      replied_at: delivery.replied_at,
+      task_state: operation.task_state,
+      follow_up_attempt_count: delivery.follow_up_attempt_count,
+      max_followups: delivery.max_followups,
+      suppressed: false,
+      provider_attempt_number: operation.attempt_number,
+      provider_retry_max_attempts: config.retry_max_attempts,
+    });
+    if (ineligible) {
+      await client.query(
+        `UPDATE crm_outreach_provider_operations SET state='cancelled',
+          provider_status='cancelled_preflight',error_category='ineligible_followup',
+          error_text=$1,finished_at=NOW(),updated_at=NOW() WHERE id=$2`,
+        [ineligible, operation.id],
+      );
+      return;
+    }
     const updated = await client.query(
       `UPDATE crm_outreach_provider_operations SET state='started',lease_owner=$1,lease_expires_at=$2,
         started_at=NOW(),updated_at=NOW(),rate_limit_snapshot=$3 WHERE id=$4 AND state='queued' RETURNING *`,
@@ -265,7 +435,7 @@ async function claimOne(): Promise<ClaimedOperation | undefined> {
           send_per_domain_per_day: config.send_per_domain_per_day,
           rolling_usage: {
             ...usage.rows[0],
-            domain: domainUsage.rows[0].count,
+            domain: operation.domain_usage,
           },
         },
         operation.id,
@@ -281,6 +451,128 @@ async function claimOne(): Promise<ClaimedOperation | undefined> {
       batch: batchRow(operation.batch),
       customer_number: operation.customer_number,
     };
+  });
+}
+
+async function claimOneReconciliation(): Promise<ClaimedOperation | undefined> {
+  assertSeed();
+  return await transaction(async (client) => {
+    const config = await loadOutreachConfiguration();
+    if (!config.enabled) return;
+    const backoff = await client.query(
+      "SELECT not_before FROM crm_outreach_worker_state WHERE provider=$1",
+      [WORKER_KEY],
+    );
+    if (
+      backoff.rows[0]?.not_before &&
+      new Date(backoff.rows[0].not_before) > new Date()
+    ) {
+      return;
+    }
+    const selected = await client.query(
+      `SELECT p.*,d AS delivery,b AS batch,o.customer_number
+         FROM crm_outreach_provider_operations p
+         JOIN crm_outreach_deliveries d ON d.id=p.delivery_id
+         JOIN crm_outreach_batches b ON b.id=d.batch_id
+         JOIN crm_organizations o ON o.id=d.organization_id
+        WHERE p.state='queued' AND p.operation='reconcile_ticket'
+          AND p.not_before<=NOW()
+          AND (p.lease_expires_at IS NULL OR p.lease_expires_at<NOW())
+        ORDER BY p.not_before,p.created_at,p.id
+        FOR UPDATE OF p SKIP LOCKED LIMIT 1`,
+    );
+    const operation = selected.rows[0];
+    if (!operation) return;
+    const updated = await client.query(
+      `UPDATE crm_outreach_provider_operations SET state='started',lease_owner=$1,
+        lease_expires_at=$2,started_at=NOW(),finished_at=NULL,updated_at=NOW(),
+        rate_limit_snapshot=jsonb_build_object('lane','reconciliation')
+       WHERE id=$3 AND state='queued' RETURNING id`,
+      [WORKER_OWNER, new Date(Date.now() + LEASE_MS), operation.id],
+    );
+    if (!updated.rows[0]) return;
+    return {
+      operation_id: operation.id,
+      operation: "reconcile_ticket",
+      attempt_number: operation.attempt_number,
+      request_payload: operation.request_payload ?? {},
+      delivery: deliveryRow(operation.delivery),
+      batch: batchRow(operation.batch),
+      customer_number: operation.customer_number,
+    };
+  });
+}
+
+async function revalidateStartedFollowupClaim(
+  claim: ClaimedOperation,
+): Promise<boolean> {
+  const config = await loadOutreachConfiguration();
+  return await transaction(async (client) => {
+    const current = await client.query(
+      `SELECT p.state AS operation_state,p.lease_owner,d AS delivery
+         FROM crm_outreach_provider_operations p
+         JOIN crm_outreach_deliveries d ON d.id=p.delivery_id
+        WHERE p.id=$1 FOR UPDATE OF p,d`,
+      [claim.operation_id],
+    );
+    if (
+      !current.rows[0] ||
+      current.rows[0].operation_state !== "started" ||
+      current.rows[0].lease_owner !== WORKER_OWNER
+    ) {
+      return false;
+    }
+    if (!config.enabled || !config.delivery_enabled) {
+      await client.query(
+        `UPDATE crm_outreach_provider_operations SET state='queued',
+          provider_status='delivery_disabled',lease_owner=NULL,lease_expires_at=NULL,
+          started_at=NULL,finished_at=NULL,error_category=NULL,error_text=NULL,updated_at=NOW()
+         WHERE id=$1 AND state='started'`,
+        [claim.operation_id],
+      );
+      return false;
+    }
+    const delivery = deliveryRow(current.rows[0].delivery);
+    const task = delivery.task_id
+      ? await client.query(
+          "SELECT state FROM crm_tasks WHERE id=$1 FOR UPDATE",
+          [delivery.task_id],
+        )
+      : { rows: [] };
+    const suppression = await client.query(
+      `SELECT EXISTS(SELECT 1 FROM crm_contact_suppressions s WHERE s.active AND (
+        (s.scope='email' AND s.normalized_scope_value=$1) OR
+        (s.scope='domain' AND s.normalized_scope_value=$2) OR
+        (s.scope='person' AND s.person_id=$3) OR
+        (s.scope='organization' AND s.organization_id=$4) OR
+        s.person_email_id=$5)) AS suppressed`,
+      [
+        delivery.normalized_email,
+        delivery.recipient_domain,
+        delivery.person_id,
+        delivery.organization_id,
+        delivery.person_email_id,
+      ],
+    );
+    const ineligible = outreachFollowupIneligibilityReason({
+      delivery_state: delivery.state,
+      replied_at: delivery.replied_at,
+      task_state: task.rows[0]?.state,
+      follow_up_attempt_count: delivery.follow_up_attempt_count,
+      max_followups: delivery.max_followups,
+      suppressed: suppression.rows[0]?.suppressed === true,
+      provider_attempt_number: claim.attempt_number,
+      provider_retry_max_attempts: config.retry_max_attempts,
+    });
+    if (!ineligible) return true;
+    await client.query(
+      `UPDATE crm_outreach_provider_operations SET state='cancelled',
+        provider_status='cancelled_preflight',error_category='ineligible_followup',
+        error_text=$1,lease_owner=NULL,lease_expires_at=NULL,finished_at=NOW(),updated_at=NOW()
+       WHERE id=$2 AND state='started'`,
+      [ineligible, claim.operation_id],
+    );
+    return false;
   });
 }
 
@@ -479,12 +771,29 @@ async function finishSuccess(
   ticket: OutreachZendeskTicket,
 ): Promise<void> {
   await transaction(async (client) => {
+    const operation = await client.query(
+      "SELECT state FROM crm_outreach_provider_operations WHERE id=$1 FOR UPDATE",
+      [claim.operation_id],
+    );
+    if (!operation.rows[0]) {
+      throw Error("CRM outreach provider operation disappeared during success");
+    }
+    if (operation.rows[0].state === "succeeded") return;
     const current = await client.query(
       "SELECT * FROM crm_outreach_deliveries WHERE id=$1 FOR UPDATE",
       [claim.delivery.id],
     );
     const delivery = deliveryRow(current.rows[0]);
     await applyTicketSnapshot(client, delivery, claim.batch, ticket);
+    if (claim.operation === "add_comment") {
+      await client.query(
+        `UPDATE crm_outreach_provider_operations SET state='cancelled',
+          provider_status='superseded_by_confirmed_effect',
+          error_category=NULL,error_text=NULL,finished_at=NOW(),updated_at=NOW()
+         WHERE delivery_id=$1 AND operation='add_comment' AND state='queued' AND id<>$2`,
+        [delivery.id, claim.operation_id],
+      );
+    }
     await client.query(
       `UPDATE crm_outreach_provider_operations SET state='succeeded',zendesk_ticket_id=$1,
         provider_status=$2,lease_owner=NULL,lease_expires_at=NULL,finished_at=NOW(),updated_at=NOW(),error_category=NULL,error_text=NULL
@@ -564,6 +873,11 @@ async function finishFailure(
     6 * 60 * 60,
   );
   await transaction(async (client) => {
+    const operation = await client.query(
+      "SELECT state FROM crm_outreach_provider_operations WHERE id=$1 FOR UPDATE",
+      [claim.operation_id],
+    );
+    if (!operation.rows[0] || operation.rows[0].state !== "started") return;
     if (classified.category === "rate_limited") {
       const notBefore = new Date(
         Date.now() + (classified.retry_after_seconds ?? 60) * 1_000,
@@ -582,7 +896,13 @@ async function finishFailure(
       claim.operation === "reconcile_ticket" &&
       classified.category !== "rejected" &&
       !permanent;
-    const operationState = reconciliationRetry
+    const followupRetry =
+      claim.operation === "add_comment" &&
+      (classified.category === "rate_limited" ||
+        classified.category === "unavailable") &&
+      !permanent;
+    const operationRetry = reconciliationRetry || followupRetry;
+    const operationState = operationRetry
       ? "queued"
       : indeterminate
         ? "indeterminate"
@@ -600,7 +920,7 @@ async function finishFailure(
         "provider_error",
         new Date(Date.now() + retrySeconds * 1_000),
         claim.operation_id,
-        reconciliationRetry,
+        operationRetry,
       ],
     );
     if (claim.operation === "create_ticket") {
@@ -704,8 +1024,27 @@ async function resolveTargetedReconciliation(
     return true;
   }
 
+  if (target.operation === "create_ticket") {
+    const observation = observeCreateTicketAbsence(claim.request_payload);
+    if (!observation.definitive) {
+      await getPool().query(
+        `UPDATE crm_outreach_provider_operations SET state='queued',
+          provider_status='effect_not_found_observing',request_payload=$1,
+          not_before=$2,lease_owner=NULL,lease_expires_at=NULL,finished_at=NULL,
+          error_category=NULL,error_text=NULL,updated_at=NOW() WHERE id=$3`,
+        [
+          observation.request_payload,
+          observation.next_not_before,
+          claim.operation_id,
+        ],
+      );
+      return true;
+    }
+  }
+
   const outreachConfig = await loadOutreachConfiguration();
   await transaction(async (client) => {
+    let retryQueued = false;
     await client.query(
       `UPDATE crm_outreach_provider_operations SET state='failed',provider_status='effect_absent',
         error_category='reconciled_absent',error_text='Provider effect was absent after reconciliation',
@@ -721,6 +1060,7 @@ async function resolveTargetedReconciliation(
     if (target.operation === "create_ticket") {
       const exhausted =
         target.attempt_number >= outreachConfig.retry_max_attempts;
+      retryQueued = !exhausted;
       await client.query(
         `UPDATE crm_outreach_deliveries SET state=$1,last_error=$2,next_attempt_at=NOW(),
           updated_at=NOW(),version=version+1 WHERE id=$3`,
@@ -733,24 +1073,52 @@ async function resolveTargetedReconciliation(
         ],
       );
     } else if (target.attempt_number < outreachConfig.retry_max_attempts) {
-      const retryId = randomUUID();
-      const attempt = target.attempt_number + 1;
-      await client.query(
-        `INSERT INTO crm_outreach_provider_operations
-          (id,delivery_id,operation,idempotency_key,payload_hash,state,attempt_number,
-           provider_external_id,rate_limit_snapshot,request_payload,not_before)
-         VALUES($1,$2,'add_comment',$3,$4,'queued',$5,$6,'{}'::jsonb,$7,NOW())
-         ON CONFLICT(idempotency_key) DO NOTHING`,
-        [
-          retryId,
-          claim.delivery.id,
-          `retry-add-comment:${target.id}:${attempt}`,
-          target.payload_hash,
-          attempt,
-          target.provider_external_id,
-          target.request_payload ?? {},
-        ],
+      const eligibility = await client.query(
+        `SELECT d AS delivery,t.state AS task_state,
+          EXISTS(SELECT 1 FROM crm_contact_suppressions s WHERE s.active AND (
+            (s.scope='email' AND s.normalized_scope_value=d.normalized_email) OR
+            (s.scope='domain' AND s.normalized_scope_value=d.recipient_domain) OR
+            (s.scope='person' AND s.person_id=d.person_id) OR
+            (s.scope='organization' AND s.organization_id=d.organization_id) OR
+            s.person_email_id=d.person_email_id)) AS suppressed
+         FROM crm_outreach_deliveries d LEFT JOIN crm_tasks t ON t.id=d.task_id
+        WHERE d.id=$1 FOR UPDATE OF d`,
+        [claim.delivery.id],
       );
+      const currentDelivery = eligibility.rows[0]
+        ? deliveryRow(eligibility.rows[0].delivery)
+        : claim.delivery;
+      const ineligible = outreachFollowupIneligibilityReason({
+        delivery_state: currentDelivery.state,
+        replied_at: currentDelivery.replied_at,
+        task_state: eligibility.rows[0]?.task_state,
+        follow_up_attempt_count: currentDelivery.follow_up_attempt_count,
+        max_followups: currentDelivery.max_followups,
+        suppressed: eligibility.rows[0]?.suppressed === true,
+        provider_attempt_number: target.attempt_number + 1,
+        provider_retry_max_attempts: outreachConfig.retry_max_attempts,
+      });
+      if (!ineligible) {
+        const retryId = randomUUID();
+        const attempt = target.attempt_number + 1;
+        const inserted = await client.query(
+          `INSERT INTO crm_outreach_provider_operations
+            (id,delivery_id,operation,idempotency_key,payload_hash,state,attempt_number,
+             provider_external_id,rate_limit_snapshot,request_payload,not_before)
+           VALUES($1,$2,'add_comment',$3,$4,'queued',$5,$6,'{}'::jsonb,$7,NOW())
+           ON CONFLICT(idempotency_key) DO NOTHING RETURNING id`,
+          [
+            retryId,
+            claim.delivery.id,
+            `retry-add-comment:${target.id}:${attempt}`,
+            target.payload_hash,
+            attempt,
+            target.provider_external_id,
+            target.request_payload ?? {},
+          ],
+        );
+        retryQueued = !!inserted.rows[0];
+      }
     }
     await addActivity(client, {
       organization_id: claim.delivery.organization_id,
@@ -763,7 +1131,7 @@ async function resolveTargetedReconciliation(
       metadata: {
         delivery_id: claim.delivery.id,
         operation: target.operation,
-        retry_queued: target.attempt_number < outreachConfig.retry_max_attempts,
+        retry_queued: retryQueued,
       },
     });
   });
@@ -788,6 +1156,14 @@ async function processClaim(claim: ClaimedOperation): Promise<void> {
           config,
         }));
     } else if (claim.operation === "add_comment") {
+      if (!(await revalidateStartedFollowupClaim(claim))) {
+        recordOutreachProviderOperation(
+          claim.operation,
+          "preflight_not_sent",
+          Date.now() - startedAt,
+        );
+        return;
+      }
       if (!claim.delivery.zendesk_ticket_id)
         throw Error("delivery has no Zendesk ticket");
       const body = `${claim.request_payload.body ?? ""}`.trim();
@@ -866,7 +1242,7 @@ async function enqueuePeriodicReconciliation(limit: number): Promise<number> {
        encode(digest(('periodic:'||d.id)::bytea,'sha256'),'hex'),'queued',1,d.provider_external_id,
        '{}'::jsonb,'{}'::jsonb,NOW()
        FROM crm_outreach_deliveries d
-      WHERE d.state IN ('notification_requested','replied','closed') AND d.zendesk_ticket_id IS NOT NULL
+      WHERE d.state IN ('notification_requested','replied') AND d.zendesk_ticket_id IS NOT NULL
         AND (d.zendesk_sync_metadata->>'synced_at' IS NULL OR (d.zendesk_sync_metadata->>'synced_at')::timestamptz<NOW()-INTERVAL '15 minutes')
       ORDER BY d.updated_at LIMIT $1 ON CONFLICT(idempotency_key) DO NOTHING`,
     [limit],
@@ -990,19 +1366,41 @@ export async function runOutreachWorkerCycle(): Promise<
     await touchHeartbeat(result);
     return result;
   }
+  const recoveredOperations = await recoverExpiredProviderOperations();
+  const staleWebhookEventsReclaimed = await reclaimStaleWebhookEvents();
+  const ineligibleFollowupsCancelled = await cancelIneligibleQueuedFollowups(
+    config.retry_max_attempts,
+  );
   const indeterminateQueued = await enqueueIndeterminateReconciliation();
-  const periodicQueued = config.webhook_enabled
-    ? await enqueuePeriodicReconciliation(config.worker_batch_size)
-    : 0;
+  const periodicQueued = await enqueuePeriodicReconciliation(
+    config.worker_batch_size,
+  );
   const suggestions = await updateFollowUpSuggestions();
   const webhook = config.webhook_enabled
     ? await processWebhookQueue(config.worker_batch_size)
     : { processed: 0, failed: 0, ignored: 0, disabled: true };
+  let reconciled = 0;
+  let reconciliationFailed = 0;
+  while (reconciled + reconciliationFailed < config.worker_batch_size) {
+    const claim = await claimOneReconciliation();
+    if (!claim) break;
+    try {
+      await processClaim(claim);
+      reconciled += 1;
+    } catch (err) {
+      reconciliationFailed += 1;
+      logger.warn("CRM outreach reconciliation failed", {
+        operation_id: claim.operation_id,
+        delivery_id: claim.delivery.id,
+        error: `${err}`.slice(0, 2_000),
+      });
+    }
+  }
   let processed = 0;
   let failed = 0;
   if (config.delivery_enabled) {
     while (processed + failed < config.worker_batch_size) {
-      const claim = await claimOne();
+      const claim = await claimOneEffectful();
       if (!claim) break;
       try {
         await processClaim(claim);
@@ -1021,6 +1419,11 @@ export async function runOutreachWorkerCycle(): Promise<
   const result = {
     processed,
     failed,
+    reconciled,
+    reconciliation_failed: reconciliationFailed,
+    recovered_provider_operations: recoveredOperations,
+    stale_webhook_events_reclaimed: staleWebhookEventsReclaimed,
+    ineligible_followups_cancelled: ineligibleFollowupsCancelled,
     indeterminate_reconciliations_queued: indeterminateQueued,
     periodic_reconciliations_queued: periodicQueued,
     follow_up_suggestions_updated: suggestions,

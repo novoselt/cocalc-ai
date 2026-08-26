@@ -576,12 +576,23 @@ Table({
         expression:
           "state IN ('queued','started','succeeded','failed','indeterminate','cancelled')",
       },
+      {
+        name: "crm_outreach_provider_operations_attempt_check",
+        type: "check",
+        expression: "attempt_number>0",
+      },
     ],
     pg_custom_indexes: [
       {
         name: "crm_outreach_provider_operation_claim_idx",
         query:
           "(state,not_before,id) WHERE state IN ('queued','started','indeterminate')",
+      },
+      {
+        name: "crm_outreach_one_pending_followup_operation",
+        query:
+          "(delivery_id) WHERE operation='add_comment' AND state IN ('queued','started','indeterminate')",
+        unique: true,
       },
     ],
     pg_indexes: [
@@ -639,6 +650,19 @@ Table({
   name: "crm_outreach_zendesk_events",
   rules: {
     primary_key: "event_id",
+    pg_constraints: [
+      {
+        name: "crm_outreach_zendesk_events_state_check",
+        type: "check",
+        expression:
+          "state IN ('pending','processing','processed','ignored','failed','dead_letter')",
+      },
+      {
+        name: "crm_outreach_zendesk_events_attempt_check",
+        type: "check",
+        expression: "attempt_count>=0",
+      },
+    ],
     pg_indexes: [
       "zendesk_ticket_id",
       "event_type",

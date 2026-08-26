@@ -291,6 +291,51 @@ export function deliveryRow(row: any): CrmOutreachDelivery {
   ) as CrmOutreachDelivery;
 }
 
+export interface OutreachFollowupEligibility {
+  delivery_state: string;
+  replied_at?: Date | string | null;
+  task_state?: string | null;
+  follow_up_attempt_count: number;
+  max_followups: number;
+  suppressed: boolean;
+  pending_operation?: boolean;
+  provider_attempt_number?: number;
+  provider_retry_max_attempts?: number;
+}
+
+export function outreachFollowupIneligibilityReason({
+  delivery_state,
+  replied_at,
+  task_state,
+  follow_up_attempt_count,
+  max_followups,
+  suppressed,
+  pending_operation = false,
+  provider_attempt_number,
+  provider_retry_max_attempts,
+}: OutreachFollowupEligibility): string | undefined {
+  if (suppressed) return "recipient is suppressed";
+  if (replied_at) return "recipient has already replied";
+  if (delivery_state !== "notification_requested") {
+    return `delivery state is ${delivery_state}, not notification_requested`;
+  }
+  if (task_state !== "open" && task_state !== "waiting") {
+    return "follow-up task is no longer open or waiting";
+  }
+  if (follow_up_attempt_count >= max_followups) {
+    return "maximum reviewed follow-ups reached";
+  }
+  if (
+    provider_attempt_number != null &&
+    provider_retry_max_attempts != null &&
+    provider_attempt_number > provider_retry_max_attempts
+  ) {
+    return "maximum provider attempts reached";
+  }
+  if (pending_operation) return "a reviewed follow-up is already pending";
+  return undefined;
+}
+
 function suppressionRow(row: any): CrmContactSuppression {
   return timestampFields(row, [
     "created_at",
@@ -2011,6 +2056,17 @@ export async function mutateContactSuppression(
             ($2='person' AND d.person_id=$4) OR ($2='organization' AND d.organization_id=$5))`,
         [accountId, scope, value, person?.id ?? null, organization?.id ?? null],
       );
+      await db.query(
+        `UPDATE crm_outreach_provider_operations p SET state='cancelled',
+          provider_status='cancelled_suppression',error_category='suppressed',
+          error_text='Queued follow-up cancelled by an active outreach suppression',
+          lease_owner=NULL,lease_expires_at=NULL,finished_at=NOW(),updated_at=NOW()
+         FROM crm_outreach_deliveries d
+        WHERE p.delivery_id=d.id AND p.operation='add_comment' AND p.state='queued' AND (
+          ($1='email' AND d.normalized_email=$2) OR ($1='domain' AND d.recipient_domain=$2) OR
+          ($1='person' AND d.person_id=$3) OR ($1='organization' AND d.organization_id=$4))`,
+        [scope, value, person?.id ?? null, organization?.id ?? null],
+      );
       if (organization)
         await addActivity(db, {
           organization_id: organization.id,
@@ -2112,11 +2168,31 @@ export async function previewOutreachFollowup(
   const delivery = await resolveDelivery(getPool(), opts.delivery);
   if (!delivery.zendesk_ticket_id || !delivery.task_id)
     throw Error("delivery has no linked Zendesk ticket and follow-up task");
-  if (delivery.replied_at) throw Error("recipient has already replied");
-  if (delivery.follow_up_attempt_count >= delivery.max_followups)
-    throw Error(
-      "maximum reviewed follow-ups reached; complete or reschedule final review",
-    );
+  const eligibility = await getPool().query(
+    `SELECT t.state AS task_state,
+      EXISTS(SELECT 1 FROM crm_contact_suppressions s WHERE s.active AND (
+        (s.scope='email' AND s.normalized_scope_value=d.normalized_email) OR
+        (s.scope='domain' AND s.normalized_scope_value=d.recipient_domain) OR
+        (s.scope='person' AND s.person_id=d.person_id) OR
+        (s.scope='organization' AND s.organization_id=d.organization_id) OR
+        s.person_email_id=d.person_email_id)) AS suppressed,
+      EXISTS(SELECT 1 FROM crm_outreach_provider_operations p
+        WHERE p.delivery_id=d.id AND p.operation='add_comment'
+          AND p.state IN ('queued','started','indeterminate')) AS pending_operation
+     FROM crm_outreach_deliveries d LEFT JOIN crm_tasks t ON t.id=d.task_id
+    WHERE d.id=$1`,
+    [delivery.id],
+  );
+  const ineligible = outreachFollowupIneligibilityReason({
+    delivery_state: delivery.state,
+    replied_at: delivery.replied_at,
+    task_state: eligibility.rows[0]?.task_state,
+    follow_up_attempt_count: delivery.follow_up_attempt_count,
+    max_followups: delivery.max_followups,
+    suppressed: eligibility.rows[0]?.suppressed === true,
+    pending_operation: eligibility.rows[0]?.pending_operation === true,
+  });
+  if (ineligible) throw Error(`cannot queue outreach follow-up: ${ineligible}`);
   const body =
     opts.body?.trim() ||
     `Hello ${delivery.recipient_name.split(/\s+/)[0]},\n\nI wanted to follow up on my previous message. Please let us know if a CoCalc adoption pilot would be useful, or if there is someone else we should contact.\n\nBest wishes,\nThe CoCalc Team`;
@@ -2172,22 +2248,66 @@ export async function sendOutreachFollowup(
     currentVersion: async (db) =>
       (await resolveDelivery(db, original.id, db !== getPool())).version,
     apply: async (db, eventId) => {
+      const lockedResult = await db.query(
+        "SELECT * FROM crm_outreach_deliveries WHERE id=$1 FOR UPDATE",
+        [original.id],
+      );
+      if (!lockedResult.rows[0]) throw Error("outreach delivery not found");
+      const locked = deliveryRow(lockedResult.rows[0]);
+      const task = locked.task_id
+        ? await db.query("SELECT state FROM crm_tasks WHERE id=$1 FOR UPDATE", [
+            locked.task_id,
+          ])
+        : { rows: [] };
+      const suppression = await db.query(
+        `SELECT EXISTS(SELECT 1 FROM crm_contact_suppressions s WHERE s.active AND (
+          (s.scope='email' AND s.normalized_scope_value=$1) OR
+          (s.scope='domain' AND s.normalized_scope_value=$2) OR
+          (s.scope='person' AND s.person_id=$3) OR
+          (s.scope='organization' AND s.organization_id=$4) OR
+          s.person_email_id=$5)) AS suppressed`,
+        [
+          locked.normalized_email,
+          locked.recipient_domain,
+          locked.person_id,
+          locked.organization_id,
+          locked.person_email_id,
+        ],
+      );
+      const pending = await db.query(
+        `SELECT EXISTS(SELECT 1 FROM crm_outreach_provider_operations
+          WHERE delivery_id=$1 AND operation='add_comment'
+            AND state IN ('queued','started','indeterminate')) AS pending`,
+        [locked.id],
+      );
+      const ineligible = outreachFollowupIneligibilityReason({
+        delivery_state: locked.state,
+        replied_at: locked.replied_at,
+        task_state: task.rows[0]?.state,
+        follow_up_attempt_count: locked.follow_up_attempt_count,
+        max_followups: locked.max_followups,
+        suppressed: suppression.rows[0]?.suppressed === true,
+        pending_operation: pending.rows[0]?.pending === true,
+      });
+      if (ineligible) {
+        throw Error(`cannot queue outreach follow-up: ${ineligible}`);
+      }
       const operationId = randomUUID();
       await db.query(
         `INSERT INTO crm_outreach_provider_operations
           (id,delivery_id,operation,idempotency_key,payload_hash,state,attempt_number,provider_external_id,rate_limit_snapshot,request_payload,not_before,provider_status)
-         VALUES($1,$2,'add_comment',$3,$4,'queued',$5,$6,'{}'::jsonb,$7,NOW(),$8)`,
+         VALUES($1,$2,'add_comment',$3,$4,'queued',1,$5,'{}'::jsonb,$6,NOW(),$7)`,
         [
           operationId,
-          original.id,
+          locked.id,
           `followup:${opts.idempotency_key}`,
-          digest({ ticket: original.zendesk_ticket_id, body: preview.body }),
-          original.follow_up_attempt_count + 1,
-          original.provider_external_id,
+          digest({ ticket: locked.zendesk_ticket_id, body: preview.body }),
+          locked.provider_external_id,
           {
             body: preview.body,
             next_due_at: preview.next_due_at,
             actor_account_id: accountId,
+            follow_up_number: locked.follow_up_attempt_count + 1,
           },
           "queued_reviewed_followup",
         ],
