@@ -438,8 +438,10 @@ interface MutationOptions<T> {
   defaultIdempotencyKey?: string;
   organizationId?: string | null;
   proposed: Json;
+  idempotencyPayload?: Json;
   warnings?: string[];
   currentVersion: (db: Db) => Promise<number>;
+  validate?: (db: Db) => Promise<void>;
   apply: (client: PoolClient, eventId: string) => Promise<T>;
   resultType: string;
 }
@@ -450,17 +452,22 @@ async function mutate<T>(
   assertSeed();
   const auditReason = reason(opts.reason);
   const accountId = actor(opts.actor);
-  const payloadHash = digest({ action: opts.action, proposed: opts.proposed });
+  const payloadHash = digest({
+    action: opts.action,
+    proposed: opts.idempotencyPayload ?? opts.proposed,
+  });
   const key =
     `${opts.idempotencyKey ?? opts.defaultIdempotencyKey ?? `crm:${opts.action}:${payloadHash.slice(0, 24)}`}`.slice(
       0,
       500,
     );
   if (!opts.commit) {
+    const expectedVersion = await opts.currentVersion(getPool());
+    await opts.validate?.(getPool());
     return {
       preview: true,
       action: opts.action,
-      expected_version: await opts.currentVersion(getPool()),
+      expected_version: expectedVersion,
       proposed: opts.proposed,
       warnings: opts.warnings ?? [],
       idempotency_key: key,
@@ -505,6 +512,7 @@ async function mutate<T>(
         },
       );
     }
+    await opts.validate?.(client);
     const eventId = randomUUID();
     const result = await opts.apply(client, eventId);
     const metadata = { result };
@@ -872,7 +880,10 @@ export async function createOutreachTemplate(
         )
       ).rows[0].revision,
     );
-  const revision = (await maxRevision(getPool())) + 1;
+  const revision =
+    (opts.commit && Number.isInteger(opts.expected_version)
+      ? opts.expected_version!
+      : await maxRevision(getPool())) + 1;
   const requiredFields = [...new Set(opts.required_fields ?? [])];
   for (const field of requiredFields)
     if (!ALLOWED_MERGE_FIELDS.has(field))
@@ -983,10 +994,6 @@ export async function transitionOutreachTemplate(
     ["activate", "retire"] as const,
     "action",
   );
-  if (action === "activate" && original.status !== "draft")
-    throw Error("only a draft template can be activated");
-  if (action === "retire" && original.status !== "active")
-    throw Error("only an active template can be retired");
   return await mutate({
     action: `outreach.template.${action}`,
     actor: accountId,
@@ -1001,6 +1008,13 @@ export async function transitionOutreachTemplate(
     resultType: "outreach_template",
     currentVersion: async (db) =>
       (await resolveTemplate(db, original.id, db !== getPool())).revision,
+    validate: async (db) => {
+      const current = await resolveTemplate(db, original.id, db !== getPool());
+      if (action === "activate" && current.status !== "draft")
+        throw Error("only a draft template can be activated");
+      if (action === "retire" && current.status !== "active")
+        throw Error("only an active template can be retired");
+    },
     apply: async (db) => {
       if (action === "activate") {
         await db.query(
@@ -1093,8 +1107,6 @@ export async function createOutreachBatch(
   const template = opts.template
     ? await resolveTemplate(getPool(), opts.template)
     : null;
-  if (template && template.status !== "active")
-    throw Error("new outreach batches require an active template revision");
   const proposed = {
     name: bounded(opts.name, "name", 300),
     purpose: bounded(opts.purpose, "purpose", 2_000),
@@ -1111,8 +1123,22 @@ export async function createOutreachBatch(
     expectedVersion: opts.expected_version,
     idempotencyKey: opts.idempotency_key,
     proposed,
+    idempotencyPayload: {
+      name: proposed.name,
+      purpose: proposed.purpose,
+      kind: proposed.kind,
+      owner_account_id: proposed.owner_account_id,
+      template_id: template?.id ?? null,
+      template_revision: template?.revision ?? null,
+    },
     resultType: "outreach_batch",
     currentVersion: async () => 0,
+    validate: async (db) => {
+      if (!template) return;
+      const current = await resolveTemplate(db, template.id, db !== getPool());
+      if (current.status !== "active")
+        throw Error("new outreach batches require an active template revision");
+    },
     apply: async (db) => {
       const id = randomUUID();
       const { rows } = await db.query(
@@ -1142,8 +1168,6 @@ export async function updateOutreachBatch(
   reason(opts.reason);
   const accountId = actor(opts.account_id);
   const original = await resolveBatch(getPool(), opts.batch);
-  if (original.state !== "draft")
-    throw Error("only a draft outreach batch can be edited");
   const changes: Json = {};
   if (Object.hasOwn(opts.changes, "name"))
     changes.name = bounded(opts.changes.name, "name", 300);
@@ -1165,6 +1189,11 @@ export async function updateOutreachBatch(
     resultType: "outreach_batch",
     currentVersion: async (db) =>
       (await resolveBatch(db, original.id, db !== getPool())).version,
+    validate: async (db) => {
+      const current = await resolveBatch(db, original.id, db !== getPool());
+      if (current.state !== "draft")
+        throw Error("only a draft outreach batch can be edited");
+    },
     apply: async (db) => {
       const keys = Object.keys(changes);
       if (keys.length) {
@@ -1367,26 +1396,11 @@ export async function addOutreachRecipient(
   reason(opts.reason);
   const accountId = actor(opts.account_id);
   const batch = await resolveBatch(getPool(), opts.batch);
-  if (batch.state !== "draft")
-    throw Error("recipients can only be added to a draft batch");
   const config = await loadOutreachConfiguration();
-  if (batch.recipient_count >= config.max_recipients_per_batch)
-    throw Error(`batch recipient limit is ${config.max_recipients_per_batch}`);
   const target = await recipientContext(opts, batch);
-  if (target.email.verified !== true)
-    throw Error("recipient email relation must be reviewed and verified");
   const template = batch.template_id
     ? await resolveTemplate(getPool(), batch.template_id)
     : null;
-  const missingFields = missingRequiredMergeFields(
-    template?.required_fields ?? [],
-    target.context,
-  );
-  if (missingFields.length) {
-    throw Error(
-      `required outreach values are missing: ${missingFields.join(", ")}`,
-    );
-  }
   const inputKey = `crm:outreach.recipient:${digest({ batch: batch.id, person: target.person.id, email: target.email.id, opportunity: target.opportunity?.id, subject: opts.subject, body: opts.body_markdown }).slice(0, 32)}`;
   const idempotencyKey = opts.idempotency_key ?? inputKey;
   const tokenSecret = config.webhook_secret || `disabled-outreach:${batch.id}`;
@@ -1463,27 +1477,12 @@ export async function addOutreachRecipient(
     updated_at: new Date(),
     version: 1,
   });
-  const checks = await deliveryPreflight(previewDelivery);
-  const suppressions = await activeSuppressions(
-    getPool(),
-    target.organization.id,
-    target.person.id,
-    target.email.id,
-    target.email.normalized_email,
-  );
-  if (suppressions.length)
-    checks.blocking_errors.push(
-      "active suppression prevents adding this recipient",
-    );
-  if (checks.blocking_errors.length)
-    throw Error(checks.blocking_errors.join("; "));
-  if (checks.warnings.length && !proposed.override_reason)
-    checks.warnings.push(
+  const previewChecks = opts.commit
+    ? { blocking_errors: [], warnings: [] }
+    : await deliveryPreflight(previewDelivery);
+  if (previewChecks.warnings.length && !proposed.override_reason)
+    previewChecks.warnings.push(
       "commit requires override_reason for the listed warnings",
-    );
-  if (opts.commit && checks.warnings.length && !proposed.override_reason)
-    throw Error(
-      "override_reason is required to commit a recipient with preflight warnings",
     );
   return await mutate({
     action: "outreach.recipient.add",
@@ -1495,10 +1494,66 @@ export async function addOutreachRecipient(
     defaultIdempotencyKey: inputKey,
     organizationId: target.organization.id,
     proposed,
-    warnings: checks.warnings,
+    idempotencyPayload: {
+      batch_id: batch.id,
+      organization_id: target.organization.id,
+      person_id: target.person.id,
+      person_email_id: target.email.id,
+      opportunity_id: target.opportunity?.id ?? null,
+      template_id: template?.id ?? null,
+      template_revision: template?.revision ?? null,
+      subject: opts.subject ?? null,
+      body_markdown: opts.body_markdown ?? null,
+      override_reason: proposed.override_reason,
+    },
+    warnings: previewChecks.warnings,
     resultType: "outreach_delivery",
     currentVersion: async (db) =>
       (await resolveBatch(db, batch.id, db !== getPool())).version,
+    validate: async (db) => {
+      const currentBatch = await resolveBatch(db, batch.id, db !== getPool());
+      if (currentBatch.state !== "draft")
+        throw Error("recipients can only be added to a draft batch");
+      const currentConfig = await loadOutreachConfiguration();
+      if (
+        currentBatch.recipient_count >= currentConfig.max_recipients_per_batch
+      )
+        throw Error(
+          `batch recipient limit is ${currentConfig.max_recipients_per_batch}`,
+        );
+      const currentTarget = await recipientContext(opts, currentBatch);
+      if (currentTarget.email.verified !== true)
+        throw Error("recipient email relation must be reviewed and verified");
+      const currentTemplate = currentBatch.template_id
+        ? await resolveTemplate(db, currentBatch.template_id)
+        : null;
+      const missingFields = missingRequiredMergeFields(
+        currentTemplate?.required_fields ?? [],
+        currentTarget.context,
+      );
+      if (missingFields.length)
+        throw Error(
+          `required outreach values are missing: ${missingFields.join(", ")}`,
+        );
+      const checks = await deliveryPreflight(previewDelivery);
+      const suppressions = await activeSuppressions(
+        db,
+        currentTarget.organization.id,
+        currentTarget.person.id,
+        currentTarget.email.id,
+        currentTarget.email.normalized_email,
+      );
+      if (suppressions.length)
+        checks.blocking_errors.push(
+          "active suppression prevents adding this recipient",
+        );
+      if (checks.blocking_errors.length)
+        throw Error(checks.blocking_errors.join("; "));
+      if (checks.warnings.length && !proposed.override_reason)
+        throw Error(
+          "override_reason is required to commit a recipient with preflight warnings",
+        );
+    },
     apply: async (db, eventId) => {
       const id = randomUUID();
       const { rows } = await db.query(
@@ -1566,8 +1621,6 @@ export async function removeOutreachRecipient(
   const delivery = await resolveDelivery(getPool(), opts.delivery);
   if (delivery.batch_id !== batch.id)
     throw Error("delivery belongs to a different batch");
-  if (batch.state !== "draft" || delivery.state !== "draft")
-    throw Error("only draft recipients can be removed");
   return await mutate({
     action: "outreach.recipient.remove",
     actor: accountId,
@@ -1580,6 +1633,16 @@ export async function removeOutreachRecipient(
     resultType: "outreach_delivery",
     currentVersion: async (db) =>
       (await resolveBatch(db, batch.id, db !== getPool())).version,
+    validate: async (db) => {
+      const currentBatch = await resolveBatch(db, batch.id, db !== getPool());
+      const currentDelivery = await resolveDelivery(
+        db,
+        delivery.id,
+        db !== getPool(),
+      );
+      if (currentBatch.state !== "draft" || currentDelivery.state !== "draft")
+        throw Error("only draft recipients can be removed");
+    },
     apply: async (db, eventId) => {
       const { rows } = await db.query(
         "UPDATE crm_outreach_deliveries SET state='cancelled',cancelled_at=NOW(),updated_by_account_id=$1,updated_at=NOW(),version=version+1 WHERE id=$2 RETURNING *",
@@ -1671,18 +1734,10 @@ export async function transitionOutreachBatch(
     resume: ["paused"],
     cancel: ["draft", "approved", "queued", "paused"],
   };
-  if (!allowed[action].includes(original.state))
-    throw Error(
-      `cannot ${action} an outreach batch in ${original.state} state`,
-    );
   const preview = await previewOutreachBatch({
     batch: original.id,
     reason: opts.reason,
   });
-  if (action === "approve" && !preview.can_approve)
-    throw Error("batch preflight has blocking errors or unreviewed warnings");
-  if (action === "queue" && !preview.can_queue)
-    throw Error("batch preflight has blocking errors or unreviewed warnings");
   return await mutate({
     action: `outreach.batch.${action}`,
     actor: accountId,
@@ -1698,6 +1753,27 @@ export async function transitionOutreachBatch(
     resultType: "outreach_batch",
     currentVersion: async (db) =>
       (await resolveBatch(db, original.id, db !== getPool())).version,
+    validate: async (db) => {
+      const current = await resolveBatch(db, original.id, db !== getPool());
+      if (!allowed[action].includes(current.state))
+        throw Error(
+          `cannot ${action} an outreach batch in ${current.state} state`,
+        );
+      if (action === "approve" || action === "queue") {
+        const currentPreview = await previewOutreachBatch({
+          batch: current.id,
+          reason: opts.reason,
+        });
+        if (action === "approve" && !currentPreview.can_approve)
+          throw Error(
+            "batch preflight has blocking errors or unreviewed warnings",
+          );
+        if (action === "queue" && !currentPreview.can_queue)
+          throw Error(
+            "batch preflight has blocking errors or unreviewed warnings",
+          );
+      }
+    },
     apply: async (db, eventId) => {
       const state = next[action];
       const timestampColumn =
@@ -1851,20 +1927,6 @@ export async function mutateOutreachDelivery(
     ["retry", "reconcile", "cancel"] as const,
     "action",
   );
-  if (action === "retry" && original.state !== "failed")
-    throw Error("only failed deliveries can be retried");
-  if (
-    action === "reconcile" &&
-    !["creating_ticket", "notification_requested", "failed"].includes(
-      original.state,
-    )
-  )
-    throw Error("delivery is not eligible for reconciliation");
-  if (
-    action === "cancel" &&
-    !["draft", "approved", "queued", "failed"].includes(original.state)
-  )
-    throw Error("delivery can no longer be cancelled");
   return await mutate({
     action: `outreach.delivery.${action}`,
     actor: accountId,
@@ -1877,6 +1939,23 @@ export async function mutateOutreachDelivery(
     resultType: "outreach_delivery",
     currentVersion: async (db) =>
       (await resolveDelivery(db, original.id, db !== getPool())).version,
+    validate: async (db) => {
+      const current = await resolveDelivery(db, original.id, db !== getPool());
+      if (action === "retry" && current.state !== "failed")
+        throw Error("only failed deliveries can be retried");
+      if (
+        action === "reconcile" &&
+        !["creating_ticket", "notification_requested", "failed"].includes(
+          current.state,
+        )
+      )
+        throw Error("delivery is not eligible for reconciliation");
+      if (
+        action === "cancel" &&
+        !["draft", "approved", "queued", "failed"].includes(current.state)
+      )
+        throw Error("delivery can no longer be cancelled");
+    },
     apply: async (db, eventId) => {
       if (action === "retry")
         await db.query(
@@ -1976,7 +2055,6 @@ export async function mutateContactSuppression(
     );
     if (!rows[0]) throw Error("suppression not found");
     const original = suppressionRow(rows[0]);
-    if (!original.active) throw Error("suppression is already revoked");
     return await mutate({
       action: "outreach.suppression.revoke",
       actor: accountId,
@@ -2000,6 +2078,14 @@ export async function mutateContactSuppression(
             )
           ).rows[0].version,
         ),
+      validate: async (db) => {
+        const current = await db.query(
+          "SELECT active FROM crm_contact_suppressions WHERE id=$1 FOR UPDATE",
+          [original.id],
+        );
+        if (current.rows[0]?.active !== true)
+          throw Error("suppression is already revoked");
+      },
       apply: async (db, eventId) => {
         const result = await db.query(
           "UPDATE crm_contact_suppressions SET active=false,revoked_by_account_id=$1,revoked_at=NOW(),revocation_reason=$2,version=version+1 WHERE id=$3 RETURNING *",
@@ -2217,9 +2303,17 @@ export async function previewOutreachFollowup(
   assertSeed();
   reason(opts.reason);
   const delivery = await resolveDelivery(getPool(), opts.delivery);
+  await assertOutreachFollowupEligible(getPool(), delivery);
+  return composeOutreachFollowup(delivery, opts.body);
+}
+
+async function assertOutreachFollowupEligible(
+  db: Db,
+  delivery: CrmOutreachDelivery,
+): Promise<void> {
   if (!delivery.zendesk_ticket_id || !delivery.task_id)
     throw Error("delivery has no linked Zendesk ticket and follow-up task");
-  const eligibility = await getPool().query(
+  const eligibility = await db.query(
     `SELECT t.state AS task_state,
       EXISTS(SELECT 1 FROM crm_contact_suppressions s WHERE s.active AND (
         (s.scope='email' AND s.normalized_scope_value=d.normalized_email) OR
@@ -2244,8 +2338,14 @@ export async function previewOutreachFollowup(
     pending_operation: eligibility.rows[0]?.pending_operation === true,
   });
   if (ineligible) throw Error(`cannot queue outreach follow-up: ${ineligible}`);
+}
+
+function composeOutreachFollowup(
+  delivery: CrmOutreachDelivery,
+  requestedBody?: string,
+): CrmOutreachFollowUpPreview {
   const body =
-    opts.body?.trim() ||
+    requestedBody?.trim() ||
     `Hello ${delivery.recipient_name.split(/\s+/)[0]},\n\nI wanted to follow up on my previous message. Please let us know if a CoCalc adoption pilot would be useful, or if there is someone else we should contact.\n\nBest wishes,\nThe CoCalc Team`;
   if (body.length > 10_000)
     throw Error("follow-up body must be at most 10000 characters");
@@ -2257,7 +2357,7 @@ export async function previewOutreachFollowup(
   return {
     delivery,
     body,
-    zendesk_ticket_id: delivery.zendesk_ticket_id,
+    zendesk_ticket_id: delivery.zendesk_ticket_id!,
     next_due_at: new Date(Date.now() + days * 86_400_000).toISOString(),
     final_review: finalReview,
     warnings: [
@@ -2273,12 +2373,8 @@ export async function sendOutreachFollowup(
   assertSeed();
   reason(opts.reason);
   const accountId = actor(opts.account_id);
-  const preview = await previewOutreachFollowup({
-    delivery: opts.delivery,
-    body: opts.body,
-    reason: opts.reason,
-  });
-  const original = preview.delivery;
+  const original = await resolveDelivery(getPool(), opts.delivery);
+  const preview = composeOutreachFollowup(original, opts.body);
   return await mutate({
     action: "outreach.followup.queue",
     actor: accountId,
@@ -2294,10 +2390,19 @@ export async function sendOutreachFollowup(
       next_due_at: preview.next_due_at,
       final_review: preview.final_review,
     },
+    idempotencyPayload: {
+      delivery_id: original.id,
+      zendesk_ticket_id: original.zendesk_ticket_id,
+      body: preview.body,
+    },
     warnings: preview.warnings,
     resultType: "outreach_delivery",
     currentVersion: async (db) =>
       (await resolveDelivery(db, original.id, db !== getPool())).version,
+    validate: async (db) => {
+      const current = await resolveDelivery(db, original.id, db !== getPool());
+      await assertOutreachFollowupEligible(db, current);
+    },
     apply: async (db, eventId) => {
       const lockedResult = await db.query(
         "SELECT * FROM crm_outreach_deliveries WHERE id=$1 FOR UPDATE",
