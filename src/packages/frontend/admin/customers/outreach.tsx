@@ -159,9 +159,72 @@ function actionTitle(action?: OutreachAction): string {
   }
 }
 
-function ReviewPanel({ preview }: { preview: MutationPreview }) {
+function BatchApprovalReview({ value }: { value: CrmOutreachPreview }) {
+  const names = useAccountDisplayNames([value.batch.owner_account_id]);
   return (
     <Flex vertical gap={12}>
+      <Alert
+        description="These recipient, routing, and message snapshots are the exact records being approved. Any draft change invalidates the optimistic version and requires a new review."
+        showIcon
+        title={`${value.batch.outreach_number}: final immutable message review`}
+        type={value.can_approve || value.can_queue ? "success" : "warning"}
+      />
+      <Descriptions bordered column={1} size="small">
+        <Descriptions.Item label="Batch owner">
+          <AccountIdentity
+            accountId={value.batch.owner_account_id}
+            names={names}
+          />
+        </Descriptions.Item>
+        <Descriptions.Item label="Template revision">
+          {`${value.batch.template_snapshot.template_key ?? "Custom"}@${value.batch.template_snapshot.revision ?? "snapshot"}`}
+        </Descriptions.Item>
+        <Descriptions.Item label="Zendesk routing">
+          {[
+            value.provider_routing.support_address,
+            value.provider_routing.group_id,
+          ]
+            .filter(Boolean)
+            .join(" · ") || "Not configured"}
+        </Descriptions.Item>
+        <Descriptions.Item label="Recipients">
+          {value.deliveries.length}
+        </Descriptions.Item>
+      </Descriptions>
+      {value.deliveries.map(({ delivery, blocking_errors, warnings }) => (
+        <Card
+          key={delivery.id}
+          size="small"
+          title={`${delivery.recipient_name} · ${delivery.normalized_email}`}
+        >
+          <Flex vertical gap={8}>
+            {blocking_errors.map((item) => (
+              <Alert key={item} showIcon title={item} type="error" />
+            ))}
+            {warnings.map((item) => (
+              <Alert key={item} showIcon title={item} type="warning" />
+            ))}
+            <Text strong>{delivery.subject}</Text>
+            <pre className="crm-outreach-message">
+              {delivery.body_plain_text}
+            </pre>
+          </Flex>
+        </Card>
+      ))}
+    </Flex>
+  );
+}
+
+function ReviewPanel({
+  batchReview,
+  preview,
+}: {
+  batchReview?: CrmOutreachPreview;
+  preview: MutationPreview;
+}) {
+  return (
+    <Flex vertical gap={12}>
+      {batchReview ? <BatchApprovalReview value={batchReview} /> : null}
       <Alert
         description="Nothing has changed yet. Confirming repeats this exact operation with fresh authentication."
         showIcon
@@ -215,6 +278,7 @@ function OutreachActionModal({
   const api = webapp_client.conat_client.hub.adminCrm;
   const [form] = Form.useForm();
   const [preview, setPreview] = useState<MutationPreview | null>(null);
+  const [batchReview, setBatchReview] = useState<CrmOutreachPreview>();
   const [request, setRequest] = useState<Record<string, any> | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>("");
@@ -225,6 +289,7 @@ function OutreachActionModal({
   useEffect(() => {
     form.resetFields();
     setPreview(null);
+    setBatchReview(undefined);
     setRequest(null);
     setError("");
     if (!action) return;
@@ -364,10 +429,19 @@ function OutreachActionModal({
     try {
       if (!preview) {
         const values = await form.validateFields();
+        const exactBatchReview =
+          action?.kind === "batch-transition" &&
+          ["approve", "queue"].includes(action.transition)
+            ? await api.previewOutreachBatch({
+                batch: action.batch.id,
+                reason: values.reason,
+              })
+            : undefined;
         const result = await call(values, false);
         if (!result.preview)
           throw Error("outreach preview unexpectedly committed");
         setRequest(values);
+        setBatchReview(exactBatchReview);
         setPreview(result);
         return;
       }
@@ -707,7 +781,7 @@ function OutreachActionModal({
           />
         ) : null}
         {preview ? (
-          <ReviewPanel preview={preview} />
+          <ReviewPanel batchReview={batchReview} preview={preview} />
         ) : (
           <Form form={form} layout="vertical" requiredMark="optional">
             {fields()}
@@ -762,10 +836,12 @@ function DeliveryCard({
           <Tag>{humanize(delivery.kind)}</Tag>
           {delivery.view_observation_count ? (
             <Tooltip title={CRM_OUTREACH_VIEW_CAVEAT}>
-              <Tag color="cyan">
-                <Icon name="eye" /> View observed ·{" "}
-                {delivery.view_observation_count}
-              </Tag>
+              <span tabIndex={0}>
+                <Tag color="cyan">
+                  <Icon name="eye" /> View observed ·{" "}
+                  {delivery.view_observation_count}
+                </Tag>
+              </span>
             </Tooltip>
           ) : null}
           {delivery.zendesk_ticket_id ? (
@@ -1322,7 +1398,7 @@ export function CustomerOutreachCard({
   onOpenOutreach,
 }: {
   organization: string;
-  onOpenOutreach: () => void;
+  onOpenOutreach: (create?: boolean) => void;
 }) {
   const [deliveries, setDeliveries] = useState<CrmOutreachDelivery[]>([]);
   useEffect(() => {
@@ -1341,7 +1417,6 @@ export function CustomerOutreachCard({
       cancelled = true;
     };
   }, [organization]);
-  if (!deliveries.length) return null;
   return (
     <Card className="crm-section-card">
       <Flex align="center" justify="space-between" wrap gap={8}>
@@ -1352,40 +1427,62 @@ export function CustomerOutreachCard({
           />
           Outreach
         </Title>
-        <Button onClick={onOpenOutreach} size="small">
-          Open workspace
-        </Button>
+        <Space wrap>
+          <Button onClick={() => onOpenOutreach(true)} size="small">
+            New outreach
+          </Button>
+          <Button
+            onClick={() => onOpenOutreach(false)}
+            size="small"
+            type="primary"
+          >
+            Open workspace
+          </Button>
+        </Space>
       </Flex>
       <Divider />
-      <Flex vertical gap={8}>
-        {deliveries.map((delivery) => (
-          <Flex
-            align="center"
-            gap={8}
-            justify="space-between"
-            key={delivery.id}
-            wrap
-          >
-            <div style={{ minWidth: 0 }}>
-              <Text ellipsis strong>
-                {delivery.subject}
-              </Text>
-              <br />
-              <Text type="secondary">
-                <TimeAgo date={delivery.updated_at} />
-              </Text>
-            </div>
-            <Tag color={statusColor(delivery.state)}>
-              {humanize(delivery.state)}
-            </Tag>
-          </Flex>
-        ))}
-      </Flex>
+      {deliveries.length ? (
+        <Flex vertical gap={8}>
+          {deliveries.map((delivery) => (
+            <Flex
+              align="center"
+              gap={8}
+              justify="space-between"
+              key={delivery.id}
+              wrap
+            >
+              <div style={{ minWidth: 0 }}>
+                <Text ellipsis strong>
+                  {delivery.subject}
+                </Text>
+                <br />
+                <Text type="secondary">
+                  <TimeAgo date={delivery.updated_at} />
+                </Text>
+              </div>
+              <Tag color={statusColor(delivery.state)}>
+                {humanize(delivery.state)}
+              </Tag>
+            </Flex>
+          ))}
+        </Flex>
+      ) : (
+        <Empty
+          description="No reviewed outreach has been recorded for this customer."
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+        />
+      )}
     </Card>
   );
 }
 
-export function OutreachAdmin() {
+export function OutreachAdmin({
+  initialOrganization,
+  startNewKey,
+}: {
+  initialOrganization?: string;
+  startNewKey?: number;
+}) {
   const api = webapp_client.conat_client.hub.adminCrm;
   const [view, setView] = useState<QueueView>("deliveries");
   const [deliveries, setDeliveries] = useState<CrmOutreachDelivery[]>([]);
@@ -1401,7 +1498,9 @@ export function OutreachAdmin() {
   const [owner, setOwner] = useState<string>();
   const [kind, setKind] = useState<string>();
   const [batchFilter, setBatchFilter] = useState<string>();
-  const [organization, setOrganization] = useState<string>();
+  const [organization, setOrganization] = useState<string | undefined>(
+    initialOrganization,
+  );
   const [opportunity, setOpportunity] = useState<string>();
   const [suggestedAction, setSuggestedAction] = useState<string>();
   const [ticket, setTicket] = useState<number | null>();
@@ -1475,6 +1574,14 @@ export function OutreachAdmin() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (initialOrganization) setOrganization(initialOrganization);
+  }, [initialOrganization]);
+
+  useEffect(() => {
+    if (startNewKey) setAction({ kind: "create-batch" });
+  }, [startNewKey]);
 
   const needle = search.trim().toLowerCase();
   const batchById = new Map(batches.map((batch) => [batch.id, batch]));
@@ -1563,11 +1670,19 @@ export function OutreachAdmin() {
           <Space wrap>
             <Button
               ghost
-              href="/app-docs/admin/crm-outreach"
+              href="/app-docs/admin/crm-outreach-ui"
               icon={<Icon name="book" />}
               size="large"
             >
-              Outreach runbook
+              UI guide
+            </Button>
+            <Button
+              ghost
+              href="/app-docs/admin/crm-outreach"
+              icon={<Icon name="terminal" />}
+              size="large"
+            >
+              Agent runbook
             </Button>
             <Button
               ghost

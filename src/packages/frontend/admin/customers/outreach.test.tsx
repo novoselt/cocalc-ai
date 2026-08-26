@@ -183,9 +183,14 @@ describe("CRM outreach admin", () => {
         name: "Initiate carefully. Follow up visibly.",
       }),
     ).toBeVisible();
-    expect(
-      screen.getByRole("link", { name: /Outreach runbook/ }),
-    ).toHaveAttribute("href", "/app-docs/admin/crm-outreach");
+    expect(screen.getByRole("link", { name: /UI guide/ })).toHaveAttribute(
+      "href",
+      "/app-docs/admin/crm-outreach-ui",
+    );
+    expect(screen.getByRole("link", { name: /Agent runbook/ })).toHaveAttribute(
+      "href",
+      "/app-docs/admin/crm-outreach",
+    );
     expect(
       await screen.findByText("Zendesk delivery kill switch is off"),
     ).toBeVisible();

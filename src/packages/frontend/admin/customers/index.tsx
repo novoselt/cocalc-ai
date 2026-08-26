@@ -1359,7 +1359,7 @@ function CustomerDetail({
   customerId: string;
   onAction: (action: ActionState) => void;
   onBack: () => void;
-  onOpenOutreach: () => void;
+  onOpenOutreach: (create?: boolean) => void;
 }) {
   const [customer, setCustomer] = useState<CrmCustomer360 | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1985,6 +1985,8 @@ export function CustomersAdmin({
   const [workspace, setWorkspace] = useState<"relationships" | "outreach">(
     "relationships",
   );
+  const [outreachOrganization, setOutreachOrganization] = useState<string>();
+  const [outreachStartNewKey, setOutreachStartNewKey] = useState(0);
 
   useEffect(() => {
     if (!customerId) {
@@ -2017,9 +2019,12 @@ export function CustomersAdmin({
       <Flex vertical gap={14}>
         <Segmented
           aria-label="Customer administration workspace"
-          onChange={(value) =>
-            setWorkspace(value as "relationships" | "outreach")
-          }
+          onChange={(value) => {
+            const next = value as "relationships" | "outreach";
+            if (next === "outreach" && customerId)
+              setOutreachOrganization(customerId);
+            setWorkspace(next);
+          }}
           options={[
             {
               label: (
@@ -2041,14 +2046,21 @@ export function CustomersAdmin({
           value={workspace}
         />
         {workspace === "outreach" ? (
-          <OutreachAdmin />
+          <OutreachAdmin
+            initialOrganization={outreachOrganization}
+            startNewKey={outreachStartNewKey}
+          />
         ) : customerId ? (
           <CustomerDetail
             key={`${customerId}:${reloadKey}`}
             customerId={customerId}
             onAction={setAction}
             onBack={onBack}
-            onOpenOutreach={() => setWorkspace("outreach")}
+            onOpenOutreach={(create) => {
+              setOutreachOrganization(customerId);
+              if (create) setOutreachStartNewKey((value) => value + 1);
+              setWorkspace("outreach");
+            }}
           />
         ) : (
           <CustomerQueue

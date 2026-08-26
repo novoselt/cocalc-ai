@@ -14,11 +14,15 @@ import type {
 } from "@cocalc/util/crm";
 
 export function CustomerSelector({
+  ariaLabel,
   disabled,
+  id,
   onChange,
   value,
 }: {
+  ariaLabel?: string;
   disabled?: boolean;
+  id?: string;
   onChange?: (value?: string) => void;
   value?: string;
 }) {
@@ -49,9 +53,10 @@ export function CustomerSelector({
   return (
     <Select
       allowClear
-      aria-label="Customer organization"
+      aria-label={ariaLabel ?? "Customer organization"}
       disabled={disabled}
       filterOption={false}
+      id={id}
       loading={loading}
       onChange={onChange}
       onSearch={(query) => void search(query)}
@@ -68,13 +73,17 @@ export function CustomerSelector({
 }
 
 export function PersonSelector({
+  ariaLabel,
   disabled,
+  id,
   onChange,
   onSelectPerson,
   organization,
   value,
 }: {
+  ariaLabel?: string;
   disabled?: boolean;
+  id?: string;
   onChange?: (value?: string) => void;
   onSelectPerson?: (person?: CrmPerson) => void;
   organization?: string;
@@ -109,9 +118,10 @@ export function PersonSelector({
   return (
     <Select
       allowClear
-      aria-label="CRM contact"
+      aria-label={ariaLabel ?? "Reviewed contact"}
       disabled={disabled}
       filterOption={false}
+      id={id}
       loading={loading}
       onChange={(next) => {
         onChange?.(next);
@@ -138,12 +148,16 @@ export function PersonSelector({
 }
 
 export function OpportunitySelector({
+  ariaLabel,
   disabled,
+  id,
   onChange,
   organization,
   value,
 }: {
+  ariaLabel?: string;
   disabled?: boolean;
+  id?: string;
   onChange?: (value?: string) => void;
   organization?: string;
   value?: string;
@@ -178,8 +192,9 @@ export function OpportunitySelector({
   return (
     <Select
       allowClear
-      aria-label="CRM opportunity"
+      aria-label={ariaLabel ?? "Opportunity"}
       disabled={disabled || !organization}
+      id={id}
       loading={loading}
       onChange={onChange}
       options={options.map((opportunity) => ({
