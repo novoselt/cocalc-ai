@@ -111,6 +111,39 @@ const ALLOWED_MERGE_FIELDS = new Set([
   "relationship_owner.display_name",
 ]);
 
+export function missingRequiredMergeFields(
+  requiredFields: string[],
+  context: Record<string, string>,
+): string[] {
+  return requiredFields.filter((field) => !`${context[field] ?? ""}`.trim());
+}
+
+export function canQueueOutreachBatch(
+  contentReady: boolean,
+  state: string,
+): boolean {
+  return contentReady && state === "approved";
+}
+
+export function outreachProviderConfigurationErrors(config: {
+  support_address?: string;
+  submitter_id?: string;
+  group_id?: string;
+  postal_address?: string;
+  footer_markdown?: string;
+  webhook_secret?: string;
+}): string[] {
+  return [
+    !config.support_address &&
+      "shared Zendesk support address is not configured",
+    !config.submitter_id && "Zendesk submitter ID is not configured",
+    !config.group_id && "Zendesk group ID is not configured",
+    !config.postal_address && "company postal address is not configured",
+    !config.footer_markdown && "reviewed outreach footer is not configured",
+    !config.webhook_secret && "webhook/opt-out secret is not configured",
+  ].filter((value): value is string => !!value);
+}
+
 function assertSeed(): void {
   if (getConfiguredBayId() !== getConfiguredClusterSeedBayId()) {
     throw Error("CRM outreach is seed-global and must run on seed authority");
@@ -1168,15 +1201,23 @@ async function recipientContext(
   context: Record<string, string>;
 }> {
   const person = await resolvePerson(getPool(), opts.person);
-  const organization = opts.organization
-    ? await resolveOrganization(getPool(), opts.organization)
-    : (
-        await getPool().query(
-          `SELECT o.* FROM crm_organizations o JOIN crm_organization_people op ON op.organization_id=o.id
-          WHERE op.person_id=$1 AND op.state='active' ORDER BY 'primary_contact'=ANY(op.roles) DESC LIMIT 2`,
-          [person.id],
-        )
-      ).rows[0];
+  let organization: any;
+  if (opts.organization) {
+    organization = await resolveOrganization(getPool(), opts.organization);
+  } else {
+    const organizations = await getPool().query(
+      `SELECT o.* FROM crm_organizations o JOIN crm_organization_people op ON op.organization_id=o.id
+        WHERE op.person_id=$1 AND op.state='active' AND o.status='active'
+        ORDER BY 'primary_contact'=ANY(op.roles) DESC,o.updated_at DESC LIMIT 2`,
+      [person.id],
+    );
+    if (organizations.rows.length > 1) {
+      throw Error(
+        "person is linked to multiple active CRM organizations; specify --organization",
+      );
+    }
+    organization = organizations.rows[0];
+  }
   if (!organization)
     throw Error("person is not linked to an active CRM organization");
   const opportunity = opts.opportunity
@@ -1273,6 +1314,8 @@ async function deliveryPreflight(
     errors.push("person is not actively linked to this organization");
   if (relation?.verified !== true)
     errors.push("recipient email relation is not reviewed and verified");
+  if (relation?.is_primary !== true)
+    errors.push("recipient email relation is not the reviewed primary email");
   const suppressions = await activeSuppressions(
     getPool(),
     delivery.organization_id,
@@ -1286,6 +1329,10 @@ async function deliveryPreflight(
     );
   if (!delivery.subject.trim() || !delivery.body_plain_text.trim())
     errors.push("subject and body are required");
+  if (delivery.subject.length > 500)
+    errors.push("rendered subject exceeds 500 characters");
+  if (delivery.body_plain_text.length > MAX_BODY)
+    errors.push(`rendered message exceeds ${MAX_BODY} characters`);
   if (
     !delivery.footer.includes(config.postal_address) ||
     !delivery.body_plain_text.includes("/crm/outreach/opt-out/")
@@ -1331,6 +1378,15 @@ export async function addOutreachRecipient(
   const template = batch.template_id
     ? await resolveTemplate(getPool(), batch.template_id)
     : null;
+  const missingFields = missingRequiredMergeFields(
+    template?.required_fields ?? [],
+    target.context,
+  );
+  if (missingFields.length) {
+    throw Error(
+      `required outreach values are missing: ${missingFields.join(", ")}`,
+    );
+  }
   const inputKey = `crm:outreach.recipient:${digest({ batch: batch.id, person: target.person.id, email: target.email.id, opportunity: target.opportunity?.id, subject: opts.subject, body: opts.body_markdown }).slice(0, 32)}`;
   const idempotencyKey = opts.idempotency_key ?? inputKey;
   const tokenSecret = config.webhook_secret || `disabled-outreach:${batch.id}`;
@@ -1349,6 +1405,11 @@ export async function addOutreachRecipient(
   const footer =
     `${config.footer_markdown}\n\n${config.postal_address}\n\nTo stop receiving partnership outreach from CoCalc: ${optOutUrl}`.trim();
   const bodyPlain = `${bodyMarkdown}\n\n${footer}`;
+  if (bodyPlain.length > MAX_BODY) {
+    throw Error(
+      `rendered outreach body including its required footer must be at most ${MAX_BODY} characters`,
+    );
+  }
   const proposed = {
     batch_id: batch.id,
     organization_id: target.organization.id,
@@ -1559,14 +1620,7 @@ export async function previewOutreachBatch(
   );
   const limits = await getOutreachLimits({ reason: opts.reason });
   const config = await loadOutreachConfiguration();
-  const providerErrors = [
-    !config.support_address &&
-      "shared Zendesk support address is not configured",
-    !config.submitter_id && "Zendesk submitter ID is not configured",
-    !config.group_id && "Zendesk group ID is not configured",
-    !config.postal_address && "company postal address is not configured",
-    !config.webhook_secret && "webhook/opt-out secret is not configured",
-  ].filter(Boolean) as string[];
+  const providerErrors = outreachProviderConfigurationErrors(config);
   if (providerErrors.length)
     for (const item of deliveries) item.blocking_errors.push(...providerErrors);
   const canApprove =
@@ -1587,10 +1641,7 @@ export async function previewOutreachBatch(
       form_id: config.form_id,
     },
     can_approve: canApprove && detail.batch.state === "draft",
-    can_queue:
-      canApprove &&
-      detail.batch.state === "approved" &&
-      limits.delivery_enabled,
+    can_queue: canQueueOutreachBatch(canApprove, detail.batch.state),
   };
 }
 
@@ -1631,7 +1682,7 @@ export async function transitionOutreachBatch(
   if (action === "approve" && !preview.can_approve)
     throw Error("batch preflight has blocking errors or unreviewed warnings");
   if (action === "queue" && !preview.can_queue)
-    throw Error("delivery is disabled or batch preflight has blocking errors");
+    throw Error("batch preflight has blocking errors or unreviewed warnings");
   return await mutate({
     action: `outreach.batch.${action}`,
     actor: accountId,
@@ -2352,7 +2403,20 @@ export async function getOutreachDiagnostics(
        (SELECT count(*)::int FROM crm_outreach_provider_operations WHERE state='indeterminate') AS indeterminate,
        (SELECT count(*)::int FROM crm_contact_suppressions WHERE active) AS active_suppressions,
        (SELECT count(*)::int FROM crm_outreach_zendesk_events WHERE state IN ('pending','processing','failed')) AS webhook_backlog,
+       (SELECT count(*)::int FROM crm_outreach_zendesk_events WHERE state='dead_letter') AS webhook_dead_letters,
        (SELECT count(*)::int FROM crm_tasks t JOIN crm_outreach_deliveries d ON d.task_id=t.id WHERE t.state IN ('open','waiting') AND t.due_at<NOW()) AS overdue_followups,
+       (SELECT count(*)::int FROM crm_outreach_deliveries
+         WHERE state='queued' AND queued_at<NOW()-INTERVAL '1 hour') AS stale_queued,
+       (SELECT count(*)::int FROM crm_outreach_deliveries
+         WHERE state IN ('notification_requested','replied') AND follow_up_policy='no_response' AND task_id IS NULL) AS sent_missing_followup,
+       (SELECT count(*)::int FROM crm_outreach_deliveries d JOIN crm_tasks t ON t.id=d.task_id
+         WHERE d.replied_at IS NOT NULL AND t.state IN ('open','waiting')) AS replied_open_followup,
+       (SELECT count(*)::int FROM crm_outreach_deliveries
+         WHERE follow_up_attempt_count>max_followups) AS followup_beyond_maximum,
+       (SELECT count(*)::int FROM crm_outreach_deliveries d
+         WHERE d.view_observation_count<>(SELECT count(*)::int FROM crm_outreach_engagement_events e WHERE e.delivery_id=d.id)
+            OR d.first_view_observed_at IS DISTINCT FROM (SELECT min(e.observed_at) FROM crm_outreach_engagement_events e WHERE e.delivery_id=d.id)
+            OR d.last_view_observed_at IS DISTINCT FROM (SELECT max(e.observed_at) FROM crm_outreach_engagement_events e WHERE e.delivery_id=d.id)) AS engagement_projection_mismatch,
        (SELECT min(queued_at) FROM crm_outreach_deliveries WHERE state='queued') AS oldest_queued_at`,
   );
   const worker = await getPool().query(
@@ -2360,6 +2424,27 @@ export async function getOutreachDiagnostics(
   );
   const row = counts.rows[0];
   const problems: CrmOutreachDiagnostics["problems"] = [];
+  const providerConfigurationErrors =
+    outreachProviderConfigurationErrors(config);
+  if (providerConfigurationErrors.length) {
+    problems.push({
+      code: "provider_configuration",
+      count: providerConfigurationErrors.length,
+      detail: providerConfigurationErrors.join("; "),
+    });
+  }
+  const readReceiptsIdentityConfigured =
+    config.read_receipts_mode === "ticket_fields"
+      ? !!config.read_receipts_ticket_field_ids
+      : !!config.read_receipts_integration_id;
+  if (config.read_receipts_enabled && !readReceiptsIdentityConfigured) {
+    problems.push({
+      code: "read_receipts_configuration",
+      count: 1,
+      detail:
+        "View observations are enabled without a configured Zendesk field or pinned integration identity.",
+    });
+  }
   for (const [code, count, detail] of [
     [
       "failed_deliveries",
@@ -2381,6 +2466,36 @@ export async function getOutreachDiagnostics(
       row.overdue_followups,
       "Shared no-response tasks are overdue.",
     ],
+    [
+      "webhook_dead_letters",
+      row.webhook_dead_letters,
+      "Zendesk webhook events exhausted bounded retries.",
+    ],
+    [
+      "stale_queued",
+      row.stale_queued,
+      "Outreach deliveries have remained queued for more than one hour.",
+    ],
+    [
+      "sent_missing_followup",
+      row.sent_missing_followup,
+      "Sent no-response outreach is missing its shared follow-up task.",
+    ],
+    [
+      "replied_open_followup",
+      row.replied_open_followup,
+      "Prospect replies still have an open or waiting no-response task.",
+    ],
+    [
+      "followup_beyond_maximum",
+      row.followup_beyond_maximum,
+      "A delivery exceeds its reviewed follow-up maximum.",
+    ],
+    [
+      "engagement_projection_mismatch",
+      row.engagement_projection_mismatch,
+      "Projected view-observation fields disagree with immutable engagement events.",
+    ],
   ] as Array<[string, number, string]>)
     if (count) problems.push({ code, count, detail });
   const diagnostics: CrmOutreachDiagnostics = {
@@ -2394,10 +2509,7 @@ export async function getOutreachDiagnostics(
       footer: !!config.footer_markdown,
       webhook_secret: !!config.webhook_secret,
       read_receipts_mode: config.read_receipts_mode,
-      read_receipts_identity:
-        config.read_receipts_mode === "ticket_fields"
-          ? !!config.read_receipts_ticket_field_ids
-          : !!config.read_receipts_integration_id,
+      read_receipts_identity: readReceiptsIdentityConfigured,
     },
     limits,
     counts: {
@@ -2406,7 +2518,13 @@ export async function getOutreachDiagnostics(
       indeterminate: row.indeterminate,
       active_suppressions: row.active_suppressions,
       webhook_backlog: row.webhook_backlog,
+      webhook_dead_letters: row.webhook_dead_letters,
       overdue_followups: row.overdue_followups,
+      stale_queued: row.stale_queued,
+      sent_missing_followup: row.sent_missing_followup,
+      replied_open_followup: row.replied_open_followup,
+      followup_beyond_maximum: row.followup_beyond_maximum,
+      engagement_projection_mismatch: row.engagement_projection_mismatch,
     },
     oldest_queued_at: iso(row.oldest_queued_at),
     worker_heartbeat_at: iso(worker.rows[0]?.heartbeat_at),
