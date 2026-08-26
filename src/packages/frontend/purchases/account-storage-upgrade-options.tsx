@@ -9,7 +9,10 @@ import {
   type MembershipTierLike,
   useMembershipTiers,
 } from "@cocalc/frontend/account/membership-tiers";
-import { membershipPriceValue } from "@cocalc/frontend/account/membership-pricing-chooser";
+import {
+  type BillingInterval,
+  membershipPriceValue,
+} from "@cocalc/frontend/account/membership-pricing-chooser";
 import { sortMembershipTiersByDisplayOrder } from "@cocalc/util/membership-tier-order";
 import { currency } from "@cocalc/util/misc";
 
@@ -158,7 +161,7 @@ export function AccountStorageUpgradeOptions({
   tiers,
 }: {
   context: StorageUpgradeContext;
-  onSelect: (tierId: string) => void;
+  onSelect: (tierId: string, interval: BillingInterval) => void;
   tiers: readonly MembershipTierLike[];
 }) {
   const options = getAccountStorageUpgradeOptions(context, tiers);
@@ -247,7 +250,17 @@ export function AccountStorageUpgradeOptions({
                       {formatPrice(option.price_monthly)}/month
                     </Text>
                   ) : null}
-                  <Button block onClick={() => onSelect(option.id)}>
+                  <Button
+                    block
+                    onClick={() =>
+                      onSelect(
+                        option.id,
+                        option.price_yearly != null && option.price_yearly > 0
+                          ? "year"
+                          : "month",
+                      )
+                    }
+                  >
                     Choose {option.label}
                   </Button>
                 </Space>
@@ -265,7 +278,7 @@ export function AccountStorageUpgradeOptionsLoader({
   onSelect,
 }: {
   context: StorageUpgradeContext;
-  onSelect: (tierId: string) => void;
+  onSelect: (tierId: string, interval: BillingInterval) => void;
 }) {
   const { error, loading, tiers } = useMembershipTiers();
   if (loading) {
