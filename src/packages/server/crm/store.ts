@@ -900,8 +900,8 @@ export async function searchOrganizations(
         OR EXISTS (SELECT 1 FROM site_licenses sl WHERE sl.crm_organization_id=o.id AND (sl.id::text ILIKE $1 OR sl.name ILIKE $1)))`,
     );
   }
-  if (opts.account_id) {
-    values.push(opts.account_id);
+  if (opts.linked_account_id) {
+    values.push(opts.linked_account_id);
     clauses.push(
       `EXISTS (SELECT 1 FROM crm_organization_people r JOIN crm_person_accounts a ON a.person_id=r.person_id WHERE r.organization_id=o.id AND a.account_id=$${values.length}::uuid)`,
     );
