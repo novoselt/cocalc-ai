@@ -534,7 +534,7 @@ describe("receivable order detail", () => {
       expect.objectContaining({
         id: order.id,
         invoice_reference: "FIN-2026-0042",
-        due_at: "2026-09-15T12:00:00.000Z",
+        due_at: new Date("2026-09-15T12:00").toISOString(),
         document_url: "https://billing.example.edu/invoices/42",
         evidence_reference: "ERP record 42",
         expected_version: 7,

@@ -50,6 +50,7 @@ const CHECK_INTERVAL_MS = Math.max(
 type SettingsRecord = Record<string, unknown>;
 type ArchiveLifecycleCandidateSnapshot = ArchiveLifecycleProjectSnapshot & {
   candidate_order_at: Date | string;
+  candidate_cursor_at: string;
 };
 
 let candidateCursor:
@@ -167,43 +168,95 @@ async function listCandidateSnapshots({
   const { rows } = await getPool(
     "medium",
   ).query<ArchiveLifecycleCandidateSnapshot>(
-    `${SNAPSHOT_SELECT}
-     WHERE p.deleted IS NULL
-       AND p.provisioned IS TRUE
-       AND COALESCE(p.deletion_protection, FALSE) IS FALSE
-       AND p.state ->> 'state' = 'opened'
-       AND COALESCE(p.owning_bay_id, $2) = $2
-       AND (
-         COALESCE(p.last_edited, p.created) <=
-           NOW() - make_interval(days => $3::int)
-         OR EXISTS (
-           SELECT 1
-             FROM jsonb_object_keys(COALESCE(p.users, '{}'::jsonb)) AS user_id(account_id)
-             LEFT JOIN accounts a
-               ON a.account_id::text = user_id.account_id
-             LEFT JOIN cluster_account_directory directory
-               ON directory.account_id::text = user_id.account_id
-            WHERE a.banned IS TRUE OR directory.banned IS TRUE
-         )
+    `WITH banned_account_ids AS MATERIALIZED (
+       SELECT account_id::text AS account_id
+         FROM accounts
+        WHERE banned IS TRUE
+       UNION
+       SELECT account_id::text AS account_id
+         FROM cluster_account_directory
+        WHERE banned IS TRUE
+     ),
+     candidate_ids AS MATERIALIZED (
+       (
+         SELECT p.project_id,
+                COALESCE(
+                  p.last_edited,
+                  p.created,
+                  make_timestamp(1970, 1, 1, 0, 0, 0)
+                ) AS candidate_order_at
+           FROM projects p
+          WHERE p.deleted IS NULL
+            AND p.provisioned IS TRUE
+            AND COALESCE(p.deletion_protection, FALSE) IS FALSE
+            AND p.state ->> 'state' = 'opened'
+            AND COALESCE(p.owning_bay_id, $2) = $2
+            AND COALESCE(
+                  p.last_edited,
+                  p.created,
+                  make_timestamp(1970, 1, 1, 0, 0, 0)
+                ) <= NOW() - make_interval(days => $3::int)
+            AND (
+              $4::timestamp IS NULL
+              OR (
+                COALESCE(
+                  p.last_edited,
+                  p.created,
+                  make_timestamp(1970, 1, 1, 0, 0, 0)
+                ),
+                p.project_id
+              ) > ($4::timestamp, $5::uuid)
+            )
+          ORDER BY candidate_order_at ASC, p.project_id ASC
+          LIMIT $1
        )
-       AND (
-         $4::timestamp IS NULL
-         OR (
-           COALESCE(
-             p.last_edited,
-             p.created,
-             make_timestamp(1970, 1, 1, 0, 0, 0)
-           ),
-           p.project_id
-         ) > ($4::timestamp, $5::uuid)
+       UNION
+       (
+         SELECT p.project_id,
+                COALESCE(
+                  p.last_edited,
+                  p.created,
+                  make_timestamp(1970, 1, 1, 0, 0, 0)
+                ) AS candidate_order_at
+           FROM projects p
+          WHERE p.deleted IS NULL
+            AND p.provisioned IS TRUE
+            AND COALESCE(p.deletion_protection, FALSE) IS FALSE
+            AND p.state ->> 'state' = 'opened'
+            AND COALESCE(p.owning_bay_id, $2) = $2
+            AND p.users ?| COALESCE(
+                  (SELECT array_agg(account_id) FROM banned_account_ids),
+                  ARRAY[]::text[]
+                )
+            AND (
+              $4::timestamp IS NULL
+              OR (
+                COALESCE(
+                  p.last_edited,
+                  p.created,
+                  make_timestamp(1970, 1, 1, 0, 0, 0)
+                ),
+                p.project_id
+              ) > ($4::timestamp, $5::uuid)
+            )
+          ORDER BY candidate_order_at ASC, p.project_id ASC
+          LIMIT $1
        )
-     ORDER BY COALESCE(
-                p.last_edited,
-                p.created,
-                make_timestamp(1970, 1, 1, 0, 0, 0)
-              ) ASC,
-              p.project_id ASC
-     LIMIT $1`,
+     ),
+     limited_candidates AS MATERIALIZED (
+       SELECT project_id, candidate_order_at
+         FROM candidate_ids
+        ORDER BY candidate_order_at ASC, project_id ASC
+        LIMIT $1
+     )
+     SELECT snapshot.*,
+            snapshot.candidate_order_at::text AS candidate_cursor_at
+       FROM (
+         ${SNAPSHOT_SELECT}
+         JOIN limited_candidates candidate
+           ON candidate.project_id = p.project_id
+       ) snapshot
+      ORDER BY snapshot.candidate_order_at ASC, snapshot.project_id ASC`,
     [
       config.batchLimit,
       bayId,
@@ -216,7 +269,10 @@ async function listCandidateSnapshots({
   candidateCursor =
     rows.length >= config.batchLimit && last
       ? {
-          candidate_order_at: last.candidate_order_at,
+          // node-postgres parses timestamps as millisecond-precision Date
+          // objects. Keep the database text value so pagination does not
+          // revisit rows whose timestamp has nonzero microseconds.
+          candidate_order_at: last.candidate_cursor_at,
           project_id: last.project_id,
         }
       : undefined;
@@ -779,7 +835,11 @@ export function startProjectArchiveLifecycleMaintenance(): void {
 
 export const __test__ = {
   booleanSetting,
+  listCandidateSnapshots,
   nonnegativeInteger,
   positiveInteger,
+  resetCandidateCursor: () => {
+    candidateCursor = undefined;
+  },
   stringList,
 };

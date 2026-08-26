@@ -32,6 +32,7 @@ import shutil
 import ssl
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.parse
@@ -42,8 +43,8 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260814-v44"
-RUNTIME_WRAPPER_VERSION = "20260724-v15"
+HELPER_SCHEMA_VERSION = "20260825-v45"
+RUNTIME_WRAPPER_VERSION = "20260825-v16"
 BOOTSTRAP_LIFECYCLE_EXPORT_DIR = Path("/var/lib/cocalc/bootstrap-lifecycle")
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -3525,9 +3526,13 @@ installed below /usr/local with root ownership.
 import ctypes
 import errno
 import os
+import re
 import stat
 import subprocess
 import sys
+import tempfile
+import tomllib
+import urllib.parse
 
 
 ALLOWED_ROOTS = {
@@ -3541,7 +3546,39 @@ ALLOWED_ROOTS = {
     "/var/lib/cocalc/star/project-host/0/cache",
     "/var/lib/cocalc/star/project-host/0/secrets/rustic",
 }
-COMMANDS = {"chmod", "chattr-cow", "chown", "mkdir", "rename", "rm", "rmdir", "truncate"}
+COMMANDS = {
+    "chmod",
+    "chattr-cow",
+    "chown",
+    "copy-tree-preserve",
+    "copy-tree-reflink",
+    "mkdir",
+    "rename",
+    "rm",
+    "rmdir",
+    "truncate",
+}
+ANCHORED_COMMANDS = {
+    "mount-overlay-project",
+    "normalize-rootfs",
+    "umount-overlay-project",
+}
+RUSTIC_COMMANDS = {
+    "rustic-project-backup",
+    "rustic-project-restore",
+    "rustic-rootfs-backup",
+    "rustic-rootfs-restore",
+}
+RUSTIC_PROFILE_MAX_BYTES = 1024 * 1024
+RUSTIC_PROFILE_KEYS = {"repository", "password", "options"}
+RUSTIC_OPTION_KEYS = {
+    "access_key_id",
+    "bucket",
+    "endpoint",
+    "region",
+    "root",
+    "secret_access_key",
+}
 SYS_OPENAT2 = 437
 RESOLVE_NO_MAGICLINKS = 0x02
 RESOLVE_NO_SYMLINKS = 0x04
@@ -3669,6 +3706,442 @@ def remove_entry(parentfd, name, recursive, force):
     raise OSError(errno.EBUSY, "path changed repeatedly during removal", name)
 
 
+def parse_rustic(argv):
+    command = argv[0]
+    values = {"tag": [], "delete": False}
+    value_options = {
+        "--root",
+        "--path",
+        "--profile-root",
+        "--profile-path",
+        "--host",
+        "--parent",
+        "--snapshot",
+        "--tag",
+    }
+    i = 1
+    while i < len(argv):
+        option = argv[i]
+        if option == "--delete":
+            if values["delete"]:
+                fail("duplicate --delete")
+            values["delete"] = True
+            i += 1
+            continue
+        if option not in value_options or i + 1 >= len(argv):
+            fail(f"invalid Rustic option: {option}")
+        key = option[2:]
+        if key == "tag":
+            values["tag"].append(argv[i + 1])
+        elif key in values:
+            fail(f"duplicate Rustic option: {option}")
+        else:
+            values[key] = argv[i + 1]
+        i += 2
+
+    common = {"root", "path", "profile-root", "profile-path", "tag", "delete"}
+    allowed = {
+        "rustic-project-backup": common | {"host", "parent"},
+        "rustic-rootfs-backup": common | {"host"},
+        "rustic-project-restore": common | {"snapshot"},
+        "rustic-rootfs-restore": common | {"snapshot"},
+    }[command]
+    if any(key not in allowed for key in values):
+        fail("option is not valid for Rustic command")
+    required = {"root", "path", "profile-root", "profile-path"}
+    required.add("host" if command.endswith("backup") else "snapshot")
+    for key in required:
+        if key not in values:
+            fail(f"missing --{key}")
+    if values["delete"] and command != "rustic-rootfs-restore":
+        fail("--delete is only valid for rootfs restore")
+    if values["tag"] and not command.endswith("backup"):
+        fail("--tag is only valid for backup")
+    validate_relative(values["path"], allow_root=True)
+    validate_relative(values["profile-path"])
+    for name in ("host", "parent", "snapshot"):
+        value = values.get(name)
+        if value is None:
+            continue
+        if (
+            not value
+            or value.startswith("-")
+            or len(value) > 4096
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)
+        ):
+            fail(f"invalid Rustic {name}")
+    for tag in values["tag"]:
+        if (
+            not tag
+            or tag.startswith("-")
+            or len(tag) > 1024
+            or any(ord(char) < 32 or ord(char) == 127 for char in tag)
+        ):
+            fail("invalid Rustic tag")
+    return command, values
+
+
+def read_validated_rustic_profile(rootfd, path):
+    fd = openat2(rootfd, path, os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            fail("Rustic profile must be a regular file")
+        if info.st_size <= 0 or info.st_size > RUSTIC_PROFILE_MAX_BYTES:
+            fail("Rustic profile has invalid size")
+        data = bytearray()
+        while len(data) <= RUSTIC_PROFILE_MAX_BYTES:
+            chunk = os.read(fd, min(65536, RUSTIC_PROFILE_MAX_BYTES + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+        if len(data) > RUSTIC_PROFILE_MAX_BYTES:
+            fail("Rustic profile is too large")
+    finally:
+        os.close(fd)
+    try:
+        document = tomllib.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as err:
+        fail(f"invalid Rustic profile: {err}")
+    if set(document) != {"repository"} or not isinstance(
+        document["repository"], dict
+    ):
+        fail("Rustic profile must contain only [repository]")
+    repository = document["repository"]
+    if not set(repository).issubset(RUSTIC_PROFILE_KEYS):
+        fail("Rustic profile contains unsupported repository keys")
+    if not {"repository", "password"}.issubset(repository):
+        fail("Rustic profile is missing repository or password")
+    for key in ("repository", "password"):
+        if not isinstance(repository[key], str):
+            fail(f"Rustic profile {key} must be a string")
+    if repository["repository"] != "opendal:s3":
+        fail("privileged Rustic requires the managed opendal:s3 backend")
+    options = repository.get("options", {})
+    if not isinstance(options, dict) or set(options) != RUSTIC_OPTION_KEYS:
+        fail("Rustic profile contains unsupported repository options")
+    if any(
+        not isinstance(value, str)
+        or not value
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+        for value in options.values()
+    ):
+        fail("Rustic repository options must be nonempty strings")
+    endpoint = urllib.parse.urlsplit(options["endpoint"])
+    if (
+        endpoint.scheme != "https"
+        or not endpoint.hostname
+        or endpoint.username is not None
+        or endpoint.password is not None
+    ):
+        fail("privileged Rustic requires an HTTPS object-store endpoint")
+    return bytes(data)
+
+
+def write_private_rustic_profile(
+    data, directory="/run/cocalc-rustic-profiles", required_uid=0
+):
+    try:
+        os.mkdir(directory, 0o700)
+    except FileExistsError:
+        pass
+    info = os.lstat(directory)
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != required_uid
+        or stat.S_IMODE(info.st_mode) & 0o077
+    ):
+        fail("unsafe privileged Rustic profile directory")
+    fd, path = tempfile.mkstemp(prefix="profile-", suffix=".toml", dir=directory)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        os.unlink(path)
+        raise
+    return path
+
+
+def select_privileged_rustic_binary(candidates=None):
+    require_root_ownership = candidates is None
+    candidates = candidates or ("/usr/local/libexec/cocalc-rustic",)
+    for candidate in candidates:
+        try:
+            info = os.stat(candidate)
+        except FileNotFoundError:
+            continue
+        if (
+            stat.S_ISREG(info.st_mode)
+            and (not require_root_ownership or info.st_uid == 0)
+            and not stat.S_IMODE(info.st_mode) & 0o022
+            and os.access(candidate, os.X_OK)
+        ):
+            return candidate
+    fail("trusted privileged Rustic binary is unavailable")
+
+
+def run_rustic(
+    argv,
+    allowed_roots=ALLOWED_ROOTS,
+    rustic_candidates=None,
+    profile_run_dir="/run/cocalc-rustic-profiles",
+    profile_run_dir_uid=0,
+):
+    command, values = parse_rustic(argv)
+    rootfd = open_root(values["root"], allowed_roots)
+    profile_rootfd = open_root(values["profile-root"], allowed_roots)
+    datafd = None
+    profile_path = None
+    try:
+        datafd = openat2(
+            rootfd,
+            values["path"],
+            O_PATH | os.O_DIRECTORY | os.O_CLOEXEC,
+        )
+        profile_data = read_validated_rustic_profile(
+            profile_rootfd, values["profile-path"]
+        )
+        profile_path = write_private_rustic_profile(
+            profile_data, profile_run_dir, profile_run_dir_uid
+        )
+        profile_arg = profile_path[: -len(".toml")]
+        rustic = select_privileged_rustic_binary(rustic_candidates)
+        base = [rustic, "-P", profile_arg]
+        env = {
+            "HOME": "/root",
+            "LANG": "C.UTF-8",
+            "LOGNAME": "root",
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "RUSTIC_CACHE_DIR": "/root/.cache/rustic",
+            "RUSTIC_PROGRESS_INTERVAL": "1s",
+            "SSL_CERT_DIR": "/etc/ssl/certs",
+            "USER": "root",
+        }
+
+        def invoke(args, *, quiet=False):
+            result = subprocess.run(
+                [*base, *args],
+                cwd=f"/proc/self/fd/{datafd}",
+                env=env,
+                pass_fds=(datafd,),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL if quiet else None,
+                stderr=subprocess.DEVNULL if quiet else None,
+            )
+            return result.returncode
+
+        if command.endswith("backup"):
+            flags = ["backup"]
+            if command == "rustic-project-backup":
+                flags.append("-x")
+            flags.extend(["--json", "--no-scan", "--host", values["host"]])
+            for tag in values["tag"]:
+                flags.extend(["--tag", tag])
+            if values.get("parent"):
+                flags.extend(["--parent", values["parent"]])
+            if command == "rustic-project-backup":
+                flags.extend(
+                    ["--glob", "!.snapshots", "--glob", "!.snapshots/**"]
+                )
+            flags.append(".")
+            if command == "rustic-rootfs-backup":
+                if invoke(["repoinfo"], quiet=True) != 0:
+                    if invoke(["--no-progress", "init"], quiet=True) != 0:
+                        if invoke(["repoinfo"], quiet=True) != 0:
+                            raise subprocess.CalledProcessError(1, base)
+                status = invoke(flags)
+            else:
+                status = invoke(flags)
+                if status != 0 and invoke(["repoinfo"], quiet=True) != 0:
+                    if invoke(["--no-progress", "init"], quiet=True) == 0 or invoke(
+                        ["repoinfo"], quiet=True
+                    ) == 0:
+                        status = invoke(flags)
+            if status != 0:
+                raise subprocess.CalledProcessError(status, base)
+            return
+
+        restore = ["restore"]
+        if values["delete"]:
+            restore.append("--delete")
+        restore.extend([values["snapshot"], f"/proc/self/fd/{datafd}"])
+        status = invoke(restore)
+        if status != 0:
+            raise subprocess.CalledProcessError(status, base)
+    finally:
+        if profile_path is not None:
+            os.unlink(profile_path)
+        if datafd is not None:
+            os.close(datafd)
+        os.close(profile_rootfd)
+        os.close(rootfd)
+
+
+def parse_named_options(argv, command, allowed, required):
+    if not argv or argv[0] != command:
+        fail(f"invalid {command} command")
+    values = {}
+    flags = set()
+    i = 1
+    while i < len(argv):
+        option = argv[i]
+        if option == "--skip-ownership-bridge":
+            if option not in allowed or option in flags:
+                fail(f"invalid {command} option: {option}")
+            flags.add(option)
+            i += 1
+            continue
+        if option not in allowed or i + 1 >= len(argv):
+            fail(f"invalid {command} option: {option}")
+        key = option[2:]
+        if key in values:
+            fail(f"duplicate {command} option: {option}")
+        values[key] = argv[i + 1]
+        i += 2
+    missing = [option for option in required if option[2:] not in values]
+    if missing:
+        fail(f"missing {command} option: {missing[0]}")
+    return values, flags
+
+
+def open_named_directory(values, name, allowed_roots):
+    root = values[f"{name}-root"]
+    path = values[f"{name}-path"]
+    validate_relative(path, allow_root=True)
+    rootfd = open_root(root, allowed_roots)
+    try:
+        datafd = openat2(rootfd, path, O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
+    finally:
+        os.close(rootfd)
+    return datafd
+
+
+def run_overlay(argv, allowed_roots=ALLOWED_ROOTS):
+    command = argv[0]
+    names = (
+        ("lower", "upper", "work", "merged")
+        if command == "mount-overlay-project"
+        else ("merged",)
+    )
+    options = {f"--{name}-{kind}" for name in names for kind in ("root", "path")}
+    values, _flags = parse_named_options(argv, command, options, options)
+    descriptors = []
+    try:
+        for name in names:
+            descriptors.append(open_named_directory(values, name, allowed_roots))
+        paths = [f"/proc/self/fd/{fd}" for fd in descriptors]
+        if command == "mount-overlay-project":
+            lower, upper, work, merged = paths
+            mount_options = (
+                f"lowerdir={lower},upperdir={upper},workdir={work},"
+                "xino=off,metacopy=on,redirect_dir=on,index=off"
+            )
+            args = [
+                "/bin/mount",
+                "-t",
+                "overlay",
+                "overlay",
+                "-o",
+                mount_options,
+                merged,
+            ]
+        else:
+            args = ["/bin/umount", "-l", paths[0]]
+        subprocess.run(
+            args,
+            pass_fds=tuple(descriptors),
+            check=True,
+            stdin=subprocess.DEVNULL,
+        )
+    finally:
+        for fd in descriptors:
+            os.close(fd)
+
+
+def ensure_private_root_directory(path, required_uid=0, mode=0o700):
+    try:
+        os.mkdir(path, mode)
+    except FileExistsError:
+        pass
+    info = os.lstat(path)
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != required_uid
+        or stat.S_IMODE(info.st_mode) & 0o022
+    ):
+        fail(f"unsafe privileged runtime directory: {path}")
+
+
+def run_normalize_rootfs(
+    argv,
+    allowed_roots=ALLOWED_ROOTS,
+    runtime_root="/run/cocalc-rootfs-normalize",
+    runtime_root_uid=0,
+):
+    allowed = {
+        "--root",
+        "--path",
+        "--ownership-source",
+        "--podman-user",
+        "--skip-ownership-bridge",
+    }
+    required = {"--root", "--path", "--ownership-source", "--podman-user"}
+    values, flags = parse_named_options(
+        argv, "normalize-rootfs", allowed, required
+    )
+    ownership_source = values["ownership-source"]
+    if ownership_source not in ("keep-id", "oci-extract"):
+        fail("unsupported RootFS ownership source")
+    podman_user = values["podman-user"]
+    if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", podman_user):
+        fail("invalid RootFS Podman user")
+
+    datafd = open_named_directory(
+        {
+            "rootfs-root": values["root"],
+            "rootfs-path": values["path"],
+        },
+        "rootfs",
+        allowed_roots,
+    )
+    # The rootless Podman child must traverse this directory to consume the
+    # bind-mounted RootFS. It is intentionally searchable but never writable
+    # by the runtime user, and random mountpoint names prevent accidental use.
+    ensure_private_root_directory(runtime_root, runtime_root_uid, 0o711)
+    mountpoint = tempfile.mkdtemp(prefix="rootfs-", dir=runtime_root)
+    mounted = False
+    try:
+        subprocess.run(
+            ["/bin/mount", "--bind", f"/proc/self/fd/{datafd}", mountpoint],
+            pass_fds=(datafd,),
+            check=True,
+            stdin=subprocess.DEVNULL,
+        )
+        mounted = True
+        args = [
+            "/usr/local/sbin/cocalc-runtime-storage",
+            "_normalize-rootfs-anchored",
+            "--ownership-source",
+            ownership_source,
+        ]
+        if "--skip-ownership-bridge" in flags:
+            args.append("--skip-ownership-bridge")
+        args.extend(["--podman-user", podman_user, mountpoint])
+        subprocess.run(args, check=True, stdin=subprocess.DEVNULL)
+    finally:
+        if mounted:
+            subprocess.run(
+                ["/bin/umount", "-l", mountpoint],
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+        os.rmdir(mountpoint)
+        os.close(datafd)
+
+
 def parse(argv):
     if not argv or argv[0] not in COMMANDS:
         fail("unsupported command")
@@ -3681,7 +4154,16 @@ def parse(argv):
             values[arg[2:]] = True
             i += 1
             continue
-        if arg not in ("--root", "--path", "--dest", "--mode", "--length", "--uid", "--gid"):
+        if arg not in (
+            "--root",
+            "--path",
+            "--dest-root",
+            "--dest",
+            "--mode",
+            "--length",
+            "--uid",
+            "--gid",
+        ):
             fail(f"unknown option: {arg}")
         if i + 1 >= len(argv) or arg[2:] in values:
             fail(f"invalid option: {arg}")
@@ -3689,8 +4171,14 @@ def parse(argv):
         i += 2
     root = values.get("root", "")
     path = values.get("path", "")
-    validate_relative(path, allow_root=command in ("chmod", "chown"))
-    if command == "rename":
+    validate_relative(
+        path,
+        allow_root=command
+        in ("chmod", "chown", "copy-tree-preserve", "copy-tree-reflink"),
+    )
+    if command in ("copy-tree-preserve", "copy-tree-reflink"):
+        validate_relative(values.get("dest", ""), allow_root=True)
+    elif command == "rename":
         validate_relative(values.get("dest", ""))
     elif "dest" in values:
         fail("--dest is only valid for rename")
@@ -3698,6 +4186,22 @@ def parse(argv):
         "chmod": {"root", "path", "mode", "recursive", "force"},
         "chattr-cow": {"root", "path", "recursive", "force"},
         "chown": {"root", "path", "uid", "gid", "recursive", "force"},
+        "copy-tree-preserve": {
+            "root",
+            "path",
+            "dest-root",
+            "dest",
+            "recursive",
+            "force",
+        },
+        "copy-tree-reflink": {
+            "root",
+            "path",
+            "dest-root",
+            "dest",
+            "recursive",
+            "force",
+        },
         "mkdir": {"root", "path", "mode", "recursive", "force"},
         "rename": {"root", "path", "dest", "recursive", "force"},
         "rm": {"root", "path", "recursive", "force"},
@@ -3709,6 +4213,8 @@ def parse(argv):
     for required in {
         "chmod": ("mode",),
         "chown": ("uid", "gid"),
+        "copy-tree-preserve": ("dest-root", "dest"),
+        "copy-tree-reflink": ("dest-root", "dest"),
         "mkdir": ("mode",),
         "rename": ("dest",),
         "truncate": ("length",),
@@ -3727,7 +4233,13 @@ def parse_uint(value, name, maximum=(2**53 - 1)):
     return result
 
 
-def run(argv, allowed_roots=ALLOWED_ROOTS):
+def run(argv, allowed_roots=ALLOWED_ROOTS, rustic_candidates=None):
+    if argv and argv[0] in RUSTIC_COMMANDS:
+        return run_rustic(argv, allowed_roots, rustic_candidates)
+    if argv and argv[0] in ANCHORED_COMMANDS:
+        if argv[0] == "normalize-rootfs":
+            return run_normalize_rootfs(argv, allowed_roots)
+        return run_overlay(argv, allowed_roots)
     command, root, path, values = parse(argv)
     rootfd = open_root(root, allowed_roots)
     try:
@@ -3763,6 +4275,53 @@ def run(argv, allowed_roots=ALLOWED_ROOTS):
                 os.fchown(fd, parse_uint(values["uid"], "uid", 2**32 - 1), parse_uint(values["gid"], "gid", 2**32 - 1))
             finally:
                 os.close(fd)
+        elif command in ("copy-tree-preserve", "copy-tree-reflink"):
+            dest_rootfd = open_root(values["dest-root"], allowed_roots)
+            try:
+                if values["dest"] != ".":
+                    mkdir_beneath(dest_rootfd, values["dest"], True, 0o755)
+                sourcefd = openat2(
+                    rootfd,
+                    path,
+                    O_PATH | os.O_DIRECTORY | os.O_CLOEXEC,
+                )
+                destfd = openat2(
+                    dest_rootfd,
+                    values["dest"],
+                    O_PATH | os.O_DIRECTORY | os.O_CLOEXEC,
+                )
+                try:
+                    source = f"/proc/self/fd/{sourcefd}"
+                    dest = f"/proc/self/fd/{destfd}"
+                    if command == "copy-tree-preserve":
+                        args = [
+                            "/usr/bin/rsync",
+                            "-aAX",
+                            "--numeric-ids",
+                            "--",
+                            f"{source}/",
+                            f"{dest}/",
+                        ]
+                    else:
+                        args = [
+                            "/bin/cp",
+                            "-a",
+                            "--reflink=auto",
+                            "--",
+                            f"{source}/.",
+                            f"{dest}/",
+                        ]
+                    subprocess.run(
+                        args,
+                        pass_fds=(sourcefd, destfd),
+                        check=True,
+                        stdin=subprocess.DEVNULL,
+                    )
+                finally:
+                    os.close(sourcefd)
+                    os.close(destfd)
+            finally:
+                os.close(dest_rootfd)
         elif command == "truncate":
             fd = openat2(
                 rootfd,
@@ -5732,6 +6291,8 @@ set_allowed_path_parts() {
       ALLOWED_PATH_ROOT="/var/lib/cocalc/star/project-host/0/secrets/rustic"; ALLOWED_PATH_REL="${path#/var/lib/cocalc/star/project-host/0/secrets/rustic/}" ;;
     /var/lib/cocalc/star/project-host/0/secrets/rustic/project-*.toml)
       ALLOWED_PATH_ROOT="/var/lib/cocalc/star/project-host/0/secrets/rustic"; ALLOWED_PATH_REL="${path#/var/lib/cocalc/star/project-host/0/secrets/rustic/}" ;;
+    /var/lib/cocalc/star/project-host/0/secrets/rustic/project-site-migrations/*/repo.toml)
+      ALLOWED_PATH_ROOT="/var/lib/cocalc/star/project-host/0/secrets/rustic"; ALLOWED_PATH_REL="${path#/var/lib/cocalc/star/project-host/0/secrets/rustic/}" ;;
     /opt/cocalc/project-host)
       ALLOWED_PATH_ROOT="/opt/cocalc/project-host"; ALLOWED_PATH_REL="." ;;
     /opt/cocalc/project-host/*)
@@ -5884,17 +6445,17 @@ check_args() {
   done
 }
 
-rustic_binary() {
-  if [ -x /opt/cocalc/tools/current/rustic ]; then
-    printf '%s\n' /opt/cocalc/tools/current/rustic
-    return 0
+set_rustic_profile_parts() {
+  local profile="$1"
+  if [[ "$profile" != *.toml ]]; then
+    profile="${profile}.toml"
   fi
-  if [ -x /opt/cocalc-star/source/src/packages/project/build/tools/current/rustic ]; then
-    printf '%s\n' /opt/cocalc-star/source/src/packages/project/build/tools/current/rustic
-    return 0
+  if ! [[ "$profile" =~ ^/mnt/cocalc/data/secrets/rustic/project-[0-9a-fA-F-]{32,64}\\.toml$|^/mnt/cocalc/data/secrets/rustic/rootfs-images/[0-9a-fA-F]{64}\\.toml$|^/mnt/cocalc/data/secrets/rustic/project-site-migrations/[0-9a-fA-F-]{32,64}/repo\\.toml$|^/var/lib/cocalc/star/project-host/0/secrets/rustic/project-[0-9a-fA-F-]{32,64}\\.toml$|^/var/lib/cocalc/star/project-host/0/secrets/rustic/rootfs-images/[0-9a-fA-F]{64}\\.toml$|^/var/lib/cocalc/star/project-host/0/secrets/rustic/project-site-migrations/[0-9a-fA-F-]{32,64}/repo\\.toml$ ]]; then
+    deny "rustic-profile-path-not-allowed" "$profile"
   fi
-  echo "SECURITY_DENY code=rustic-not-found detail=/opt/cocalc/tools/current/rustic" >&2
-  exit 2
+  require_allowed_path_parts "$profile"
+  RUSTIC_PROFILE_ROOT="$ALLOWED_PATH_ROOT"
+  RUSTIC_PROFILE_REL="$ALLOWED_PATH_REL"
 }
 
 escape_overlay_path() {
@@ -6550,13 +7111,21 @@ PY
     upperdir="$2"
     workdir="$3"
     merged="$4"
-    check_args "$lowerdir" "$upperdir" "$workdir" "$merged"
     if ! allow_overlay_mountpoint "$merged"; then
       deny "overlay-mountpoint-not-allowed" "$merged"
     fi
-    lowerdir_escaped="$(escape_overlay_path "$lowerdir")"
-    upperdir_escaped="$(escape_overlay_path "$upperdir")"
-    workdir_escaped="$(escape_overlay_path "$workdir")"
+    require_allowed_path_parts "$lowerdir"
+    lower_root="$ALLOWED_PATH_ROOT"
+    lower_rel="$ALLOWED_PATH_REL"
+    require_allowed_path_parts "$upperdir"
+    upper_root="$ALLOWED_PATH_ROOT"
+    upper_rel="$ALLOWED_PATH_REL"
+    require_allowed_path_parts "$workdir"
+    work_root="$ALLOWED_PATH_ROOT"
+    work_rel="$ALLOWED_PATH_REL"
+    require_allowed_path_parts "$merged"
+    merged_root="$ALLOWED_PATH_ROOT"
+    merged_rel="$ALLOWED_PATH_REL"
     # Use the xattr-capable OverlayFS mode:
     # - metacopy=on avoids copying full file contents into upperdir for
     #   metadata-only changes, which keeps environment overlays smaller.
@@ -6570,7 +7139,12 @@ PY
     # is preferable to making project RootFS deltas non-portable.
     # Backup/restore of project overlay data must still preserve
     # trusted.overlay.* xattrs via the dedicated privileged rustic wrapper path.
-    exec /bin/mount -t overlay overlay -o "lowerdir=${lowerdir_escaped},upperdir=${upperdir_escaped},workdir=${workdir_escaped},xino=off,metacopy=on,redirect_dir=on,index=off" "$merged"
+    exec /usr/local/libexec/cocalc-runtime-storage-path-helper \
+      mount-overlay-project \
+      --lower-root "$lower_root" --lower-path "$lower_rel" \
+      --upper-root "$upper_root" --upper-path "$upper_rel" \
+      --work-root "$work_root" --work-path "$work_rel" \
+      --merged-root "$merged_root" --merged-path "$merged_rel"
     ;;
   umount-overlay-project)
     if [ "$#" -ne 1 ]; then
@@ -6578,11 +7152,13 @@ PY
       exit 2
     fi
     merged="$1"
-    check_args "$merged"
     if ! allow_overlay_mountpoint "$merged"; then
       deny "overlay-mountpoint-not-allowed" "$merged"
     fi
-    exec /bin/umount -l "$merged"
+    require_allowed_path_parts "$merged"
+    exec /usr/local/libexec/cocalc-runtime-storage-path-helper \
+      umount-overlay-project \
+      --merged-root "$ALLOWED_PATH_ROOT" --merged-path "$ALLOWED_PATH_REL"
     ;;
   losetup)
     check_args "$@"
@@ -6808,12 +7384,20 @@ PY
     fi
     src="$1"
     dest="$2"
-    check_args "$src" "$dest"
+    require_allowed_path_parts "$src"
+    source_root="$ALLOWED_PATH_ROOT"
+    source_rel="$ALLOWED_PATH_REL"
+    require_allowed_path_parts "$dest"
     # Do not preserve hardlinks when copying from a merged overlayfs view.
     # Rsync's -H inference can misidentify unrelated files as hardlinked when
     # inode identity comes from overlayfs, which corrupts published child
     # RootFS trees.
-    exec /usr/bin/rsync -aAX --numeric-ids "$src"/ "$dest"/
+    exec /usr/local/libexec/cocalc-runtime-storage-path-helper \
+      copy-tree-preserve \
+      --root "$source_root" \
+      --path "$source_rel" \
+      --dest-root "$ALLOWED_PATH_ROOT" \
+      --dest "$ALLOWED_PATH_REL"
     ;;
   copy-tree-reflink)
     if [ "$#" -ne 2 ]; then
@@ -6822,9 +7406,16 @@ PY
     fi
     src="$1"
     dest="$2"
-    check_args "$src" "$dest"
-    mkdir -p "$dest"
-    exec /bin/cp -a --reflink=auto "$src"/. "$dest"/
+    require_allowed_path_parts "$src"
+    source_root="$ALLOWED_PATH_ROOT"
+    source_rel="$ALLOWED_PATH_REL"
+    require_allowed_path_parts "$dest"
+    exec /usr/local/libexec/cocalc-runtime-storage-path-helper \
+      copy-tree-reflink \
+      --root "$source_root" \
+      --path "$source_rel" \
+      --dest-root "$ALLOWED_PATH_ROOT" \
+      --dest "$ALLOWED_PATH_REL"
     ;;
   normalize-rootfs)
     skip_ownership_bridge=false
@@ -6865,10 +7456,84 @@ PY
       exit 2
     fi
     rootfs="$1"
-    check_args "$rootfs"
-    if [ ! -d "$rootfs" ]; then
-      deny "rootfs-not-found" "$rootfs"
+    require_allowed_path_parts "$rootfs"
+    case "${COCALC_ROOTFS_SKIP_OWNERSHIP_BRIDGE:-}" in
+      1|true|TRUE|yes|YES|on|ON)
+        skip_ownership_bridge=true
+        ;;
+    esac
+    case "$ownership_source" in
+      keep-id|oci-extract) ;;
+      *) deny "rootfs-ownership-source-invalid" "$ownership_source" ;;
+    esac
+    podman_user="${SUDO_USER:-}"
+    if [ -z "$podman_user" ] || [ "$podman_user" != "$RUNTIME_USER" ]; then
+      deny "rootfs-podman-user-mismatch" "${podman_user:-missing}"
     fi
+    helper_args=(
+      normalize-rootfs
+      --root "$ALLOWED_PATH_ROOT"
+      --path "$ALLOWED_PATH_REL"
+      --ownership-source "$ownership_source"
+      --podman-user "$podman_user"
+    )
+    if [ "$skip_ownership_bridge" = true ]; then
+      helper_args+=(--skip-ownership-bridge)
+    fi
+    exec /usr/local/libexec/cocalc-runtime-storage-path-helper "${helper_args[@]}"
+    ;;
+  _normalize-rootfs-anchored)
+    skip_ownership_bridge=false
+    ownership_source="keep-id"
+    podman_user=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --skip-ownership-bridge)
+          skip_ownership_bridge=true
+          shift
+          ;;
+        --ownership-source)
+          [ "$#" -ge 2 ] || deny "rootfs-anchored-args-invalid" "ownership-source"
+          ownership_source="$2"
+          shift 2
+          ;;
+        --podman-user)
+          [ "$#" -ge 2 ] || deny "rootfs-anchored-args-invalid" "podman-user"
+          podman_user="$2"
+          shift 2
+          ;;
+        --)
+          shift
+          break
+          ;;
+        -*) deny "rootfs-anchored-args-invalid" "$1" ;;
+        *) break ;;
+      esac
+    done
+    if [ "$#" -ne 1 ] || [ "$podman_user" != "$RUNTIME_USER" ]; then
+      deny "rootfs-anchored-args-invalid" "$*"
+    fi
+    rootfs="$1"
+    case "$rootfs" in
+      /run/cocalc-rootfs-normalize/rootfs-*) ;;
+      *) deny "rootfs-anchored-path-invalid" "$rootfs" ;;
+    esac
+    if [ ! -d "$rootfs" ] || [ -L "$rootfs" ] || ! /usr/bin/mountpoint -q "$rootfs"; then
+      deny "rootfs-anchored-mount-invalid" "$rootfs"
+    fi
+    runtime_dir="$(dirname "$rootfs")"
+    runtime_dir_uid="$(stat -c '%u' "$runtime_dir")"
+    runtime_dir_mode="$(stat -c '%a' "$runtime_dir")"
+    if [ "$runtime_dir_uid" != "0" ] || \
+       ! echo "$runtime_dir_mode" | grep -Eq '^[0-7]{3,4}$' || \
+       [ "$((8#$runtime_dir_mode & 022))" -ne 0 ]; then
+      deny "rootfs-anchored-owner-invalid" "$rootfs"
+    fi
+    case "$ownership_source" in
+      keep-id|oci-extract) ;;
+      *) deny "rootfs-ownership-source-invalid" "$ownership_source" ;;
+    esac
+    unset COCALC_ROOTFS_OWNERSHIP_SOURCE COCALC_ROOTFS_SKIP_OWNERSHIP_BRIDGE
     shell_path=""
     if [ -x "$rootfs/bin/bash" ]; then
       shell_path="/bin/bash"
@@ -6881,11 +7546,6 @@ PY
       echo "$1" >&2
       exit "${2:-1}"
     }
-    case "${COCALC_ROOTFS_SKIP_OWNERSHIP_BRIDGE:-}" in
-      1|true|TRUE|yes|YES|on|ON)
-        skip_ownership_bridge=true
-        ;;
-    esac
     case "$ownership_source" in
       keep-id|oci-extract)
         ;;
@@ -7013,10 +7673,6 @@ chmod 0755 "$remap_rootfs_ids_script"
       rm -f "$rewrite_gid_map_file"
     }
     trap cleanup_rewrite_script EXIT
-    podman_user="${SUDO_USER:-}"
-    if [ -z "$podman_user" ]; then
-      fail "rootfs preflight failed: normalize-rootfs must be invoked via sudo from the rootless podman user" 77
-    fi
     fix_setid_runtime_helpers_script="$(cat <<'EOF_COCALC_FIX_SETID_RUNTIME_HELPERS'
 set -euo pipefail
 runtime_uid="${COCALC_RUNTIME_UID:?}"
@@ -7180,21 +7836,34 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
     repo_profile="$2"
     host_name="$3"
     shift 3
-    check_args "$src" "$repo_profile"
-    if [[ "$repo_profile" == *.toml ]]; then
-      repo_profile="${repo_profile%.toml}"
-    fi
+    tag_args=()
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --tag)
+          if [ "$#" -lt 2 ]; then
+            deny "rootfs-rustic-backup-bad-args" "missing-tag-value"
+          fi
+          tag_args+=("$1" "$2")
+          shift 2
+          ;;
+        *)
+          deny "rootfs-rustic-backup-bad-args" "$1"
+          ;;
+      esac
+    done
+    require_allowed_path_parts "$src"
+    source_root="$ALLOWED_PATH_ROOT"
+    source_rel="$ALLOWED_PATH_REL"
+    set_rustic_profile_parts "$repo_profile"
     prepare_privileged_rustic_cache
-    rustic_cmd=("$(rustic_binary)" -P "$repo_profile")
-    cd "$src"
-    if ! "${rustic_cmd[@]}" repoinfo >/dev/null 2>&1; then
-      if ! "${rustic_cmd[@]}" --no-progress init >/dev/null 2>&1; then
-        # Another process may have initialized the repo concurrently; accept
-        # that case and only fail if the repository is still unusable.
-        "${rustic_cmd[@]}" repoinfo >/dev/null 2>&1
-      fi
-    fi
-    exec "${rustic_cmd[@]}" backup --json --no-scan --host "$host_name" "$@" .
+    exec /usr/local/libexec/cocalc-runtime-storage-path-helper \
+      rustic-rootfs-backup \
+      --root "$source_root" \
+      --path "$source_rel" \
+      --profile-root "$RUSTIC_PROFILE_ROOT" \
+      --profile-path "$RUSTIC_PROFILE_REL" \
+      --host "$host_name" \
+      "${tag_args[@]}"
     ;;
   rootfs-rustic-restore)
     if [ "$#" -lt 3 ]; then
@@ -7205,12 +7874,26 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
     snapshot="$2"
     dest="$3"
     shift 3
-    check_args "$repo_profile" "$dest"
-    if [[ "$repo_profile" == *.toml ]]; then
-      repo_profile="${repo_profile%.toml}"
+    delete_args=()
+    if [ "$#" -gt 0 ]; then
+      if [ "$#" -ne 1 ] || [ "$1" != "--delete" ]; then
+        deny "rootfs-rustic-restore-bad-args" "$*"
+      fi
+      delete_args=("--delete")
     fi
+    require_allowed_path_parts "$dest"
+    dest_root="$ALLOWED_PATH_ROOT"
+    dest_rel="$ALLOWED_PATH_REL"
+    set_rustic_profile_parts "$repo_profile"
     prepare_privileged_rustic_cache
-    exec "$(rustic_binary)" -P "$repo_profile" restore "$@" "$snapshot" "$dest"
+    exec /usr/local/libexec/cocalc-runtime-storage-path-helper \
+      rustic-rootfs-restore \
+      --root "$dest_root" \
+      --path "$dest_rel" \
+      --profile-root "$RUSTIC_PROFILE_ROOT" \
+      --profile-path "$RUSTIC_PROFILE_REL" \
+      --snapshot "$snapshot" \
+      "${delete_args[@]}"
     ;;
   project-rustic-backup|project-rustic-backup-maintenance)
     if [ "$#" -lt 3 ]; then
@@ -7221,7 +7904,6 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
     repo_profile="$2"
     host_name="$3"
     shift 3
-    check_args "$src" "$repo_profile"
     case "$host_name" in
       -*)
         deny "project-rustic-backup-bad-host" "$host_name"
@@ -7255,29 +7937,23 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
           ;;
       esac
     done
-    if [[ "$repo_profile" == *.toml ]]; then
-      repo_profile="${repo_profile%.toml}"
-    fi
+    require_allowed_path_parts "$src"
+    source_root="$ALLOWED_PATH_ROOT"
+    source_rel="$ALLOWED_PATH_REL"
+    set_rustic_profile_parts "$repo_profile"
     if [ "$cmd" = "project-rustic-backup-maintenance" ]; then
       attach_maintenance_worker
     fi
     prepare_privileged_rustic_cache
-    rustic_cmd=("$(rustic_binary)" -P "$repo_profile")
-    cd "$src"
-    backup_status=0
-    "${rustic_cmd[@]}" backup -x --json --no-scan --host "$host_name" "${tag_args[@]}" "${parent_args[@]}" --glob "!.snapshots" --glob "!.snapshots/**" . || backup_status="$?"
-    if [ "$backup_status" -eq 0 ]; then
-      exit 0
-    fi
-    if "${rustic_cmd[@]}" repoinfo >/dev/null 2>&1; then
-      exit "$backup_status"
-    fi
-    if ! "${rustic_cmd[@]}" --no-progress init >/dev/null 2>&1; then
-      if ! "${rustic_cmd[@]}" repoinfo >/dev/null 2>&1; then
-        exit "$backup_status"
-      fi
-    fi
-    exec "${rustic_cmd[@]}" backup -x --json --no-scan --host "$host_name" "${tag_args[@]}" "${parent_args[@]}" --glob "!.snapshots" --glob "!.snapshots/**" .
+    exec /usr/local/libexec/cocalc-runtime-storage-path-helper \
+      rustic-project-backup \
+      --root "$source_root" \
+      --path "$source_rel" \
+      --profile-root "$RUSTIC_PROFILE_ROOT" \
+      --profile-path "$RUSTIC_PROFILE_REL" \
+      --host "$host_name" \
+      "${tag_args[@]}" \
+      "${parent_args[@]}"
     ;;
   project-rustic-restore)
     if [ "$#" -ne 3 ]; then
@@ -7287,17 +7963,23 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
     repo_profile="$1"
     snapshot="$2"
     dest="$3"
-    check_args "$repo_profile" "$dest"
     case "$snapshot" in
       -*)
         deny "project-rustic-restore-bad-snapshot" "$snapshot"
         ;;
     esac
-    if [[ "$repo_profile" == *.toml ]]; then
-      repo_profile="${repo_profile%.toml}"
-    fi
+    require_allowed_path_parts "$dest"
+    dest_root="$ALLOWED_PATH_ROOT"
+    dest_rel="$ALLOWED_PATH_REL"
+    set_rustic_profile_parts "$repo_profile"
     prepare_privileged_rustic_cache
-    exec "$(rustic_binary)" -P "$repo_profile" restore "$snapshot" "$dest"
+    exec /usr/local/libexec/cocalc-runtime-storage-path-helper \
+      rustic-project-restore \
+      --root "$dest_root" \
+      --path "$dest_rel" \
+      --profile-root "$RUSTIC_PROFILE_ROOT" \
+      --profile-path "$RUSTIC_PROFILE_REL" \
+      --snapshot "$snapshot"
     ;;
   rootfs-manifest)
     if [ "$#" -ne 1 ]; then
@@ -7571,8 +8253,8 @@ PY' bash "$tree"
     configure_bees_cgroup "$pool" "$mountpoint"
     attach_pid_to_project_pool_storage "$$" "$pool" || true
     echo "BEES_STARTING mountpoint=${mountpoint} pid=$$" >&2
-    if [ -x /opt/cocalc/tools/current/bees ]; then
-      exec /usr/bin/ionice -c3 /usr/bin/nice -n 19 /opt/cocalc/tools/current/bees "$@"
+    if [ -x /usr/local/libexec/cocalc-bees ]; then
+      exec /usr/bin/ionice -c3 /usr/bin/nice -n 19 /usr/local/libexec/cocalc-bees "$@"
     fi
     if command -v /usr/bin/bees >/dev/null 2>&1; then
       exec /usr/bin/ionice -c3 /usr/bin/nice -n 19 /usr/bin/bees "$@"
@@ -8493,6 +9175,73 @@ def extract_bundle(cfg: BootstrapConfig, bundle: BundleSpec) -> BundleSpec:
     current_path.symlink_to(desired_dir, target_is_directory=True)
     prune_bundle_versions(cfg, bundle)
     return bundle
+
+
+def install_privileged_tool_binaries(
+    cfg: BootstrapConfig,
+    bundle: BundleSpec | None = None,
+    *,
+    destinations: dict[str, Path] | None = None,
+    destination_uid: int = 0,
+    destination_gid: int = 0,
+) -> None:
+    """Install root-run tools outside the runtime user's writable bundle.
+
+    cocalc-runtime-storage runs Rustic and BEES as root. The ordinary tools tree
+    is intentionally owned by the project-host runtime account, so executing
+    copies in that tree would turn a project-container escape into host root.
+    Extract privileged copies directly from the checksum-verified archive.
+    """
+
+    destinations = destinations or {
+        "bin/bees": Path("/usr/local/libexec/cocalc-bees"),
+        "bin/rustic": Path("/usr/local/libexec/cocalc-rustic"),
+    }
+    bundle = resolve_bundle_spec(cfg, bundle or cfg.tools_bundle)
+    if not bundle.sha256 or not bundle.sha256.strip():
+        raise RuntimeError("tools bundle checksum is required for privileged tools")
+    remote = Path(bundle.remote)
+    try:
+        verify_sha256(cfg, str(remote), bundle.sha256)
+    except (FileNotFoundError, RuntimeError):
+        download_file(cfg, bundle.url, str(remote))
+        verify_sha256(cfg, str(remote), bundle.sha256)
+
+    with tarfile.open(remote, mode="r:xz") as archive:
+        members = archive.getmembers()
+        for member_name, destination in destinations.items():
+            candidates = [
+                member
+                for member in members
+                if member.isfile() and Path(member.name).as_posix() == member_name
+            ]
+            if len(candidates) != 1:
+                raise RuntimeError(
+                    f"tools bundle must contain exactly one regular {member_name}"
+                )
+            source = archive.extractfile(candidates[0])
+            if source is None:
+                raise RuntimeError(
+                    f"could not extract {member_name} from tools bundle"
+                )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(
+                dir=str(destination.parent),
+                prefix=f".{destination.name}.",
+                suffix=".tmp",
+            )
+            tmp = Path(tmp_name)
+            try:
+                with os.fdopen(fd, "wb") as target:
+                    shutil.copyfileobj(source, target)
+                    target.flush()
+                    os.fsync(target.fileno())
+                os.chown(tmp, destination_uid, destination_gid)
+                os.chmod(tmp, 0o755)
+                os.replace(tmp, destination)
+            finally:
+                source.close()
+                tmp.unlink(missing_ok=True)
 
 
 def install_node(cfg: BootstrapConfig) -> None:
@@ -10858,7 +11607,8 @@ def run_reconcile(cfg: BootstrapConfig) -> int:
         report_bootstrap_status(cfg, "running", "Downloading CoCalc software bundles")
         extract_bundle(cfg, cfg.project_host_bundle)
         extract_bundle(cfg, cfg.project_bundle)
-        extract_bundle(cfg, cfg.tools_bundle)
+        tools_bundle = extract_bundle(cfg, cfg.tools_bundle)
+        install_privileged_tool_binaries(cfg, tools_bundle)
         report_bootstrap_status(cfg, "running", "Installing runtime tools")
         install_node(cfg)
         configure_node_bind_service_capability(cfg)
@@ -10889,6 +11639,7 @@ def run_reconcile_helpers(cfg: BootstrapConfig) -> int:
         ensure_bootstrap_paths(cfg)
         configure_rsyslog_limits(cfg)
         install_privileged_wrappers(cfg)
+        install_privileged_tool_binaries(cfg)
         write_helpers(cfg)
         configure_runtime_sudoers(cfg)
         verify_runtime_sudoers(cfg)
@@ -10992,7 +11743,8 @@ def main(argv: list[str]) -> int:
                 if "project_bundle" in only:
                     extract_bundle(cfg, cfg.project_bundle)
                 if "tools_bundle" in only:
-                    extract_bundle(cfg, cfg.tools_bundle)
+                    tools_bundle = extract_bundle(cfg, cfg.tools_bundle)
+                    install_privileged_tool_binaries(cfg, tools_bundle)
                 if "cloudflared" in only:
                     configure_cloudflared_with_options(cfg, install_package=False)
                 write_bootstrap_state_files(cfg)

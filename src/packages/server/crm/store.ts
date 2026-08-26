@@ -154,6 +154,29 @@ function optionalBounded(
   return text;
 }
 
+function normalizeWebsite(value: unknown): string | null {
+  const text = optionalBounded(value, "website", 2_000);
+  if (text == null) return null;
+  const candidate = /^[a-z][a-z\d+.-]*:(?!\d)/i.test(text)
+    ? text
+    : `https://${text}`;
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    throw Error("website must be a valid HTTP or HTTPS URL");
+  }
+  if (!["http:", "https:"].includes(url.protocol)) {
+    throw Error("website must use HTTP or HTTPS");
+  }
+  if (!url.hostname || url.username || url.password) {
+    throw Error(
+      "website must be a public HTTP or HTTPS URL without credentials",
+    );
+  }
+  return bounded(url.toString(), "website", 2_000);
+}
+
 function assertSafeText(value: unknown, name: string): void {
   const text = `${value ?? ""}`;
   if (/\b(?:card number|cvv|cvc|bank password|private key)\b/i.test(text)) {
@@ -629,6 +652,7 @@ async function insertActivity(
 
 type MutationOptions<T> = {
   action: string;
+  target?: string;
   actor: string;
   reason: string;
   commit?: boolean;
@@ -642,13 +666,21 @@ type MutationOptions<T> = {
   resultType: string;
 };
 
+function mutationPayloadHash({
+  action,
+  target,
+  proposed,
+}: Pick<MutationOptions<unknown>, "action" | "target" | "proposed">): string {
+  return payloadHash({ action, target: target ?? null, proposed });
+}
+
 async function mutate<T>(
   opts: MutationOptions<T>,
 ): Promise<CrmMutationResult<T>> {
   assertSeedAuthority();
   const reason = requireReason(opts.reason);
   const actor = requireActor(opts.actor);
-  const hash = payloadHash({ action: opts.action, proposed: opts.proposed });
+  const hash = mutationPayloadHash(opts);
   const key =
     `${opts.idempotencyKey ?? `crm:${opts.action}:${hash.slice(0, 24)}`}`.slice(
       0,
@@ -1521,7 +1553,7 @@ export async function createOrganization(
     aliases: (opts.aliases ?? [])
       .map((x) => bounded(x, "alias", 500))
       .slice(0, 50),
-    website: optionalBounded(opts.website, "website", 2_000),
+    website: normalizeWebsite(opts.website),
     timezone: optionalBounded(opts.timezone, "timezone", 100),
     organization_type: organizationType,
     lifecycle_stage: lifecycleStage,
@@ -1617,7 +1649,7 @@ export async function updateOrganization(
       .slice(0, 50);
   }
   if (Object.hasOwn(changes, "website"))
-    changes.website = optionalBounded(changes.website, "website", 2_000);
+    changes.website = normalizeWebsite(changes.website);
   if (Object.hasOwn(changes, "timezone"))
     changes.timezone = optionalBounded(changes.timezone, "timezone", 100);
   if (changes.organization_type != null)
@@ -1644,6 +1676,7 @@ export async function updateOrganization(
     throw Error("an organization cannot be its own parent");
   return await mutate({
     action: "organization.update",
+    target: `organization:${id}`,
     actor: requireActor(opts.account_id),
     reason: opts.reason,
     commit: opts.commit,
@@ -1687,6 +1720,7 @@ export async function archiveOrganization(
   const id = await resolveOrganizationId(getPool(), opts.organization);
   return await mutate({
     action: "organization.archive",
+    target: `organization:${id}`,
     actor: requireActor(opts.account_id),
     reason: opts.reason,
     commit: opts.commit,
@@ -2120,6 +2154,7 @@ export async function updatePerson(
   }
   return await mutate({
     action: "person.update",
+    target: `person:${id}`,
     actor: requireActor(opts.account_id),
     reason: opts.reason,
     commit: opts.commit,
@@ -2507,6 +2542,7 @@ export async function updateOpportunity(
     );
   return await mutate({
     action: "opportunity.update",
+    target: `opportunity:${id}`,
     actor: requireActor(opts.account_id),
     reason: opts.reason,
     commit: opts.commit,
@@ -2569,6 +2605,7 @@ export async function transitionOpportunity(
   const lossReason = optionalBounded(opts.loss_reason, "loss_reason", 1_000);
   return await mutate({
     action: "opportunity.transition",
+    target: `opportunity:${id}`,
     actor: requireActor(opts.account_id),
     reason: opts.reason,
     commit: opts.commit,
@@ -2737,6 +2774,7 @@ export async function updateTask(
     changes.details = optionalBounded(changes.details, "details", 10_000);
   return await mutate({
     action: "task.update",
+    target: `task:${id}`,
     actor: requireActor(opts.account_id),
     reason: opts.reason,
     commit: opts.commit,
@@ -2791,6 +2829,7 @@ export async function transitionTask(
         : original.state;
   return await mutate({
     action: `task.${opts.action}`,
+    target: `task:${id}`,
     actor: requireActor(opts.account_id),
     reason: opts.reason,
     commit: opts.commit,
@@ -3850,8 +3889,10 @@ export async function exportData(
 }
 
 export const __test__ = {
+  mutationPayloadHash,
   normalizeDomain,
   normalizeEmail,
+  normalizeWebsite,
   OPPORTUNITY_TRANSITIONS,
   payloadHash,
   truncateRows,

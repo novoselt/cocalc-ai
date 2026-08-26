@@ -6,7 +6,7 @@ import { secureRandomString } from "@cocalc/backend/misc";
 import getLogger from "@cocalc/backend/logger";
 import { secretsPath } from "./ssh-server";
 import { join } from "node:path";
-import { readFile, writeFile } from "node:fs/promises";
+import { chmod, readFile, writeFile } from "node:fs/promises";
 import { parseSshTargetUser, type SshTarget } from "./ssh-target";
 
 const logger = getLogger("project-proxy:ssh:auth");
@@ -23,14 +23,16 @@ export async function ensureProxyKey() {
       privateKey: await readFile(privKeyPath, "utf8"),
       publicKey: await readFile(pubKeyPath, "utf8"),
     };
+    await chmod(privKeyPath, 0o600);
     logger.debug(`init: loaded ssh key from ${secretsPath}...`);
   } catch {
     logger.debug("init: generating ssh key...");
     const seed = randomBytes(32);
     sshKey = ssh(seed, "server");
     // persist to disk so stable between runs, so we can restart server without having to restart all the pods.
-    await writeFile(privKeyPath, sshKey.privateKey);
-    await writeFile(pubKeyPath, sshKey.publicKey);
+    await writeFile(privKeyPath, sshKey.privateKey, { mode: 0o600 });
+    await chmod(privKeyPath, 0o600);
+    await writeFile(pubKeyPath, sshKey.publicKey, { mode: 0o644 });
     logger.debug("init: public key", sshKey.publicKey);
   }
 

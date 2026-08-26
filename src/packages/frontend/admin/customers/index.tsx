@@ -66,7 +66,11 @@ import {
   useAccountDisplayNames,
 } from "../receivables/account-names";
 import { SiteLicenseSelector } from "../receivables/site-license-reference";
-import { crmMutationContext, filterCrmActivities } from "./helpers";
+import {
+  crmMutationContext,
+  filterCrmActivities,
+  safeExternalHttpUrl,
+} from "./helpers";
 import { CustomerSelector } from "./selector";
 import { TimelineFilter } from "./timeline-filter";
 import {
@@ -1415,6 +1419,7 @@ function CustomerDetail({
   if (!customer) return <Empty description="Customer not found" />;
 
   const organization = customer.organization;
+  const websiteUrl = safeExternalHttpUrl(organization.website);
   const closedPipeline = customer.opportunities.filter((x) =>
     ["won", "lost"].includes(x.stage),
   ).length;
@@ -1864,16 +1869,12 @@ function CustomerDetail({
                   : "None"}
               </Descriptions.Item>
               <Descriptions.Item label="Website">
-                {organization.website ? (
-                  <a
-                    href={organization.website}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
+                {websiteUrl ? (
+                  <a href={websiteUrl} rel="noreferrer" target="_blank">
                     {organization.website} <Icon name="external-link" />
                   </a>
                 ) : (
-                  "Not recorded"
+                  organization.website || "Not recorded"
                 )}
               </Descriptions.Item>
               <Descriptions.Item label="Updated">

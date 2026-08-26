@@ -13,11 +13,75 @@ const {
   isContentAddressedStaticRequest,
   isImmutableStaticStatus,
   isPubliclyCacheable,
+  isTopLevelDocumentNavigation,
   prepareResponseHeaders,
   proxyRequestHeaders,
   recordWorkerHealth,
+  selectWorkerCandidate,
   serializeProxyRequest,
 } = require("./bay-frontdoor.js");
+
+test("recognizes only top-level browser document navigations", () => {
+  assert.equal(
+    isTopLevelDocumentNavigation({
+      method: "GET",
+      headers: {
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-dest": "document",
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    isTopLevelDocumentNavigation({
+      method: "GET",
+      headers: { "sec-fetch-mode": "cors", "sec-fetch-dest": "empty" },
+    }),
+    false,
+  );
+  assert.equal(
+    isTopLevelDocumentNavigation({
+      method: "POST",
+      headers: {
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-dest": "document",
+      },
+    }),
+    false,
+  );
+});
+
+test("rotates document navigations away from their pinned worker", () => {
+  const workers = [{ id: 1 }, { id: 2 }, { id: 3 }];
+  const sticky = workers[1];
+  assert.deepEqual(
+    selectWorkerCandidate({
+      candidates: workers,
+      sticky,
+      rotate: false,
+      offset: 0,
+    }),
+    { worker: sticky, changed: false, nextOffset: 0 },
+  );
+  assert.deepEqual(
+    selectWorkerCandidate({
+      candidates: workers,
+      sticky,
+      rotate: true,
+      offset: 0,
+    }),
+    { worker: workers[0], changed: true, nextOffset: 1 },
+  );
+  assert.deepEqual(
+    selectWorkerCandidate({
+      candidates: [sticky],
+      sticky,
+      rotate: true,
+      offset: 0,
+    }),
+    { worker: sticky, changed: false, nextOffset: 1 },
+  );
+});
 
 test("recognizes content-addressed static assets only", () => {
   assert.equal(

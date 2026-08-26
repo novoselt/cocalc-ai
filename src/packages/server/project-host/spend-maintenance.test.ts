@@ -248,6 +248,44 @@ describe("dedicated host spend maintenance", () => {
     isDedicatedHostLaneCurrentlyAllowedMock = jest.fn(() => false);
   });
 
+  it("uses stopped pricing when the provider reports the instance missing", async () => {
+    const { billingStateForHost } = await import("./spend-maintenance");
+
+    expect(
+      billingStateForHost({
+        id: "host-1",
+        name: "Missing GPU Host",
+        region: "eu-north1",
+        status: "error",
+        metadata: {
+          runtime: {
+            instance_id: "computeinstance-missing",
+            provider_status: "missing",
+          },
+        },
+      }),
+    ).toBe("stopped");
+  });
+
+  it("keeps transient host errors billable while the provider VM exists", async () => {
+    const { billingStateForHost } = await import("./spend-maintenance");
+
+    expect(
+      billingStateForHost({
+        id: "host-1",
+        name: "Temporarily Unreachable GPU Host",
+        region: "eu-north1",
+        status: "error",
+        metadata: {
+          runtime: {
+            instance_id: "computeinstance-running",
+            provider_status: "RUNNING",
+          },
+        },
+      }),
+    ).toBe("running");
+  });
+
   it("uses the shared session-affine advisory lock", async () => {
     const { runDedicatedHostSpendMaintenancePass } =
       await import("./spend-maintenance");

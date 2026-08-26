@@ -10,9 +10,10 @@ cocalc software deploy --build host-bootstrap:<tag> <profile>
 cocalc software deploy --build --rollout --bootstrap-scope helpers host-bootstrap:<tag> <profile>
 ```
 
-This records `bootstrap.py` as an immutable software artifact, publishes the
-mutable `software/bootstrap/latest/bootstrap.py` pointer, writes deployment
-history, and reconciles online hosts.
+This records `bootstrap.py` as an immutable software artifact, writes
+deployment history, and reconciles online hosts. It does not infer a mutable
+publication channel from the site profile. To intentionally update one, add
+`--bootstrap-publish-channel staging` or `--bootstrap-publish-channel latest`.
 
 The reconcile scope is mandatory:
 
