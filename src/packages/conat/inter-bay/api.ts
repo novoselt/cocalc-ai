@@ -1085,6 +1085,8 @@ export interface AccountLocalGetDedicatedHostPolicySnapshotRequest {
 export interface AccountLocalReconcileDedicatedHostPurchaseSessionRequest {
   account_id: string;
   host_id: string;
+  // Optional only for rolling upgrades from bays that predate product attribution.
+  resource_kind?: "project-host" | "compute-vm" | "compute-volume";
   host_name?: string | null;
   host_bay_id?: string | null;
   provider: string;
@@ -1107,6 +1109,8 @@ export interface AccountLocalCloseDedicatedHostPurchaseSessionRequest {
 export interface AccountLocalRecordDedicatedHostMeteredUsageRequest {
   account_id: string;
   resource_id: string;
+  // Egress metering currently only originates from virtual machines.
+  product_kind?: "dedicated-host" | "virtual-machine";
   resource_name?: string | null;
   resource_bay_id?: string | null;
   project_id?: string | null;

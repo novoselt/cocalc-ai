@@ -8135,6 +8135,7 @@ export async function updateHostMachine({
     await reconcileDedicatedHostPurchaseSessionForAccount({
       account_id: billingOwner,
       host_id: row.id,
+      resource_kind: "project-host",
       host_name: row.name ?? undefined,
       host_bay_id: getConfiguredBayId(),
       provider: nextMachineCloud,

@@ -503,6 +503,7 @@ export async function createHostInternalHelper({
     await reconcileDedicatedHostPurchaseSessionForAccount({
       account_id: owner,
       host_id: id,
+      resource_kind: "project-host",
       host_name: title,
       host_bay_id: getConfiguredBayId(),
       provider: machineCloud!,
@@ -652,6 +653,7 @@ export async function startHostInternalHelper({
     await reconcileDedicatedHostPurchaseSessionForAccount({
       account_id: owner!,
       host_id: row.id,
+      resource_kind: "project-host",
       host_name: row.name ?? undefined,
       host_bay_id: getConfiguredBayId(),
       provider: machineCloud!,
