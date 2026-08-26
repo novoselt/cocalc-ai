@@ -73,6 +73,7 @@ overrides:
   markdown-it@<=14.1.1: '>=14.2.0'
   tar@>=7.0.0 <7.5.21: ^7.5.21
   body-parser@>=2.0.0 <2.3.0: ^2.3.0
+  image-size@<=2.0.2: npm:image-size-next@1.2.2
 
 patchedDependencies:
   '@rc-component/portal@2.2.0': b6f877518e590497afc1bc08045e7388a098c2d276d59c861683811ebfb8da04
@@ -8561,8 +8562,8 @@ packages:
     resolution: {integrity: sha512-P0t7ByhK8Jk9TU05ct/7+f7h8dNuXq5OY4m0IO/T+1aga/qHkpC0Wf472x3FLdq/zFDG17pgapCM3JDTxwZzow==}
     engines: {node: '>=0.10.0'}
 
-  image-size@1.2.1:
-    resolution: {integrity: sha512-rH+46sQJ2dlwfjfhCyNx5thzrv+dtmBIhPHk0zgRUukHzZ/kRueTJXoYYsclBaKcSMBWuGbOFXtioLpzTb5euw==}
+  image-size-next@1.2.2:
+    resolution: {integrity: sha512-Pd3CJ2+Ifk2H2jWikkoz2BSZgnuF3Qsea4gQmj2gtiOtYpGWBl7elj8EXnFMiY5PaYNruTTLD0hQ0UWK7pz9xA==}
     engines: {node: '>=16.x'}
     hasBin: true
 
@@ -19765,7 +19766,7 @@ snapshots:
 
   image-extensions@1.1.0: {}
 
-  image-size@1.2.1:
+  image-size-next@1.2.2:
     dependencies:
       queue: 6.0.2
 
@@ -21148,7 +21149,7 @@ snapshots:
       flow-enums-runtime: 0.0.6
       graceful-fs: 4.2.11
       hermes-parser: 0.35.0
-      image-size: 1.2.1
+      image-size: image-size-next@1.2.2
       invariant: 2.2.4
       jest-worker: 29.7.0
       jsc-safe-url: 0.2.4
@@ -21194,7 +21195,7 @@ snapshots:
       flow-enums-runtime: 0.0.6
       graceful-fs: 4.2.11
       hermes-parser: 0.35.0
-      image-size: 1.2.1
+      image-size: image-size-next@1.2.2
       invariant: 2.2.4
       jest-worker: 29.7.0
       jsc-safe-url: 0.2.4

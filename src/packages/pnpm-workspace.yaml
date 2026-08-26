@@ -80,6 +80,9 @@ overrides:
   "markdown-it@<=14.1.1": ">=14.2.0"
   "tar@>=7.0.0 <7.5.21": "^7.5.21"
   "body-parser@>=2.0.0 <2.3.0": "^2.3.0"
+  # Upstream image-size is archived; this audited fork fixes CVE-2025-71329
+  # and CVE-2025-71330 while preserving Metro's 1.x API.
+  "image-size@<=2.0.2": "npm:image-size-next@1.2.2"
 
 allowBuilds:
   "@cocalc/gcloud-pricing-calculator": true
