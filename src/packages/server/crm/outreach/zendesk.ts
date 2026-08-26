@@ -3,6 +3,8 @@
  *  License: MS-RSL - see LICENSE.md for details
  */
 
+import { createHash } from "node:crypto";
+
 import type { CreateOrUpdateTicket } from "node-zendesk/dist/types/clients/core/tickets";
 
 import getZendeskClient from "@cocalc/server/support/zendesk-client";
@@ -95,6 +97,47 @@ function validDate(value: unknown): string | undefined {
   return date.toISOString();
 }
 
+const READ_RECEIPT_PROVIDER = "my_read_receipts";
+
+function readReceiptEventId({
+  ticketId,
+  openingCommentId,
+  observedAt,
+  sourceIdentity,
+}: {
+  ticketId: number;
+  openingCommentId: number;
+  observedAt: string;
+  sourceIdentity:
+    | { adapter: "ticket-fields-v1"; ticket_field_id: number }
+    | {
+        adapter: "private-comment-v1";
+        integration_id: number;
+        receipt_comment_id: number;
+      };
+}): string {
+  if (!Number.isSafeInteger(ticketId) || ticketId <= 0) {
+    throw Error("read receipt ticket ID must be a positive Zendesk ID");
+  }
+  if (!Number.isSafeInteger(openingCommentId) || openingCommentId <= 0) {
+    throw Error(
+      "read receipt opening comment ID must be a positive Zendesk ID",
+    );
+  }
+  // The database uniqueness key is global, so bind every provider coordinate.
+  const canonicalIdentity = JSON.stringify([
+    READ_RECEIPT_PROVIDER,
+    ticketId,
+    openingCommentId,
+    observedAt,
+    sourceIdentity,
+  ]);
+  const digest = createHash("sha256")
+    .update(canonicalIdentity, "utf8")
+    .digest("hex");
+  return `${READ_RECEIPT_PROVIDER}:v2:${digest}`;
+}
+
 export function structuredViewObservations({
   ticket,
   comments,
@@ -107,6 +150,7 @@ export function structuredViewObservations({
   openingCommentId?: number;
 }): OutreachZendeskTicket["view_observations"] {
   if (!config.read_receipts_enabled || !openingCommentId) return [];
+  const ticketId = Number(ticket.id);
   if (config.read_receipts_mode === "ticket_fields") {
     const ids = new Set(
       config.read_receipts_ticket_field_ids
@@ -124,12 +168,23 @@ export function structuredViewObservations({
         );
         if (!observedAt) continue;
         result.push({
-          provider_event_id: `my-read-receipts:field:${field.id}:${observedAt}`,
+          provider_event_id: readReceiptEventId({
+            ticketId,
+            openingCommentId,
+            observedAt,
+            sourceIdentity: {
+              adapter: "ticket-fields-v1",
+              ticket_field_id: Number(field.id),
+            },
+          }),
           comment_id: openingCommentId,
           observed_at: observedAt,
           provenance: {
             adapter: "ticket-fields-v1",
-            ticket_field_id: field.id,
+            provider: READ_RECEIPT_PROVIDER,
+            zendesk_ticket_id: ticketId,
+            opening_comment_id: openingCommentId,
+            ticket_field_id: Number(field.id),
           },
         });
       }
@@ -155,14 +210,29 @@ export function structuredViewObservations({
     if (!match || Number(match[1]) !== openingCommentId) continue;
     const observedAt = validDate(match[2]);
     if (!observedAt) continue;
+    const receiptCommentId = Number(comment.id);
+    if (!Number.isSafeInteger(receiptCommentId) || receiptCommentId <= 0)
+      continue;
     result.push({
-      provider_event_id: `my-read-receipts:comment:${comment.id}`,
+      provider_event_id: readReceiptEventId({
+        ticketId,
+        openingCommentId,
+        observedAt,
+        sourceIdentity: {
+          adapter: "private-comment-v1",
+          integration_id: integrationId,
+          receipt_comment_id: receiptCommentId,
+        },
+      }),
       comment_id: openingCommentId,
       observed_at: observedAt,
       provenance: {
         adapter: "private-comment-v1",
+        provider: READ_RECEIPT_PROVIDER,
+        zendesk_ticket_id: ticketId,
+        opening_comment_id: openingCommentId,
         integration_id: integrationId,
-        receipt_comment_id: comment.id,
+        receipt_comment_id: receiptCommentId,
       },
     });
   }
