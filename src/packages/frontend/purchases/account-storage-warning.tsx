@@ -27,6 +27,10 @@ import type { PageStyle } from "@cocalc/frontend/app/top-nav-consts";
 import { TOP_BAR_ELEMENT_CLASS } from "@cocalc/frontend/app/top-nav-consts";
 import type { MembershipDetails } from "@cocalc/conat/hub/api/purchases";
 import { COLORS } from "@cocalc/util/theme";
+import {
+  AccountStorageUpgradeOptionsLoader,
+  formatDecimalBytes,
+} from "./account-storage-upgrade-options";
 
 const { Text } = Typography;
 
@@ -54,18 +58,6 @@ function getPositiveNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
     : undefined;
-}
-
-function formatDecimalBytes(bytes: number): string {
-  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1000 && unit < units.length - 1) {
-    value /= 1000;
-    unit += 1;
-  }
-  const digits = Number.isInteger(value) || value >= 10 || unit === 0 ? 0 : 1;
-  return `${value.toFixed(digits)} ${units[unit]}`;
 }
 
 export function getAccountStorageWarning(
@@ -185,6 +177,7 @@ export const AccountStorageWarning: React.FC<{
   const [details, setDetails] = useState<MembershipDetails | null>(null);
   const [open, setOpen] = useState(false);
   const [purchaseOpen, setPurchaseOpen] = useState(false);
+  const [purchaseTarget, setPurchaseTarget] = useState<string>();
   const [dismissedWarningKey, setDismissedWarningKey] = useState<
     string | undefined
   >();
@@ -332,7 +325,11 @@ export const AccountStorageWarning: React.FC<{
           <Button
             key="upgrade"
             type="primary"
-            onClick={() => setPurchaseOpen(true)}
+            onClick={() => {
+              setPurchaseTarget(undefined);
+              setOpen(false);
+              setPurchaseOpen(true);
+            }}
           >
             Upgrade membership
           </Button>,
@@ -424,13 +421,29 @@ export const AccountStorageWarning: React.FC<{
               projects, so totals may temporarily be incomplete.
             </Text>
           ) : null}
+          {open ? (
+            <AccountStorageUpgradeOptionsLoader
+              context={warning}
+              onSelect={(tierId) => {
+                setPurchaseTarget(tierId);
+                setOpen(false);
+                setPurchaseOpen(true);
+              }}
+            />
+          ) : null}
         </Space>
       </Modal>
       <MembershipPurchaseModal
+        initialTargetClass={purchaseTarget}
+        initialTargetInterval="year"
         open={purchaseOpen}
-        onClose={() => setPurchaseOpen(false)}
+        onClose={() => {
+          setPurchaseOpen(false);
+          setPurchaseTarget(undefined);
+        }}
         onChanged={() => {
           setPurchaseOpen(false);
+          setPurchaseTarget(undefined);
           window.dispatchEvent(new Event("cocalc:membership-changed"));
         }}
       />

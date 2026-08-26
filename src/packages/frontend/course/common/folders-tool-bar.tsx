@@ -17,7 +17,7 @@ interface FoldersToolbarProps {
   num_omitted?: number;
   project_id: string;
   items: iMap<string, any>;
-  add_folders: (folders: string[]) => void; // add_folders (Iterable<T>)
+  add_folders: (folders: string[]) => void | Promise<void>; // add_folders (Iterable<T>)
   item_name: ItemName;
   plural_item_name: string;
 }
@@ -64,7 +64,7 @@ export function AddItems({
   selectorStyle,
   closable = true,
 }: {
-  addItems;
+  addItems: (paths: string[]) => void | Promise<void>;
   itemName: ItemName;
   items;
   defaultOpen?;
@@ -113,7 +113,7 @@ export function AddItems({
       isExcluded={isExcluded}
       addSelected={(paths) => {
         if (paths != null) {
-          addItems(paths);
+          return addItems(paths);
         }
       }}
       itemName={itemName}
