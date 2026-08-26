@@ -976,6 +976,21 @@ function assertOrderNotTerminal(
   }
 }
 
+function assertNoActiveStripeQuote(
+  order: CommercialOrder,
+  operation: string,
+): void {
+  const quote = order.quotes.find(
+    ({ provider, status }) =>
+      provider === "stripe" && ["draft", "issued"].includes(status),
+  );
+  if (quote) {
+    throw Error(
+      `${operation} is blocked while Stripe quote ${quote.quote_number} is active; cancel it first`,
+    );
+  }
+}
+
 async function assertNoUnresolvedProviderOperations(
   client: Queryable,
   orderId: string,
@@ -1064,6 +1079,9 @@ async function applyCommercialOrderUpdate(
         opts.items != null ||
         opts.contacts != null ||
         Object.keys(changes).some((key) => INVOICE_LOCKED_COLUMNS.has(key));
+      if (approvedTermsChange) {
+        assertNoActiveStripeQuote(before, "commercial terms update");
+      }
       if (
         invoiceLockedChange &&
         before.invoices.some(
@@ -1277,6 +1295,7 @@ export async function updateCommercialBillingDetails(
           "billing details are locked after an invoice is created; void it before correcting future invoice recipients",
         );
       }
+      assertNoActiveStripeQuote(before, "billing-details update");
       if (!Array.isArray(opts.billing_contacts)) {
         throw Error("billing_contacts is required");
       }
@@ -1469,6 +1488,7 @@ function commercialQuoteSnapshot(
     total: preview.total,
     service_starts_at: preview.service_starts_at ?? null,
     service_ends_at: preview.service_ends_at ?? null,
+    payment_terms_days: Math.max(order.payment_terms_days ?? 21, 0),
     po_number: preview.po_number ?? null,
     customer_reference: preview.customer_reference ?? null,
     quote_memo: preview.quote_memo ?? null,

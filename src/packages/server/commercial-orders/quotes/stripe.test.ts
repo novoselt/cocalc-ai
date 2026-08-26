@@ -238,6 +238,7 @@ function stripeQuoteFixture(changes: Record<string, unknown> = {}) {
     amount_subtotal: 390000,
     amount_total: 390000,
     collection_method: "send_invoice",
+    invoice_settings: { days_until_due: 30 },
     expires_at: Math.floor(new Date(VALID_UNTIL).getTime() / 1000),
     created: 1787702400,
     description: "Example University: AR-2026-000001",
@@ -260,8 +261,12 @@ function stripeQuoteFixture(changes: Record<string, unknown> = {}) {
 function stripeQuoteLineFixture(changes: Record<string, unknown> = {}) {
   return {
     id: "qli_1",
+    description: "Campus adoption pilot",
     quantity: 1,
-    price: { product: "prod_site", unit_amount: 390000 },
+    price: {
+      product: { id: "prod_site", name: "Campus adoption pilot" },
+      unit_amount: 390000,
+    },
     amount_subtotal: 390000,
     amount_total: 390000,
     ...changes,
@@ -391,6 +396,7 @@ describe("commercial Stripe quotes", () => {
         {
           id: "prod_site",
           object: "product",
+          name: "Campus adoption pilot",
           livemode: false,
           active: true,
           deleted: false,
@@ -400,6 +406,7 @@ describe("commercial Stripe quotes", () => {
     stripe.products.create.mockResolvedValue({
       id: "prod_site",
       object: "product",
+      name: "Campus adoption pilot",
       livemode: false,
       active: true,
       deleted: false,
@@ -407,6 +414,7 @@ describe("commercial Stripe quotes", () => {
     stripe.products.retrieve.mockResolvedValue({
       id: "prod_site",
       object: "product",
+      name: "Campus adoption pilot",
       livemode: false,
       active: true,
       deleted: false,
@@ -559,6 +567,34 @@ describe("commercial Stripe quotes", () => {
     );
   });
 
+  it("uses the reviewed line description as the Stripe Product name", async () => {
+    stripe.products.search.mockResolvedValue({ data: [] });
+
+    await createStripeCommercialQuote({
+      id: "co_1",
+      account_id: "admin-1",
+      expected_version: 4,
+      valid_until: VALID_UNTIL,
+      reason: "Create reviewed Stripe quote",
+    });
+
+    expect(stripe.products.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Campus adoption pilot",
+        metadata: expect.objectContaining({
+          purpose: "commercial_quote_line_product",
+          product_kind: "site_license",
+          line_description_sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+      }),
+      expect.objectContaining({
+        idempotencyKey: expect.stringContaining(
+          "commercial-quote-line-product:site_license:",
+        ),
+      }),
+    );
+  });
+
   it("rejects account-level Stripe text that was not reviewed", async () => {
     stripe.quotes.create.mockResolvedValue(
       stripeQuoteFixture({ footer: "Unexpected account default" }),
@@ -578,6 +614,54 @@ describe("commercial Stripe quotes", () => {
     expect(mockSetCommercialProviderOperationStatus).toHaveBeenLastCalledWith(
       expect.objectContaining({ status: "indeterminate" }),
     );
+  });
+
+  it("rejects a Stripe line description that was not reviewed", async () => {
+    stripe.quotes.listLineItems.mockResolvedValue({
+      data: [
+        stripeQuoteLineFixture({
+          description: "Generic site license",
+        }),
+      ],
+      has_more: false,
+    });
+
+    await expect(
+      createStripeCommercialQuote({
+        id: "co_1",
+        account_id: "admin-1",
+        expected_version: 4,
+        valid_until: VALID_UNTIL,
+        reason: "Create reviewed Stripe quote",
+      }),
+    ).rejects.toThrow("line items do not match reviewed terms");
+
+    expect(mockUpdateCommercialQuoteProvider).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      { expires_at: Math.floor(new Date(VALID_UNTIL).getTime() / 1000) + 60 },
+      "Stripe quote expiration does not match reviewed terms",
+    ],
+    [
+      { invoice_settings: { days_until_due: 45 } },
+      "Stripe quote payment-term settings do not match reviewed terms",
+    ],
+  ])("rejects changed Stripe quote settings", async (changes, error) => {
+    stripe.quotes.create.mockResolvedValue(stripeQuoteFixture(changes));
+
+    await expect(
+      createStripeCommercialQuote({
+        id: "co_1",
+        account_id: "admin-1",
+        expected_version: 4,
+        valid_until: VALID_UNTIL,
+        reason: "Create reviewed Stripe quote",
+      }),
+    ).rejects.toThrow(error);
+
+    expect(mockUpdateCommercialQuoteProvider).not.toHaveBeenCalled();
   });
 
   it("replays a provider-attached create without another Stripe mutation", async () => {
@@ -655,6 +739,29 @@ describe("commercial Stripe quotes", () => {
     ).rejects.toThrow("confirmed customer acceptance is required");
 
     expect(mockGetCommercialOrder).not.toHaveBeenCalled();
+    expect(mockCreateCommercialInvoiceIntent).not.toHaveBeenCalled();
+    expect(stripe.quotes.accept).not.toHaveBeenCalled();
+  });
+
+  it("rejects acceptance until the commercial order is approved", async () => {
+    mockGetCommercialOrder.mockResolvedValue(
+      orderFixture({ approved_at: null, approved_by_account_id: null }),
+    );
+
+    await expect(
+      acceptStripeCommercialQuote({
+        id: "co_1",
+        commercial_quote_id: "cq_1",
+        account_id: "admin-1",
+        expected_version: 4,
+        customer_acceptance_confirmed: true,
+        reason: "Record customer acceptance",
+      }),
+    ).rejects.toThrow(
+      "the commercial order must be approved before quote acceptance",
+    );
+
+    expect(mockGetCommercialQuote).not.toHaveBeenCalled();
     expect(mockCreateCommercialInvoiceIntent).not.toHaveBeenCalled();
     expect(stripe.quotes.accept).not.toHaveBeenCalled();
   });
@@ -775,6 +882,49 @@ describe("commercial Stripe quotes", () => {
         event_type: "stripe-quote-canceled",
       }),
     );
+  });
+
+  it("can cancel using the immutable quote snapshot after item identities change", async () => {
+    const originalItem = orderFixture().items[0];
+    const quote = quoteFixture({
+      provider_quote_id: "qt_1",
+      provider_status: "draft",
+      snapshot: { items: [originalItem] },
+      provider_snapshot: {
+        customer: "cus_1",
+        products: [
+          {
+            commercial_order_item_id: originalItem.id,
+            provider_product_id: "prod_site",
+            quantity: 1,
+            unit_amount: 390000,
+          },
+        ],
+      },
+    });
+    const order = orderFixture({
+      items: [
+        {
+          ...originalItem,
+          id: "replacement_item",
+          description: "Revised campus adoption pilot",
+        },
+      ],
+      quotes: [quote],
+    });
+    mockGetCommercialOrder.mockResolvedValue(order);
+    mockGetCommercialQuote.mockResolvedValue(quote);
+
+    await cancelStripeCommercialQuote({
+      id: "co_1",
+      commercial_quote_id: "cq_1",
+      account_id: "admin-1",
+      expected_version: 4,
+      reason: "Cancel stale Stripe quote safely",
+    });
+
+    expect(stripe.quotes.cancel).toHaveBeenCalledTimes(1);
+    expect(stripe.products.search).not.toHaveBeenCalled();
   });
 
   it("recovers an unlinked open quote and retains its PDF during reconciliation", async () => {
