@@ -551,6 +551,53 @@ export interface MembershipAllocationSeries {
   rows: MembershipAllocationDailyRow[];
 }
 
+export type ComputeRevenueProduct = "dedicated-host" | "virtual-machine";
+
+export type ComputeRevenueCostComponent =
+  | "compute"
+  | "gpu"
+  | "storage"
+  | "network-egress"
+  | "other";
+
+export interface ComputeRevenueDailyRow {
+  day: Date | string;
+  product: ComputeRevenueProduct;
+  provider: string;
+  cost_component: ComputeRevenueCostComponent;
+  revenue_cents: number;
+  purchase_count: number;
+}
+
+export interface ComputeUsageDailyRow {
+  day: Date | string;
+  product: ComputeRevenueProduct;
+  provider: string;
+  running_unit_seconds: number;
+  distinct_running_units: number;
+}
+
+export interface ComputeRevenueSeriesQuery {
+  account_id?: string;
+  start?: Date | string;
+  end?: Date | string;
+  products?: ComputeRevenueProduct[];
+  providers?: string[];
+  cost_components?: ComputeRevenueCostComponent[];
+}
+
+export interface ComputeRevenueSeries {
+  checked_at: string;
+  current_bay_id: string;
+  seed_bay_id: string;
+  start: Date | string;
+  end: Date | string;
+  complete_through?: Date | string | null;
+  bays: MembershipAnalyticsOverviewBay[];
+  revenue: ComputeRevenueDailyRow[];
+  usage: ComputeUsageDailyRow[];
+}
+
 export interface MembershipPackageQuote {
   package_id?: string;
   kind: MembershipPackageKind;
@@ -1539,6 +1586,9 @@ export interface Purchases {
   getMembershipAllocationSeries: (
     opts?: MembershipAllocationSeriesQuery,
   ) => Promise<MembershipAllocationSeries>;
+  getComputeRevenueSeries: (
+    opts?: ComputeRevenueSeriesQuery,
+  ) => Promise<ComputeRevenueSeries>;
   getMembershipAnalyticsEvents: (
     opts?: MembershipAnalyticsEventsQuery,
   ) => Promise<MembershipAnalyticsEventRow[]>;
@@ -1930,6 +1980,7 @@ export const purchases = {
   getMembershipTierAdminOverview: authFirst,
   getMembershipAnalyticsOverview: authFirst,
   getMembershipAllocationSeries: authFirst,
+  getComputeRevenueSeries: authFirst,
   getMembershipAnalyticsEvents: authFirst,
   backfillMembershipAnalyticsPurchases: authFirst,
   createMembershipTier: authFirst,

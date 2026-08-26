@@ -154,6 +154,23 @@ export const TABLE_OWNERSHIP = {
   ),
 
   ...entries(
+    [
+      "compute_revenue_analytics_state",
+      "compute_revenue_daily",
+      "compute_usage_daily",
+    ],
+    {
+      ownership: "projection",
+      authority: "local",
+      portability: "rebuildable",
+      notes:
+        "Bay-local daily customer-funded compute revenue and usage projections. They contain no account identifiers and are aggregated across bays for admin analytics.",
+      rebuild:
+        "Clear the projection rows and maintenance watermark, then replay account-home purchases and immutable egress intervals.",
+    },
+  ),
+
+  ...entries(
     ["account_managed_egress_events", "account_managed_egress_rollups"],
     {
       ownership: "account-home",
