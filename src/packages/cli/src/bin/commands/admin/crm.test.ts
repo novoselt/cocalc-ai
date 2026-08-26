@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -405,13 +405,390 @@ test("outreach help exposes the shared runbook and operations families", () => {
   outreach.outputHelp();
   assert.match(help, /docs show admin\/crm-outreach --include-admin/);
   for (const family of [
+    "draft",
     "batch",
+    "delivery",
     "templates",
     "suppressions",
     "followups",
     "engagement",
+    "limits",
     "diagnostics",
   ]) {
     assert.ok(outreach.commands.some((command) => command.name() === family));
   }
+
+  const batch = outreach.commands.find((command) => command.name() === "batch");
+  assert.ok(batch);
+  for (const action of [
+    "list",
+    "show",
+    "create",
+    "update",
+    "add",
+    "remove",
+    "preview",
+    "approve",
+    "queue",
+    "pause",
+    "resume",
+    "cancel",
+  ]) {
+    assert.ok(batch.commands.some((command) => command.name() === action));
+  }
+  let batchHelp = "";
+  batch.configureOutput({ writeOut: (text) => (batchHelp += text) });
+  batch.outputHelp();
+  assert.match(batchHelp, /create, add, preview, approve, then queue/);
+  assert.match(batchHelp, /commits sequentially rather than atomically/);
+});
+
+test("organization-first outreach draft previews only batch creation", async () => {
+  let createPayload: any;
+  let recipientCalls = 0;
+  const batchPreview = {
+    preview: true,
+    action: "outreach.batch.create",
+    expected_version: 0,
+    idempotency_key: "batch-preview-key",
+  };
+  const { program, output } = setup({
+    getOrganization: async (opts: any) => ({
+      organization: {
+        customer_number: opts.organization,
+        display_name: "Example University",
+      },
+    }),
+    createOutreachBatch: async (opts: any) => {
+      createPayload = opts;
+      return batchPreview;
+    },
+    addOutreachRecipient: async () => {
+      recipientCalls += 1;
+      return {};
+    },
+  });
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "outreach",
+    "draft",
+    "CRM-2026-000123",
+    "--person",
+    "ada@example.edu",
+    "--opportunity",
+    "opportunity-1",
+    "--template",
+    "adoption-pilot",
+    "--reason",
+    "prepare one reviewed prospect conversation",
+  ]);
+
+  assert.equal(createPayload.commit, false);
+  assert.equal(createPayload.owner_account_id, ACCOUNT_ID);
+  assert.equal(createPayload.name, "Example University adoption pilot");
+  assert.equal(
+    createPayload.purpose,
+    "prepare one reviewed prospect conversation",
+  );
+  assert.equal(createPayload.kind, "adoption_pilot");
+  assert.equal(recipientCalls, 0);
+  assert.deepEqual((output() as any).data, {
+    mode: "organization_first",
+    step: "preview_batch_creation",
+    batch: batchPreview,
+    recipient: {
+      preview: false,
+      note: "The recipient cannot be rendered until the reviewed batch exists. No recipient mutation was attempted.",
+    },
+  });
+});
+
+test("organization-first draft commit creates a batch but only previews its recipient", async () => {
+  const batchId = "44444444-4444-4444-8444-444444444444";
+  let createPayload: any;
+  let recipientPayload: any;
+  const { program, output } = setup({
+    getOrganization: async (opts: any) => ({
+      organization: {
+        customer_number: opts.organization,
+        display_name: "Example University",
+      },
+    }),
+    createOutreachBatch: async (opts: any) => {
+      createPayload = opts;
+      return {
+        preview: false,
+        action: "outreach.batch.create",
+        replayed: false,
+        result: { id: batchId },
+      };
+    },
+    addOutreachRecipient: async (opts: any) => {
+      recipientPayload = opts;
+      return {
+        preview: true,
+        action: "outreach.recipient.add",
+        expected_version: 1,
+        idempotency_key: opts.idempotency_key,
+      };
+    },
+  });
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "outreach",
+    "draft",
+    "CRM-2026-000123",
+    "--person",
+    "ada@example.edu",
+    "--name",
+    "Example University adoption pilot",
+    "--purpose",
+    "Offer a reviewed adoption pilot",
+    "--kind",
+    "adoption-pilot",
+    "--owner",
+    "owner@example.edu",
+    "--template",
+    "adoption-pilot",
+    "--reason",
+    "prepare one reviewed prospect conversation",
+    "--expected-version",
+    "0",
+    "--idempotency-key",
+    "reviewed-batch-key",
+    "--commit",
+  ]);
+
+  assert.equal(createPayload.commit, true);
+  assert.equal(createPayload.expected_version, 0);
+  assert.equal(createPayload.idempotency_key, "reviewed-batch-key");
+  assert.equal(recipientPayload.batch, batchId);
+  assert.equal(recipientPayload.person, "ada@example.edu");
+  assert.equal(recipientPayload.organization, "CRM-2026-000123");
+  assert.equal(recipientPayload.commit, false);
+  assert.equal(recipientPayload.expected_version, undefined);
+  assert.notEqual(recipientPayload.idempotency_key, "reviewed-batch-key");
+  assert.equal(
+    (output() as any).data.step,
+    "batch_created_recipient_previewed",
+  );
+  assert.equal((output() as any).data.recipient.preview, true);
+});
+
+test("batch recipient JSONL import previews deterministic bounded rows", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cocalc-outreach-import-"));
+  const input = join(directory, "recipients.jsonl");
+  await writeFile(
+    input,
+    [
+      JSON.stringify({
+        person: "ada@example.edu",
+        organization: "CRM-2026-000123",
+      }),
+      JSON.stringify({
+        person: "grace@example.edu",
+        organization: "CRM-2026-000123",
+        subject: "A reviewed custom subject",
+        body_markdown: "A reviewed custom message.",
+      }),
+    ].join("\n"),
+  );
+  const calls: any[] = [];
+  const { program, output } = setup({
+    getOutreachLimits: async () => ({ max_recipients_per_batch: 25 }),
+    getOutreachBatch: async () => ({ batch: { recipient_count: 2 } }),
+    addOutreachRecipient: async (opts: any) => {
+      calls.push(opts);
+      return {
+        preview: true,
+        expected_version: 7,
+        idempotency_key: opts.idempotency_key,
+        proposed: { normalized_email: opts.person },
+      };
+    },
+  });
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "outreach",
+    "batch",
+    "add",
+    "OUT-2026-000001",
+    "--file",
+    input,
+    "--reason",
+    "review two institutional pilot contacts",
+  ]);
+
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every((call) => call.commit === false));
+  assert.equal(calls[0].person, "ada@example.edu");
+  assert.equal(calls[1].body_markdown, "A reviewed custom message.");
+  assert.match(calls[0].idempotency_key, /:row:001$/);
+  assert.match(calls[1].idempotency_key, /:row:002$/);
+  const result = (output() as any).data;
+  assert.equal(result.mode, "preview");
+  assert.equal(result.atomic, false);
+  assert.equal(result.row_count, 2);
+  assert.equal(result.configured_batch_limit, 25);
+  assert.equal(result.existing_batch_recipients, 2);
+  assert.equal(result.remaining_batch_capacity, 23);
+  assert.equal(result.expected_version, 7);
+  assert.match(
+    result.idempotency_key,
+    /^cli:outreach\.batch\.recipient-import:/,
+  );
+});
+
+test("batch recipient file commit previews and commits each row sequentially", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cocalc-outreach-commit-"));
+  const input = join(directory, "recipients.json");
+  await writeFile(
+    input,
+    JSON.stringify([
+      { person: "ada@example.edu", organization: "CRM-2026-000123" },
+      { person: "grace@example.edu", organization: "CRM-2026-000123" },
+    ]),
+  );
+  const limits = async () => ({ max_recipients_per_batch: 500 });
+  const previewSetup = setup({
+    getOutreachLimits: limits,
+    getOutreachBatch: async () => ({ batch: { recipient_count: 0 } }),
+    addOutreachRecipient: async (opts: any) => ({
+      preview: true,
+      expected_version: 7,
+      idempotency_key: opts.idempotency_key,
+    }),
+  });
+  const baseArgs = [
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "outreach",
+    "batch",
+    "add",
+    "OUT-2026-000001",
+    "--file",
+    input,
+    "--reason",
+    "review deterministic recipient import",
+  ];
+  await previewSetup.program.parseAsync(baseArgs);
+  const preview = (previewSetup.output() as any).data;
+
+  let version = 7;
+  const calls: any[] = [];
+  const commitSetup = setup({
+    getOutreachLimits: limits,
+    getOutreachBatch: async () => ({ batch: { recipient_count: 0 } }),
+    addOutreachRecipient: async (opts: any) => {
+      calls.push(opts);
+      if (!opts.commit) {
+        return {
+          preview: true,
+          expected_version: version,
+          idempotency_key: opts.idempotency_key,
+        };
+      }
+      assert.equal(opts.expected_version, version);
+      version += 1;
+      return {
+        preview: false,
+        action: "outreach.recipient.add",
+        replayed: false,
+        result: { id: `delivery-${version}` },
+      };
+    },
+  });
+  await commitSetup.program.parseAsync([
+    ...baseArgs,
+    "--expected-version",
+    `${preview.expected_version}`,
+    "--idempotency-key",
+    preview.idempotency_key,
+    "--commit",
+  ]);
+
+  assert.deepEqual(
+    calls.map((call) => call.commit),
+    [false, true, false, true],
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.commit).map((call) => call.expected_version),
+    [7, 8],
+  );
+  assert.equal((commitSetup.output() as any).data.mode, "sequential_commit");
+  assert.equal((commitSetup.output() as any).data.results.length, 2);
+});
+
+test("batch recipient import enforces the configured row bound", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cocalc-outreach-bound-"));
+  const input = join(directory, "recipients.json");
+  await writeFile(
+    input,
+    JSON.stringify(
+      Array.from({ length: 4 }, (_, index) => ({
+        person: `person-${index}@example.edu`,
+      })),
+    ),
+  );
+  const { program } = setup({
+    getOutreachLimits: async () => ({ max_recipients_per_batch: 3 }),
+    getOutreachBatch: async () => ({ batch: { recipient_count: 0 } }),
+  });
+  await assert.rejects(
+    program.parseAsync([
+      "node",
+      "test",
+      "admin",
+      "crm",
+      "outreach",
+      "batch",
+      "add",
+      "OUT-2026-000001",
+      "--file",
+      input,
+      "--reason",
+      "review bounded recipient import",
+    ]),
+    /contains 4 recipients; the effective limit is 3/,
+  );
+});
+
+test("individual outreach delivery cancellation uses the delivery mutation API", async () => {
+  let captured: any;
+  const { program } = setup({
+    mutateOutreachDelivery: async (opts: any) => {
+      captured = opts;
+      return { preview: true, expected_version: 4 };
+    },
+  });
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "outreach",
+    "delivery",
+    "cancel",
+    "delivery-1",
+    "--reason",
+    "cancel the reviewed unsent prospect message",
+  ]);
+  assert.equal(captured.delivery, "delivery-1");
+  assert.equal(captured.action, "cancel");
+  assert.equal(captured.commit, false);
+  assert.match(captured.idempotency_key, /^cli:outreach\.delivery\.cancel:/);
 });
