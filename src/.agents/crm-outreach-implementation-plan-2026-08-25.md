@@ -164,9 +164,9 @@ mailbox.
     load tracking resources.
 14. Every `notification_requested` outreach with a `no_response` follow-up
     policy creates exactly one linked task, initially task, initially waiting a snapshotted
-   
+
     due time and owner. Queries and dashboards expose the task; they do not
-   
+
     replace it.
 
 ## User Workflows
@@ -262,7 +262,8 @@ Each outreach template defines a constrained follow-up policy:
 
 - `no_response`, required for adoption-pilot, renewal, and expansion outreach;
 - `none`, allowed only for explicitly reviewed informational outreach; and
-- `follow_up_after_days`, an integer override snapshotted into every delivery.
+- `follow_up_after_days`, `max_followups`, and `final_review_after_days`
+  overrides snapshotted into every delivery.
 
 If the template has no override, use the site-wide default. When a delivery
 reaches `notification_requested`, atomically create one linked CRM task:
@@ -282,18 +283,41 @@ due/overdue in the ordinary shared CRM task queue and the Outreach follow-up
 view. Do not create a second task merely because the first became overdue.
 
 A requester reply completes the waiting task idempotently and records
-`response_received` in the completion activity in the completion activity. An opt-out or hard suppression
+`response_received` in the completion activity. An opt-out or hard suppression
 cancels it. Ticket closure without a requester reply does not silently complete
-it; an employee must complete, cancel, or reschedule it with a reason. A view
-observation does not complete or postpone it, but the due queue may distinguish
-**view observed, no reply** from **no view observed**.
+it; an employee must complete, cancel, or reschedule it with a reason.
+
+Recommended first-release cadence:
+
+1. The initial message creates the waiting task due after
+   `follow_up_after_days`, defaulting to seven calendar days.
+2. When due with **view observed, no reply**, suggest **Review and follow up**
+   and rank it ahead of otherwise equivalent due work. The follow-up stays in
+   the same Zendesk thread, is short and useful, and never tells the prospect
+   that CoCalc tracked the view.
+3. When due with **no view observed**, suggest **Verify delivery** first: check
+   bounce/suppression state, the reviewed address, and whether a different
+   reviewed contact is more appropriate. If delivery still appears healthy, a
+   normal manual follow-up remains appropriate.
+4. A successfully submitted human-reviewed follow-up increments
+   `follow_up_attempt_count` and reschedules the same task by
+   `follow_up_after_days`. It does not create another task.
+5. Repeat until `max_followups`, defaulting to two. After the final follow-up,
+   reschedule the task by `final_review_after_days`, defaulting to fourteen.
+6. If there is still no reply at final review, suggest **Close as no response**.
+   A human either completes the task with outcome `no_response` or explicitly
+   reschedules it; CoCalc does not silently close the relationship.
+
+A view observation never completes the task, changes the cadence deadline, or
+triggers a message automatically. Email clients can load remote content in the
+background, so the observation is prioritization context rather than a workflow
+transition.
 
 The first release never sends the follow-up automatically. The queue links to
-the current redacted Zendesk thread and prints the existing
-`cocalc admin support reply <ticket>` command. A later reviewed follow-up can be
-recorded as another outbound comment and reschedules the same task from that
-comment's notification time. Multi-step automated sequences remain out of
-scope.
+the current redacted Zendesk thread. The CRM-aware follow-up action previews the
+exact message and delegates comment delivery to the same audited Zendesk support
+operation used by `cocalc admin support reply`; after provider success it
+reschedules the same task. Multi-step automated sequences remain out of scope.
 
 ### Opt-Out
 
@@ -365,6 +389,7 @@ Fields:
 - `required_fields` constrained text array
 - `follow_up_policy`: `no_response` or `none`
 - optional `follow_up_after_days` integer override
+- optional `max_followups` and `final_review_after_days` integer overrides
 - `created_by_account_id`
 - `created_at`
 - `activated_by_account_id`, `activated_at`
@@ -435,8 +460,12 @@ Fields:
   `last_zendesk_status`, and bounded sync metadata
 - projected `first_view_observed_at`, `last_view_observed_at`, and
   `view_observation_count`
-- snapshotted `follow_up_policy`, `follow_up_after_days`,
-  `notification_requested_at`, and `follow_up_due_at`
+- snapshotted `follow_up_policy`, `follow_up_after_days`, `max_followups`, and
+  `final_review_after_days`
+- `notification_requested_at`, `follow_up_due_at`, `last_follow_up_at`,
+  `follow_up_attempt_count`, and constrained `follow_up_suggested_action`:
+  `await_response`, `review_and_follow_up`, `verify_delivery`, or
+  `close_no_response`
 - `approved_at`, `queued_at`, `provider_submitted_at`, `replied_at`,
   `closed_at`, `cancelled_at`
 - `next_attempt_at`, `attempt_count`, bounded `last_error`
@@ -650,23 +679,25 @@ configuration path through `cocalc admin settings set`.
 
 Recommended settings and defaults:
 
-| Setting                                 | Default | Validation         | Meaning                                                           |
-| --------------------------------------- | ------: | ------------------ | ----------------------------------------------------------------- |
-| `crm_outreach_enabled`                  |    `no` | boolean            | Show and allow outreach draft/read workflows.                     |
-| `crm_outreach_mutations_enabled`        |    `no` | boolean            | Allow draft, approval, suppression, pause, and queue mutations.   |
-| `crm_outreach_delivery_enabled`         |    `no` | boolean            | Emergency effectful Zendesk delivery switch.                      |
-| `crm_outreach_webhook_enabled`          |    `no` | boolean            | Accept and process Zendesk outreach events.                       |
-| `crm_outreach_max_recipients_per_batch` |    `25` | integer `1..500`   | Maximum approved recipients in one batch.                         |
-| `crm_outreach_send_per_minute`          |     `5` | integer `1..60`    | Seed-global provider calls per rolling minute.                    |
-| `crm_outreach_send_per_hour`            |    `50` | integer `1..1000`  | Seed-global provider calls per rolling hour.                      |
-| `crm_outreach_send_per_day`             |   `200` | integer `1..5000`  | Seed-global provider calls per rolling 24 hours.                  |
-| `crm_outreach_send_per_domain_per_day`  |    `20` | integer `1..500`   | Calls to one normalized recipient domain per rolling 24 hours.    |
-| `crm_outreach_contact_cooldown_days`    |    `90` | integer `1..730`   | Default minimum interval between initiated outreach to one email. |
-| `crm_outreach_default_followup_days`    |     `7` | integer `1..90`    | Default calendar-day wait before no-response follow-up is due.    |
-| `crm_outreach_worker_concurrency`       |     `1` | integer `1..10`    | Maximum local effectful Zendesk calls in flight.                  |
-| `crm_outreach_worker_batch_size`        |    `10` | integer `1..100`   | Maximum rows claimed per worker cycle.                            |
-| `crm_outreach_retry_max_attempts`       |     `8` | integer `1..20`    | Maximum effectful/reconciliation attempts before dead letter.     |
-| `crm_outreach_retry_base_seconds`       |    `60` | integer `10..3600` | Base for bounded exponential retry delay.                         |
+| Setting                                  | Default | Validation         | Meaning                                                           |
+| ---------------------------------------- | ------: | ------------------ | ----------------------------------------------------------------- |
+| `crm_outreach_enabled`                   |    `no` | boolean            | Show and allow outreach draft/read workflows.                     |
+| `crm_outreach_mutations_enabled`         |    `no` | boolean            | Allow draft, approval, suppression, pause, and queue mutations.   |
+| `crm_outreach_delivery_enabled`          |    `no` | boolean            | Emergency effectful Zendesk delivery switch.                      |
+| `crm_outreach_webhook_enabled`           |    `no` | boolean            | Accept and process Zendesk outreach events.                       |
+| `crm_outreach_max_recipients_per_batch`  |    `25` | integer `1..500`   | Maximum approved recipients in one batch.                         |
+| `crm_outreach_send_per_minute`           |     `5` | integer `1..60`    | Seed-global provider calls per rolling minute.                    |
+| `crm_outreach_send_per_hour`             |    `50` | integer `1..1000`  | Seed-global provider calls per rolling hour.                      |
+| `crm_outreach_send_per_day`              |   `200` | integer `1..5000`  | Seed-global provider calls per rolling 24 hours.                  |
+| `crm_outreach_send_per_domain_per_day`   |    `20` | integer `1..500`   | Calls to one normalized recipient domain per rolling 24 hours.    |
+| `crm_outreach_contact_cooldown_days`     |    `90` | integer `1..730`   | Default minimum interval between initiated outreach to one email. |
+| `crm_outreach_default_followup_days`     |     `7` | integer `1..90`    | Default calendar-day wait before no-response follow-up is due.    |
+| `crm_outreach_default_max_followups`     |     `2` | integer `1..5`     | Default maximum human-reviewed follow-up messages.                |
+| `crm_outreach_default_final_review_days` |    `14` | integer `1..90`    | Wait after final follow-up before no-response review.             |
+| `crm_outreach_worker_concurrency`        |     `1` | integer `1..10`    | Maximum local effectful Zendesk calls in flight.                  |
+| `crm_outreach_worker_batch_size`         |    `10` | integer `1..100`   | Maximum rows claimed per worker cycle.                            |
+| `crm_outreach_retry_max_attempts`        |     `8` | integer `1..20`    | Maximum effectful/reconciliation attempts before dead letter.     |
+| `crm_outreach_retry_base_seconds`        |    `60` | integer `10..3600` | Base for bounded exponential retry delay.                         |
 
 Use separate settings for provider routing and required content:
 
@@ -786,6 +817,7 @@ Reads:
 - `getOutreachDiagnostics`
 - `listOutreachEngagementEvents`
 - `listOutreachFollowups`
+- `previewOutreachFollowup`
 
 Mutations:
 
@@ -798,6 +830,7 @@ Mutations:
 - add/revoke suppression
 - process a reviewed Zendesk reply association
 - sync one linked Zendesk ticket
+- draft and queue one human-reviewed same-thread follow-up comment
 - reschedule or resolve a no-response follow-up through the shared CRM task
   transition service
 
@@ -830,7 +863,8 @@ cocalc admin crm outreach retry|reconcile
 cocalc admin crm outreach batch create|add|remove|preview|approve|queue
 cocalc admin crm outreach templates list|show|create|revise|activate|retire
 cocalc admin crm outreach suppressions list|add|revoke
-cocalc admin crm outreach followups list|show|reschedule|complete|cancel
+cocalc admin crm outreach followups list|show|draft|preview|send
+cocalc admin crm outreach followups reschedule|complete|cancel
 cocalc admin crm outreach limits
 cocalc admin crm outreach diagnostics
 ```
@@ -867,8 +901,13 @@ CLI requirements:
 - `followups list` supports due-before, overdue, assignee, organization,
   opportunity, viewed/unviewed, and replied/unreplied filters. It is an
   outreach-specific projection of ordinary CRM tasks, not a second task model.
-- Follow-up rows include the exact `cocalc cocalc admin support show <ticket>` and
-  `cocalc admin support reply <ticket> <ticket>` commands for the linked Zendesk ticket.
+- Follow-up rows include the exact `cocalc admin support show <ticket>` command
+  and the CRM-aware follow-up draft/send command for the linked Zendesk ticket.
+- `followups draft|preview|send` is human-reviewed and uses the shared audited
+  Zendesk comment operation; it must not implement a second email transport.
+- Provider success increments the attempt count and reschedules the same task.
+  An indeterminate provider result is reconciled before changing task state or
+  retrying the comment.
 - `followups reschedule|complete|cancel` delegates to shared CRM task mutation
   semantics; add a generic task reschedule operation rather than editing due
   timestamps through an outreach-only shortcut.
@@ -934,6 +973,8 @@ Show:
   Zendesk ticket;
 - engagement filters for not observed, view observed, replied, and replied
   without a prior view observation;
+- constrained suggested-action filters for review and follow up, verify
+  delivery, and close as no response;
 - a visible delivery kill switch status and link to site settings.
 
 ### Draft And Review
@@ -963,6 +1004,8 @@ The outreach detail page shows:
 - a clearly labeled **View observed** timestamp/count for the opening message,
   with a tooltip explaining proxy/scanner limitations;
 - linked follow-up owner, due time, state, and reschedule/complete actions;
+- follow-up attempt/max count, constrained suggested action, and a reviewed
+  same-thread follow-up composer that never references view tracking;
 - pause, retry, cancel, suppress, and open-in-Zendesk actions;
 - append-only outreach timeline.
 
@@ -1063,12 +1106,16 @@ end-to-end test with an internal recipient.
 - replied tickets without an open or completed follow-up task;
 - sent outreach missing its required waiting follow-up task;
 - overdue no-response follow-ups grouped by owner and age;
+- due work grouped by `review_and_follow_up`, `verify_delivery`, and
+  `close_no_response` suggested action;
+- deliveries beyond `max_followups` that have not reached a final human
+  disposition;
 - duplicate follow-up tasks for one delivery;
 - active suppressions and recently blocked deliveries;
 - templates with invalid required fields or no active revision;
 - approved content missing the required footer or opt-out token;
 - webhook event backlog, retries, and dead letters;
-- stale Zendesk reconciliation cursors.
+- stale Zendesk reconciliation cursors;
 - read-receipt mode and configured field/integration identities without
   secrets;
 - uncorrelated, ambiguous, malformed, or duplicate My Read Receipts events;
@@ -1100,6 +1147,8 @@ It must explain:
 - the meaning and limitations of `view_observed`;
 - no-response task creation, due/overdue queues, rescheduling, and human-reviewed
   Zendesk follow-up;
+- the default two-follow-up cadence, final no-response review, and why view
+  observations influence prioritization but never deadlines or automatic sends;
 - My Read Receipts ticket-field/private-comment configuration and diagnostics;
 - why there is no direct SendGrid fallback;
 - incident response and emergency delivery shutdown.
@@ -1182,6 +1231,10 @@ Include examples in CLI builds so agents can operate without repository access.
 
 - State transition validity.
 - Follow-up policy validation, due-time snapshots, and owner fallback.
+- Follow-up attempt limits, suggested-action derivation, final-review timing,
+  and no-response completion outcomes.
+- A view observation does not change a due time, increment an attempt, or queue
+  a provider operation.
 - Template field allowlist and deterministic rendering.
 - Exact immutable snapshots and revision behavior.
 - Email/domain normalization and deduplication.
@@ -1224,6 +1277,8 @@ Include examples in CLI builds so agents can operate without repository access.
 - 400/401/403/404/409/429/5xx classification.
 - Zendesk 429 global backoff.
 - Requester reply and staff reply reconciliation.
+- Human-reviewed follow-up comment creation, task rescheduling, and
+  indeterminate comment reconciliation.
 - Trigger-disabled test proves the UI does not claim delivery.
 
 ### Security Tests
@@ -1252,13 +1307,20 @@ Using a fake Zendesk adapter or sandbox:
 8. Verify the initial message created one waiting CRM follow-up task, then move
    time beyond its due date and verify it appears in CLI and UI overdue views.
 9. Simulate My Read Receipts for the opening comment and verify CLI, UI, and
-   timeline show **View observed** with the correct caveat.
-10. Reply as the prospect and verify the existing follow-up task completes.
-11. Opt out and verify later queue attempts are suppressed and waiting follow-up
+   timeline show **View observed** with the correct caveat and unchanged due
+   time.
+10. Preview and send a manual follow-up, then verify the same task is
+    rescheduled and the attempt count increments exactly once.
+11. Reply as the prospect and verify the existing follow-up task completes.
+12. Exercise an unviewed delivery and verify its suggested action is **Verify
+    delivery**, without automatic suppression or sending.
+13. Reach the configured follow-up maximum and verify **Close as no response**
+    requires an explicit human disposition.
+14. Opt out and verify later queue attempts are suppressed and waiting follow-up
     is cancelled.
-12. Lower the site rate to one per hour and prove a second delivery waits.
-13. Disable delivery and prove queued state remains intact.
-14. Complete the same supported operations from the admin UI.
+15. Lower the site rate to one per hour and prove a second delivery waits.
+16. Disable delivery and prove queued state remains intact.
+17. Complete the same supported operations from the admin UI.
 
 Do not send real external prospect mail from Lite, staging, or automated CI.
 
@@ -1307,6 +1369,9 @@ The CRM outreach system is complete when:
 - every sent adoption/renewal/expansion outreach creates exactly one assigned,
   snapshotted no-response task that is visible before and after its due time and
   resolved deterministically by reply or suppression;
+- due tasks receive constrained, explainable suggested actions; the default two
+  human-reviewed follow-ups reschedule the same task, and final no-response
+  disposition is explicit rather than automatic;
 - My Read Receipts observations are correlated to exact outbound comments,
   retained as immutable bounded engagement events, and clearly surfaced as
   non-authoritative **View observed** signals in CRM UI and CLI;
