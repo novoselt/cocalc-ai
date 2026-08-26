@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -37,6 +38,7 @@ function order(overrides: Record<string, unknown> = {}) {
     items: [],
     contacts: [],
     quotes: [],
+    documents: [],
     invoices: [],
     payments: [],
     ...overrides,
@@ -187,6 +189,133 @@ test("receivables create previews without mutating and commits explicitly", asyn
   assert.equal(calls, 1);
   assert.equal(captured.reason, "accepted pilot");
   assert.match(captured.idempotency_key, /^receivables-create-/);
+});
+
+test("purchase-order upload previews metadata without exposing PDF content and commits explicitly", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cocalc-ar-po-"));
+  const file = join(directory, "PO-5874860.pdf");
+  const content = Buffer.from("%PDF-1.4\n%%EOF\n");
+  await writeFile(file, content);
+  let calls = 0;
+  let captured: any;
+  const api = {
+    get: async () => order(),
+    uploadDocument: async (opts: any) => {
+      calls += 1;
+      captured = opts;
+      return order({ version: 8 });
+    },
+  };
+
+  const dryRun = setup(api);
+  await dryRun.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "document",
+    "upload",
+    "AR-2026-000123",
+    "--file",
+    file,
+    "--reference",
+    "5874860",
+    "--reason",
+    "attach Penn purchase order",
+  ]);
+  assert.equal(calls, 0);
+  assert.equal(dryRun.output().request.document_filename, "PO-5874860.pdf");
+  assert.equal(dryRun.output().request.document_reference, "5874860");
+  assert.equal(dryRun.output().request.content_base64, undefined);
+  assert.equal(dryRun.output().document.bytes, content.length);
+  assert.equal(
+    dryRun.output().document.sha256,
+    createHash("sha256").update(content).digest("hex"),
+  );
+
+  const commitRun = setup(api);
+  await commitRun.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "document",
+    "upload",
+    "AR-2026-000123",
+    "--file",
+    file,
+    "--reference",
+    "5874860",
+    "--expected-version",
+    "7",
+    "--reason",
+    "attach Penn purchase order",
+    "--commit",
+  ]);
+  assert.equal(calls, 1);
+  assert.equal(captured.expected_version, 7);
+  assert.equal(captured.content_base64, content.toString("base64"));
+  assert.equal(captured.document_kind, "purchase_order");
+});
+
+test("purchase-order download verifies integrity and void is preview-first", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cocalc-ar-po-download-"));
+  const outputFile = join(directory, "downloaded.pdf");
+  const content = Buffer.from("%PDF-1.4\n%%EOF\n");
+  const sha256 = createHash("sha256").update(content).digest("hex");
+  let voidCalls = 0;
+  const api = {
+    get: async () => order(),
+    downloadDocument: async () => ({
+      document: {
+        id: "44444444-4444-4444-8444-444444444444",
+        document_reference: "5874860",
+        document_filename: "PO-5874860.pdf",
+        document_sha256: sha256,
+      },
+      content_base64: content.toString("base64"),
+    }),
+    voidDocument: async () => {
+      voidCalls += 1;
+      return order({ version: 8 });
+    },
+  };
+  const downloadRun = setup(api);
+  await downloadRun.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "document",
+    "download",
+    "AR-2026-000123",
+    "--document-id",
+    "44444444-4444-4444-8444-444444444444",
+    "--output-file",
+    outputFile,
+  ]);
+  assert.deepEqual(await readFile(outputFile), content);
+  assert.equal(downloadRun.output().sha256, sha256);
+
+  const voidRun = setup(api);
+  await voidRun.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "document",
+    "void",
+    "AR-2026-000123",
+    "--document-id",
+    "44444444-4444-4444-8444-444444444444",
+    "--reason",
+    "replace incorrect purchase order",
+  ]);
+  assert.equal(voidCalls, 0);
+  assert.equal(
+    voidRun.output().request.commercial_order_document_id,
+    "44444444-4444-4444-8444-444444444444",
+  );
 });
 
 test("receivables billing correction previews and commits explicitly", async () => {
@@ -344,7 +473,7 @@ test("receivables quote issue previews inputs and stored PDFs download", async (
     "AR-2026-000123",
     "--quote-id",
     quote.id,
-    "--output",
+    "--output-file",
     outputFile,
   ]);
   assert.equal((await readFile(outputFile)).toString(), "%PDF-test");

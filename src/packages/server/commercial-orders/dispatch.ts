@@ -13,6 +13,7 @@ import {
   commercialQuotePreview,
   getCommercialOrder,
   getCommercialInvoice,
+  getCommercialOrderDocument,
   getCommercialOrderDiagnostics,
   getCommercialQuoteDocument,
   issueCommercialQuote,
@@ -23,7 +24,9 @@ import {
   retryCommercialStripeEvent,
   updateCommercialOrder,
   updateCommercialBillingDetails,
+  uploadCommercialOrderDocument,
   voidCommercialQuote,
+  voidCommercialOrderDocument,
   voidManualCommercialInvoice,
 } from "./store";
 import { assertCommercialReceivablesCapability } from "./feature-flags";
@@ -114,6 +117,12 @@ export async function dispatchCommercialSeedRequest(
       return await voidCommercialQuote(opts);
     case "quoteDocument":
       return await getCommercialQuoteDocument(opts);
+    case "uploadDocument":
+      return await uploadCommercialOrderDocument(opts);
+    case "voidDocument":
+      return await voidCommercialOrderDocument(opts);
+    case "downloadDocument":
+      return await getCommercialOrderDocument(opts);
     case "recordManualPayment":
       return await recordStripeAwareCommercialManualPayment(opts);
     case "issueManualInvoice":

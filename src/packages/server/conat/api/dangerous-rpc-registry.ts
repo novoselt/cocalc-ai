@@ -120,8 +120,7 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   },
   "adminCrm.transitionOutreachBatch": {
     decision: "fresh-auth-required",
-    reason:
-      "approves, queues, pauses, resumes, or cancels reviewed outreach",
+    reason: "approves, queues, pauses, resumes, or cancels reviewed outreach",
   },
   "adminCrm.transitionOutreachTemplate": {
     decision: "fresh-auth-required",
@@ -318,6 +317,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "records an issued customer-facing manual institutional invoice",
   },
+  "commercialOrders.uploadDocument": {
+    decision: "fresh-auth-required",
+    reason: "attaches an immutable customer purchase order to commercial state",
+  },
   "commercialOrders.diagnostics": {
     decision: "fresh-auth-not-required",
     reason: "admin-only aggregate receivables consistency diagnostics",
@@ -358,6 +361,11 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   "commercialOrders.voidQuote": {
     decision: "fresh-auth-required",
     reason: "voids a previously issued customer-facing commercial quote",
+  },
+  "commercialOrders.voidDocument": {
+    decision: "fresh-auth-required",
+    reason:
+      "voids a customer purchase order attachment while retaining its audit trail",
   },
   "commercialOrders.update": {
     decision: "fresh-auth-required",

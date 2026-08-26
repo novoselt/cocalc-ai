@@ -25,6 +25,10 @@ import type {
   CommercialOrderListRequest,
   CommercialOrderListResponse,
   CommercialOrderNoteRequest,
+  CommercialOrderDocumentDownload,
+  CommercialOrderDocumentDownloadRequest,
+  CommercialOrderDocumentUploadRequest,
+  CommercialOrderDocumentVoidRequest,
   CommercialOrderRevisionRequest,
   CommercialOrderTransitionRequest,
   CommercialOrderUpdateRequest,
@@ -44,6 +48,7 @@ import type {
   CommercialInvoice,
   CommercialOrder,
   CommercialOrderContact,
+  CommercialOrderDocument,
   CommercialOrderDiagnostics,
   CommercialOrderEvent,
   CommercialOrderItem,
@@ -52,6 +57,7 @@ import type {
   CommercialQuote,
   CommercialWorkflowState,
 } from "@cocalc/util/commercial-orders";
+import { COMMERCIAL_ORDER_DOCUMENT_MAX_BYTES } from "@cocalc/util/commercial-orders";
 import {
   moneyAdd,
   moneyCompare,
@@ -87,6 +93,7 @@ type RawOrder = Omit<
   | "items"
   | "contacts"
   | "quotes"
+  | "documents"
   | "invoices"
   | "payments"
   | "created_at"
@@ -179,7 +186,7 @@ function normalizeOrderRow(
   row: RawOrder,
 ): Omit<
   CommercialOrder,
-  "items" | "contacts" | "quotes" | "invoices" | "payments"
+  "items" | "contacts" | "quotes" | "documents" | "invoices" | "payments"
 > {
   return {
     ...row,
@@ -231,6 +238,16 @@ function normalizeQuoteRow(row: any): CommercialQuote {
     valid_until: iso(row.valid_until)!,
     voided_at: iso(row.voided_at),
     snapshot: row.snapshot ?? {},
+    created_at: iso(row.created_at)!,
+    updated_at: iso(row.updated_at)!,
+  };
+}
+
+function normalizeOrderDocumentRow(row: any): CommercialOrderDocument {
+  const { document_data: _documentData, ...metadata } = row;
+  return {
+    ...metadata,
+    voided_at: iso(row.voided_at),
     created_at: iso(row.created_at)!,
     updated_at: iso(row.updated_at)!,
   };
@@ -466,7 +483,7 @@ async function loadOrder(
   forUpdate = false,
 ): Promise<CommercialOrder> {
   const orderId = await resolveOrderId(client, id, forUpdate);
-  const [orderResult, items, contacts, quotes, invoices, payments] =
+  const [orderResult, items, contacts, quotes, documents, invoices, payments] =
     await Promise.all([
       client.query<RawOrder>("SELECT * FROM commercial_orders WHERE id=$1", [
         orderId,
@@ -490,6 +507,15 @@ async function loadOrder(
         [orderId],
       ),
       client.query(
+        `SELECT id,commercial_order_id,document_kind,status,document_reference,
+                note,document_filename,document_mime_type,document_sha256,
+                document_size,created_by_account_id,voided_by_account_id,
+                voided_at,idempotency_key,created_at,updated_at
+           FROM commercial_order_documents
+          WHERE commercial_order_id=$1 ORDER BY created_at DESC,id`,
+        [orderId],
+      ),
+      client.query(
         "SELECT * FROM commercial_invoices WHERE commercial_order_id=$1 ORDER BY created_at DESC,id",
         [orderId],
       ),
@@ -503,6 +529,7 @@ async function loadOrder(
     items: items.rows.map(normalizeItemRow),
     contacts: contacts.rows.map(normalizeContactRow),
     quotes: quotes.rows.map(normalizeQuoteRow),
+    documents: documents.rows.map(normalizeOrderDocumentRow),
     invoices: invoices.rows.map(normalizeInvoiceRow),
     payments: payments.rows.map(normalizePaymentRow),
   } as CommercialOrder;
@@ -1472,6 +1499,196 @@ export async function getCommercialQuoteDocument(
   }
   return {
     quote: normalizeQuoteRow(row),
+    content_base64: row.document_data.toString("base64"),
+  };
+}
+
+function normalizeCommercialOrderDocumentUpload(
+  opts: CommercialOrderDocumentUploadRequest,
+): {
+  document: Buffer;
+  filename: string;
+  reference: string | null;
+  note: string | null;
+} {
+  if (opts.document_kind !== "purchase_order") {
+    throw Error("document_kind must be purchase_order");
+  }
+  const filename = `${opts.document_filename ?? ""}`.trim();
+  if (
+    !filename ||
+    filename.length > 255 ||
+    filename.includes("/") ||
+    filename.includes("\\") ||
+    !filename.toLowerCase().endsWith(".pdf")
+  ) {
+    throw Error("document_filename must be a plain PDF filename");
+  }
+  const encoded = `${opts.content_base64 ?? ""}`.trim();
+  const maximumEncodedLength =
+    Math.ceil(COMMERCIAL_ORDER_DOCUMENT_MAX_BYTES / 3) * 4;
+  if (
+    !encoded ||
+    encoded.length > maximumEncodedLength ||
+    encoded.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)
+  ) {
+    throw Error("purchase order content must be canonical base64");
+  }
+  const document = Buffer.from(encoded, "base64");
+  if (document.toString("base64") !== encoded) {
+    throw Error("purchase order content is not valid base64");
+  }
+  if (
+    !document.length ||
+    document.length > COMMERCIAL_ORDER_DOCUMENT_MAX_BYTES
+  ) {
+    throw Error("purchase order PDF must be between 1 byte and 5 MiB");
+  }
+  if (document.subarray(0, 5).toString("ascii") !== "%PDF-") {
+    throw Error("purchase order document is not a PDF");
+  }
+  const reference = `${opts.document_reference ?? ""}`.trim() || null;
+  if (reference && reference.length > 240) {
+    throw Error("document_reference must be at most 240 characters");
+  }
+  const note = `${opts.note ?? ""}`.trim() || null;
+  if (note && note.length > 2_000) {
+    throw Error("document note must be at most 2000 characters");
+  }
+  return { document, filename, reference, note };
+}
+
+export async function uploadCommercialOrderDocument(
+  opts: CommercialOrderDocumentUploadRequest,
+): Promise<CommercialOrder> {
+  const { document, filename, reference, note } =
+    normalizeCommercialOrderDocumentUpload(opts);
+  const documentSha256 = createHash("sha256").update(document).digest("hex");
+  const rowIdempotencyKey = commercialIdempotencyKey(
+    "document-uploaded",
+    opts as any,
+  );
+  return await mutateOrder(
+    "document-uploaded",
+    opts,
+    async (client, before) => {
+      if (!opts.account_id) throw Error("account_id is required");
+      const existingReference = `${before.po_number ?? ""}`.trim();
+      if (reference && existingReference && reference !== existingReference) {
+        throw Error(
+          `purchase order reference conflicts with existing PO number ${existingReference}`,
+        );
+      }
+      const duplicate = await client.query<{ id: string }>(
+        `SELECT id FROM commercial_order_documents
+        WHERE commercial_order_id=$1 AND document_kind=$2
+          AND document_sha256=$3 AND status='active' LIMIT 1`,
+        [before.id, opts.document_kind, documentSha256],
+      );
+      if (duplicate.rows[0]) {
+        throw Error("this purchase order PDF is already attached to the order");
+      }
+      const documentId = randomUUID();
+      await client.query(
+        `INSERT INTO commercial_order_documents
+         (id,commercial_order_id,document_kind,status,document_reference,note,
+          document_filename,document_mime_type,document_sha256,document_size,
+          document_data,created_by_account_id,idempotency_key,created_at,updated_at)
+       VALUES ($1,$2,$3,'active',$4,$5,$6,'application/pdf',$7,$8,$9,$10,$11,NOW(),NOW())`,
+        [
+          documentId,
+          before.id,
+          opts.document_kind,
+          reference,
+          note,
+          filename,
+          documentSha256,
+          document.length,
+          document,
+          opts.account_id,
+          rowIdempotencyKey,
+        ],
+      );
+      return {
+        changes:
+          reference && !existingReference
+            ? { po_number: reference }
+            : undefined,
+        metadata: {
+          commercial_order_document_id: documentId,
+          document_kind: opts.document_kind,
+          document_reference: reference,
+          document_filename: filename,
+          document_sha256: documentSha256,
+          document_size: document.length,
+        },
+      };
+    },
+  );
+}
+
+export async function voidCommercialOrderDocument(
+  opts: CommercialOrderDocumentVoidRequest,
+): Promise<CommercialOrder> {
+  return await mutateOrder("document-voided", opts, async (client, before) => {
+    if (!opts.account_id) throw Error("account_id is required");
+    const { rows } = await client.query<{
+      id: string;
+      document_kind: string;
+      document_filename: string;
+      status: string;
+    }>(
+      `SELECT id,document_kind,document_filename,status
+         FROM commercial_order_documents
+        WHERE id=$1 AND commercial_order_id=$2 FOR UPDATE`,
+      [opts.commercial_order_document_id, before.id],
+    );
+    const document = rows[0];
+    if (!document) throw Error("commercial order document not found");
+    if (document.status === "void") {
+      throw Error("commercial order document is already void");
+    }
+    await client.query(
+      `UPDATE commercial_order_documents SET status='void',voided_at=NOW(),
+              voided_by_account_id=$2,updated_at=NOW() WHERE id=$1`,
+      [document.id, opts.account_id],
+    );
+    return {
+      metadata: {
+        commercial_order_document_id: document.id,
+        document_kind: document.document_kind,
+        document_filename: document.document_filename,
+      },
+    };
+  });
+}
+
+export async function getCommercialOrderDocument(
+  opts: CommercialOrderDocumentDownloadRequest,
+): Promise<CommercialOrderDocumentDownload> {
+  assertSeedAuthority();
+  requireReason(opts.reason);
+  const orderId = await resolveOrderId(getPool(), opts.id);
+  const { rows } = await getPool().query<any>(
+    `SELECT * FROM commercial_order_documents
+      WHERE id=$1 AND commercial_order_id=$2`,
+    [opts.commercial_order_document_id, orderId],
+  );
+  const row = rows[0];
+  if (!row) throw Error("commercial order document not found");
+  if (!Buffer.isBuffer(row.document_data)) {
+    throw Error("commercial order document is not available");
+  }
+  if (row.document_data.length > COMMERCIAL_ORDER_DOCUMENT_MAX_BYTES) {
+    throw Error("commercial order document exceeds the download limit");
+  }
+  const sha256 = createHash("sha256").update(row.document_data).digest("hex");
+  if (sha256 !== row.document_sha256) {
+    throw Error("commercial order document failed its integrity check");
+  }
+  return {
+    document: normalizeOrderDocumentRow(row),
     content_base64: row.document_data.toString("base64"),
   };
 }

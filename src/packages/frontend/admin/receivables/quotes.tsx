@@ -31,6 +31,7 @@ import type {
 } from "@cocalc/util/commercial-orders";
 import {
   formatDate,
+  downloadBase64Pdf,
   formatMoney,
   formatReceivablesError,
   humanizeKey,
@@ -41,19 +42,6 @@ const { Paragraph, Text } = Typography;
 interface IssueQuoteFormValues {
   valid_until: string;
   reason: string;
-}
-
-function downloadBase64Pdf(content: string, filename: string): void {
-  const binary = atob(content);
-  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-  const url = URL.createObjectURL(
-    new Blob([bytes], { type: "application/pdf" }),
-  );
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function quoteDisplayStatus(quote: CommercialQuote): string {

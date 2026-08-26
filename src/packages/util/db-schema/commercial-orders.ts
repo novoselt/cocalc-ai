@@ -328,6 +328,75 @@ Table({
 });
 
 Table({
+  name: "commercial_order_documents",
+  rules: {
+    primary_key: "id",
+    pg_indexes: [
+      "commercial_order_id",
+      "document_kind",
+      "status",
+      "created_at",
+    ],
+    pg_unique_indexes: ["idempotency_key"],
+  },
+  fields: {
+    id: { type: "uuid", not_null: true },
+    commercial_order_id: { type: "uuid", not_null: true },
+    document_kind: {
+      type: "string",
+      pg_type: "VARCHAR(32)",
+      not_null: true,
+      pg_check: "CHECK (document_kind IN ('purchase_order'))",
+    },
+    status: {
+      type: "string",
+      pg_type: "VARCHAR(32)",
+      not_null: true,
+      pg_default: "'active'::character varying",
+      pg_check:
+        "CHECK (status IN ('active','void')) " +
+        "CHECK (status <> 'void' OR (voided_at IS NOT NULL AND voided_by_account_id IS NOT NULL))",
+    },
+    document_reference: { type: "string" },
+    note: { type: "string" },
+    document_filename: {
+      type: "string",
+      pg_type: "VARCHAR(255)",
+      not_null: true,
+      pg_check: "CHECK (btrim(document_filename) <> '')",
+    },
+    document_mime_type: {
+      type: "string",
+      pg_type: "VARCHAR(64)",
+      not_null: true,
+      pg_check: "CHECK (document_mime_type = 'application/pdf')",
+    },
+    document_sha256: {
+      type: "string",
+      pg_type: "VARCHAR(64)",
+      not_null: true,
+      pg_check: "CHECK (document_sha256 ~ '^[0-9a-f]{64}$')",
+    },
+    document_size: {
+      type: "integer",
+      not_null: true,
+      pg_check: "CHECK (document_size > 0 AND document_size <= 5242880)",
+    },
+    document_data: { type: "Buffer", not_null: true },
+    created_by_account_id: {
+      type: "uuid",
+      not_null: true,
+      render: { type: "account" },
+    },
+    voided_by_account_id: { type: "uuid", render: { type: "account" } },
+    voided_at: { type: "timestamp" },
+    idempotency_key: { type: "string", not_null: true },
+    created_at: { type: "timestamp", not_null: true, pg_default: "now()" },
+    updated_at: { type: "timestamp", not_null: true, pg_default: "now()" },
+  },
+});
+
+Table({
   name: "commercial_invoices",
   rules: {
     primary_key: "id",

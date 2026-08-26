@@ -25,6 +25,10 @@ import type {
   CommercialOrderListRequest,
   CommercialOrderListResponse,
   CommercialOrderNoteRequest,
+  CommercialOrderDocumentDownload,
+  CommercialOrderDocumentDownloadRequest,
+  CommercialOrderDocumentUploadRequest,
+  CommercialOrderDocumentVoidRequest,
   CommercialOrderRevisionRequest,
   CommercialOrderTransitionRequest,
   CommercialOrderUpdateRequest,
@@ -273,6 +277,30 @@ export async function quoteDocument(
   opts: CommercialQuoteDocumentRequest,
 ): Promise<CommercialQuoteDocument> {
   return await invoke("quoteDocument", opts);
+}
+
+export async function uploadDocument(
+  opts: CommercialOrderDocumentUploadRequest,
+): Promise<CommercialOrder> {
+  return await invoke("uploadDocument", opts, {
+    fresh: true,
+    capability: "mutate",
+  });
+}
+
+export async function voidDocument(
+  opts: CommercialOrderDocumentVoidRequest,
+): Promise<CommercialOrder> {
+  return await invoke("voidDocument", opts, {
+    fresh: true,
+    capability: "mutate",
+  });
+}
+
+export async function downloadDocument(
+  opts: CommercialOrderDocumentDownloadRequest,
+): Promise<CommercialOrderDocumentDownload> {
+  return await invoke("downloadDocument", opts);
 }
 
 export async function invoicePreview(

@@ -66,6 +66,7 @@ import { SiteLicenseReference } from "./site-license-reference";
 import { AccountSelector } from "./account-selector";
 import { BillingDetailsModal } from "./billing-details";
 import { CommercialQuotesCard } from "./quotes";
+import { CommercialOrderDocumentsCard } from "./documents";
 import "./receivables.css";
 
 const { Paragraph, Text, Title } = Typography;
@@ -1634,6 +1635,14 @@ export function ReceivableOrderDetail({
       </Card>
 
       <CommercialQuotesCard
+        order={order}
+        onOrderChanged={async (saved) => {
+          setOrder(saved);
+          await reloadEvents(saved.id);
+        }}
+      />
+
+      <CommercialOrderDocumentsCard
         order={order}
         onOrderChanged={async (saved) => {
           setOrder(saved);
