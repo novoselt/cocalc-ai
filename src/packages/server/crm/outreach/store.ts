@@ -1338,7 +1338,9 @@ export async function addOutreachRecipient(
     ),
   };
   const previewDelivery = deliveryRow({
-    id: "preview",
+    // Preflight queries compare this value against UUID columns even though the
+    // preview is never persisted.
+    id: randomUUID(),
     ...proposed,
     task_id: null,
     state: "draft",
