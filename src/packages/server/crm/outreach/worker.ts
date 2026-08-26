@@ -1220,7 +1220,7 @@ async function enqueueIndeterminateReconciliation(): Promise<number> {
       (id,delivery_id,operation,idempotency_key,payload_hash,state,attempt_number,provider_external_id,
        rate_limit_snapshot,request_payload,not_before)
      SELECT gen_random_uuid(),p.delivery_id,'reconcile_ticket','reconcile-indeterminate:'||p.id,
-       encode(digest(('reconcile:'||p.id)::bytea,'sha256'),'hex'),'queued',p.attempt_number,
+       md5('reconcile:'||p.id),'queued',p.attempt_number,
        p.provider_external_id,'{}'::jsonb,
        jsonb_build_object('target_operation_id',p.id,'target_operation',p.operation),NOW()
        FROM crm_outreach_provider_operations p
@@ -1239,7 +1239,7 @@ async function enqueuePeriodicReconciliation(limit: number): Promise<number> {
        rate_limit_snapshot,request_payload,not_before)
      SELECT gen_random_uuid(),d.id,'reconcile_ticket',
        'periodic-reconcile:'||d.id||':'||floor(extract(epoch from NOW())/900)::bigint,
-       encode(digest(('periodic:'||d.id)::bytea,'sha256'),'hex'),'queued',1,d.provider_external_id,
+       md5('periodic:'||d.id),'queued',1,d.provider_external_id,
        '{}'::jsonb,'{}'::jsonb,NOW()
        FROM crm_outreach_deliveries d
       WHERE d.state IN ('notification_requested','replied') AND d.zendesk_ticket_id IS NOT NULL
