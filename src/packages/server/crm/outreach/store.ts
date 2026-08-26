@@ -30,6 +30,8 @@ import type {
   CrmOutreachLimitsRequest,
   CrmOutreachPreview,
   CrmOutreachPreviewRequest,
+  CrmOutreachProviderOperationListRequest,
+  CrmOutreachProviderOperationListResponse,
   CrmOutreachRecipientRemoveRequest,
   CrmOutreachRecipientRequest,
   CrmOutreachSyncRequest,
@@ -61,6 +63,7 @@ import {
   type CrmOutreachDiagnostics,
   type CrmOutreachEngagementEvent,
   type CrmOutreachLimits,
+  type CrmOutreachProviderOperation,
   type CrmOutreachTemplate,
 } from "@cocalc/util/crm-outreach";
 import { isValidUUID } from "@cocalc/util/misc";
@@ -300,6 +303,24 @@ function engagementRow(row: any): CrmOutreachEngagementEvent {
     "observed_at",
     "ingested_at",
   ]) as CrmOutreachEngagementEvent;
+}
+
+function providerOperationRow(row: any): CrmOutreachProviderOperation {
+  return timestampFields(
+    {
+      ...row,
+      rate_limit_snapshot: row.rate_limit_snapshot ?? {},
+      request_payload: row.request_payload ?? {},
+    },
+    [
+      "lease_expires_at",
+      "not_before",
+      "created_at",
+      "started_at",
+      "finished_at",
+      "updated_at",
+    ],
+  ) as CrmOutreachProviderOperation;
 }
 
 function taskRow(row: any): CrmTask {
@@ -1697,6 +1718,24 @@ export async function getOutreachDelivery(
   assertSeed();
   reason(opts.reason);
   return await resolveDelivery(getPool(), opts.delivery);
+}
+
+export async function listOutreachProviderOperations(
+  opts: CrmOutreachProviderOperationListRequest,
+): Promise<CrmOutreachProviderOperationListResponse> {
+  assertSeed();
+  reason(opts.reason);
+  const delivery = await resolveDelivery(getPool(), opts.delivery);
+  const rowLimit = limit(opts.limit);
+  const { rows } = await getPool().query(
+    `SELECT * FROM crm_outreach_provider_operations
+      WHERE delivery_id=$1 ORDER BY created_at DESC,id LIMIT $2`,
+    [delivery.id, rowLimit],
+  );
+  return {
+    operations: rows.map(providerOperationRow),
+    truncated: rows.length === rowLimit,
+  };
 }
 
 export async function mutateOutreachDelivery(

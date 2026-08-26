@@ -16,6 +16,7 @@ import type {
   CrmOutreachFollowUpPolicy,
   CrmOutreachKind,
   CrmOutreachLimits,
+  CrmOutreachProviderOperation,
   CrmOutreachSuppressionReason,
   CrmOutreachSuppressionScope,
   CrmOutreachTemplate,
@@ -607,6 +608,15 @@ export interface CrmOutreachEngagementListResponse {
   truncated: boolean;
 }
 
+export interface CrmOutreachProviderOperationListRequest extends CrmPageRequest {
+  delivery: string;
+}
+
+export interface CrmOutreachProviderOperationListResponse {
+  operations: CrmOutreachProviderOperation[];
+  truncated: boolean;
+}
+
 export interface CrmOutreachFollowUpListRequest extends CrmPageRequest {
   organization?: string;
   opportunity?: string;
@@ -759,6 +769,9 @@ export interface AdminCrmApi {
   getOutreachDelivery: (
     opts: CrmOutreachDeliveryGetRequest,
   ) => Promise<CrmOutreachDelivery>;
+  listOutreachProviderOperations: (
+    opts: CrmOutreachProviderOperationListRequest,
+  ) => Promise<CrmOutreachProviderOperationListResponse>;
   previewOutreachBatch: (
     opts: CrmOutreachPreviewRequest,
   ) => Promise<CrmOutreachPreview>;
@@ -858,6 +871,7 @@ export const adminCrm = {
   getOutreachBatch: authFirstRequireAccount,
   listOutreachDeliveries: authFirstRequireAccount,
   getOutreachDelivery: authFirstRequireAccount,
+  listOutreachProviderOperations: authFirstRequireAccount,
   previewOutreachBatch: authFirstRequireAccount,
   listContactSuppressions: authFirstRequireAccount,
   getOutreachLimits: authFirstRequireAccount,

@@ -7,7 +7,11 @@ import { Select } from "antd";
 import { useEffect, useRef, useState } from "react";
 
 import { webapp_client } from "@cocalc/frontend/webapp-client";
-import type { CrmOrganizationSummary, CrmPerson } from "@cocalc/util/crm";
+import type {
+  CrmOpportunity,
+  CrmOrganizationSummary,
+  CrmPerson,
+} from "@cocalc/util/crm";
 
 export function CustomerSelector({
   disabled,
@@ -126,6 +130,67 @@ export function PersonSelector({
         };
       })}
       placeholder="Search reviewed customer contacts"
+      showSearch
+      style={{ width: "100%" }}
+      value={value || undefined}
+    />
+  );
+}
+
+export function OpportunitySelector({
+  disabled,
+  onChange,
+  organization,
+  value,
+}: {
+  disabled?: boolean;
+  onChange?: (value?: string) => void;
+  organization?: string;
+  value?: string;
+}) {
+  const [options, setOptions] = useState<CrmOpportunity[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!organization) {
+      setOptions([]);
+      return;
+    }
+    setLoading(true);
+    void webapp_client.conat_client.hub.adminCrm
+      .listOpportunities({
+        organization,
+        reason: "List CRM opportunities for selector",
+        limit: 50,
+      })
+      .then((result) => {
+        if (!cancelled) setOptions(result.opportunities);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [organization]);
+
+  return (
+    <Select
+      allowClear
+      aria-label="CRM opportunity"
+      disabled={disabled || !organization}
+      loading={loading}
+      onChange={onChange}
+      options={options.map((opportunity) => ({
+        label: `${opportunity.name} · ${opportunity.stage.replace(/_/g, " ")}`,
+        value: opportunity.id,
+      }))}
+      placeholder={
+        organization
+          ? "Select a customer opportunity"
+          : "Select an organization first"
+      }
       showSearch
       style={{ width: "100%" }}
       value={value || undefined}

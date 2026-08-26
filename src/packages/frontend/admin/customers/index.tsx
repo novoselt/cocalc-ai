@@ -20,6 +20,7 @@ import {
   Modal,
   Progress,
   Row,
+  Segmented,
   Select,
   Space,
   Spin,
@@ -68,6 +69,7 @@ import { SiteLicenseSelector } from "../receivables/site-license-reference";
 import { crmMutationContext, filterCrmActivities } from "./helpers";
 import { CustomerSelector } from "./selector";
 import { TimelineFilter } from "./timeline-filter";
+import { CustomerOutreachCard, OutreachAdmin } from "./outreach";
 import "./customers.css";
 
 export { CustomerSelector } from "./selector";
@@ -1352,10 +1354,12 @@ function CustomerDetail({
   customerId,
   onAction,
   onBack,
+  onOpenOutreach,
 }: {
   customerId: string;
   onAction: (action: ActionState) => void;
   onBack: () => void;
+  onOpenOutreach: () => void;
 }) {
   const [customer, setCustomer] = useState<CrmCustomer360 | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1823,6 +1827,11 @@ function CustomerDetail({
               )}
             </Flex>
           </Card>
+
+          <CustomerOutreachCard
+            onOpenOutreach={onOpenOutreach}
+            organization={organization.id}
+          />
         </Flex>
 
         <Flex vertical gap={14} style={{ minWidth: 0 }}>
@@ -1973,6 +1982,9 @@ export function CustomersAdmin({
   const [action, setAction] = useState<ActionState | null>(null);
   const [detail, setDetail] = useState<CrmCustomer360 | undefined>();
   const [reloadKey, setReloadKey] = useState(0);
+  const [workspace, setWorkspace] = useState<"relationships" | "outreach">(
+    "relationships",
+  );
 
   useEffect(() => {
     if (!customerId) {
@@ -2002,21 +2014,51 @@ export function CustomersAdmin({
 
   return (
     <>
-      {customerId ? (
-        <CustomerDetail
-          key={`${customerId}:${reloadKey}`}
-          customerId={customerId}
-          onAction={setAction}
-          onBack={onBack}
-        />
-      ) : (
-        <CustomerQueue
-          onCreate={() =>
-            setAction({ kind: "create-customer", title: "Create customer" })
+      <Flex vertical gap={14}>
+        <Segmented
+          aria-label="Customer administration workspace"
+          onChange={(value) =>
+            setWorkspace(value as "relationships" | "outreach")
           }
-          onOpen={onOpenCustomer}
+          options={[
+            {
+              label: (
+                <Space>
+                  <Icon name="address-card" /> Relationships
+                </Space>
+              ),
+              value: "relationships",
+            },
+            {
+              label: (
+                <Space>
+                  <Icon name="paper-plane" /> Outreach
+                </Space>
+              ),
+              value: "outreach",
+            },
+          ]}
+          value={workspace}
         />
-      )}
+        {workspace === "outreach" ? (
+          <OutreachAdmin />
+        ) : customerId ? (
+          <CustomerDetail
+            key={`${customerId}:${reloadKey}`}
+            customerId={customerId}
+            onAction={setAction}
+            onBack={onBack}
+            onOpenOutreach={() => setWorkspace("outreach")}
+          />
+        ) : (
+          <CustomerQueue
+            onCreate={() =>
+              setAction({ kind: "create-customer", title: "Create customer" })
+            }
+            onOpen={onOpenCustomer}
+          />
+        )}
+      </Flex>
       <CustomerActionModal
         action={action}
         customer={detail}

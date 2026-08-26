@@ -54,6 +54,7 @@ import {
   listOutreachDeliveries,
   listOutreachEngagementEvents,
   listOutreachFollowups,
+  listOutreachProviderOperations,
   listOutreachTemplates,
   mutateContactSuppression,
   mutateOutreachDelivery,
@@ -168,6 +169,8 @@ export async function dispatchCrmSeedRequest(
       return await listOutreachDeliveries(opts);
     case "getOutreachDelivery":
       return await getOutreachDelivery(opts);
+    case "listOutreachProviderOperations":
+      return await listOutreachProviderOperations(opts);
     case "previewOutreachBatch":
       return await previewOutreachBatch(opts);
     case "listContactSuppressions":

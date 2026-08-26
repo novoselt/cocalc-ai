@@ -1288,15 +1288,30 @@ function registerOutreach(crm: Command, deps: CrmCommandDeps): void {
     .description("show an outreach delivery by UUID, provider key, or ticket")
     .option("--reason <text>", "audit reason")
     .action(async (delivery: string, opts: any, cmd: Command) =>
-      deps.withContext(
-        cmd,
-        "admin crm outreach show",
-        async (ctx) =>
-          await ctx.hub.adminCrm.getOutreachDelivery({
+      deps.withContext(cmd, "admin crm outreach show", async (ctx) => {
+        const reason = readReason(opts.reason, "Review CRM outreach delivery");
+        const [record, operations, engagement] = await Promise.all([
+          ctx.hub.adminCrm.getOutreachDelivery({ delivery, reason }),
+          ctx.hub.adminCrm.listOutreachProviderOperations({
             delivery,
-            reason: readReason(opts.reason, "Review CRM outreach delivery"),
+            reason,
+            limit: 100,
           }),
-      ),
+          ctx.hub.adminCrm.listOutreachEngagementEvents({
+            delivery,
+            reason,
+            limit: 100,
+          }),
+        ]);
+        return {
+          delivery: record,
+          provider_operations: operations,
+          engagement,
+          support_show_command: record.zendesk_ticket_id
+            ? `cocalc admin support show ${record.zendesk_ticket_id}`
+            : undefined,
+        };
+      }),
     );
   outreach
     .command("preview <batch>")

@@ -346,3 +346,72 @@ test("CRM export writes sensitive data to the requested private file", async () 
     output: outputFile,
   });
 });
+
+test("outreach show includes durable provider and engagement evidence", async () => {
+  const calls: string[] = [];
+  const delivery = {
+    id: "33333333-3333-4333-8333-333333333333",
+    zendesk_ticket_id: 999999,
+  };
+  const { program, output } = setup({
+    getOutreachDelivery: async () => {
+      calls.push("delivery");
+      return delivery;
+    },
+    listOutreachProviderOperations: async () => {
+      calls.push("operations");
+      return { operations: [{ id: "operation-1" }], truncated: false };
+    },
+    listOutreachEngagementEvents: async () => {
+      calls.push("engagement");
+      return { events: [{ id: "view-1" }], truncated: false };
+    },
+  });
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "outreach",
+    "show",
+    delivery.id,
+    "--reason",
+    "review outreach provider recovery evidence",
+  ]);
+
+  assert.deepEqual(calls.sort(), ["delivery", "engagement", "operations"]);
+  assert.deepEqual((output() as any).data, {
+    delivery,
+    provider_operations: {
+      operations: [{ id: "operation-1" }],
+      truncated: false,
+    },
+    engagement: { events: [{ id: "view-1" }], truncated: false },
+    support_show_command: "cocalc admin support show 999999",
+  });
+});
+
+test("outreach help exposes the shared runbook and operations families", () => {
+  const { program } = setup({});
+  const admin = program.commands.find((command) => command.name() === "admin");
+  const crm = admin?.commands.find((command) => command.name() === "crm");
+  const outreach = crm?.commands.find(
+    (command) => command.name() === "outreach",
+  );
+  assert.ok(outreach);
+  let help = "";
+  outreach.configureOutput({ writeOut: (text) => (help += text) });
+  outreach.outputHelp();
+  assert.match(help, /docs show admin\/crm-outreach --include-admin/);
+  for (const family of [
+    "batch",
+    "templates",
+    "suppressions",
+    "followups",
+    "engagement",
+    "diagnostics",
+  ]) {
+    assert.ok(outreach.commands.some((command) => command.name() === family));
+  }
+});

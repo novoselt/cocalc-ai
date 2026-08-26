@@ -174,6 +174,9 @@ export const listOutreachBatches = read("listOutreachBatches");
 export const getOutreachBatch = read("getOutreachBatch");
 export const listOutreachDeliveries = read("listOutreachDeliveries");
 export const getOutreachDelivery = read("getOutreachDelivery");
+export const listOutreachProviderOperations = read(
+  "listOutreachProviderOperations",
+);
 export const previewOutreachBatch = read("previewOutreachBatch");
 export const listContactSuppressions = read("listContactSuppressions");
 export const getOutreachLimits = read("getOutreachLimits");
