@@ -6,6 +6,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { getLogger } from "@cocalc/backend/logger";
+import type { BayOpsCrmOutreachZendeskEvent } from "@cocalc/conat/inter-bay/api";
 import type { Request, Response } from "express";
 
 import getPool from "@cocalc/database/pool";
@@ -16,16 +17,8 @@ import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 
 const logger = getLogger("server:crm:outreach:webhook");
 const MAX_AGE_MS = 5 * 60_000;
-const NIL_ACCOUNT_ID = "00000000-0000-0000-0000-000000000000";
 
-export interface OutreachZendeskEventEnvelope {
-  event_id: string;
-  event_type: string;
-  zendesk_ticket_id: number;
-  zendesk_comment_id?: number;
-  occurred_at: string;
-  payload?: Record<string, unknown>;
-}
+export type OutreachZendeskEventEnvelope = BayOpsCrmOutreachZendeskEvent;
 
 function singleHeader(value: string | string[] | undefined): string {
   return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
@@ -82,6 +75,10 @@ export function normalizeOutreachZendeskEvent(
     throw Error("zendesk_ticket_id must be a positive integer");
   if (!Number.isFinite(occurredAt.valueOf()))
     throw Error("occurred_at must be a timestamp");
+  const suppliedPayload =
+    value?.payload != null && typeof value.payload === "object"
+      ? value.payload
+      : {};
   return {
     event_id: eventId,
     event_type: eventType,
@@ -91,22 +88,62 @@ export function normalizeOutreachZendeskEvent(
     occurred_at: occurredAt.toISOString(),
     payload: {
       ticket_status:
-        `${value?.ticket_status ?? value?.ticket?.status ?? ""}`.slice(0, 50),
-      source: `${value?.source ?? "zendesk-webhook"}`.slice(0, 100),
+        `${value?.ticket_status ?? value?.ticket?.status ?? suppliedPayload.ticket_status ?? ""}`.slice(
+          0,
+          50,
+        ),
+      source:
+        `${value?.source ?? suppliedPayload.source ?? "zendesk-webhook"}`.slice(
+          0,
+          100,
+        ),
     },
   };
+}
+
+export function validateOutreachZendeskEventEnvelope(
+  value: unknown,
+): OutreachZendeskEventEnvelope {
+  const event = value as Partial<OutreachZendeskEventEnvelope> | null;
+  if (event == null || typeof event !== "object") {
+    throw Error("CRM outreach Zendesk event must be an object");
+  }
+  if (typeof event.event_id !== "string") {
+    throw Error("event_id must be a string");
+  }
+  if (typeof event.event_type !== "string") {
+    throw Error("event_type must be a string");
+  }
+  if (typeof event.zendesk_ticket_id !== "number") {
+    throw Error("zendesk_ticket_id must be a number");
+  }
+  if (
+    event.zendesk_comment_id != null &&
+    typeof event.zendesk_comment_id !== "number"
+  ) {
+    throw Error("zendesk_comment_id must be a number");
+  }
+  if (typeof event.occurred_at !== "string" || !event.occurred_at.trim()) {
+    throw Error("occurred_at must be a timestamp string");
+  }
+  if (
+    event.payload != null &&
+    (typeof event.payload !== "object" || Array.isArray(event.payload))
+  ) {
+    throw Error("payload must be an object");
+  }
+  return normalizeOutreachZendeskEvent(event);
 }
 
 export async function enqueueOutreachZendeskEvent(
   event: OutreachZendeskEventEnvelope,
 ): Promise<void> {
+  const normalizedEvent = validateOutreachZendeskEventEnvelope(event);
   if (getConfiguredBayId() !== getConfiguredClusterSeedBayId()) {
     await getInterBayBridge()
       .bayOps(getConfiguredClusterSeedBayId(), { timeout_ms: 30_000 })
-      .crm({
-        action: "ingestOutreachZendeskEvent",
-        actor_account_id: NIL_ACCOUNT_ID,
-        payload: event as unknown as Record<string, unknown>,
+      .ingestCrmOutreachZendeskEventInternal({
+        event: normalizedEvent,
       });
     return;
   }
@@ -115,12 +152,12 @@ export async function enqueueOutreachZendeskEvent(
       (event_id,zendesk_ticket_id,zendesk_comment_id,event_type,occurred_at,payload,state,attempt_count,next_attempt_at)
      VALUES($1,$2,$3,$4,$5,$6,'pending',0,NOW()) ON CONFLICT(event_id) DO NOTHING`,
     [
-      event.event_id,
-      event.zendesk_ticket_id,
-      event.zendesk_comment_id ?? null,
-      event.event_type,
-      event.occurred_at,
-      event.payload ?? {},
+      normalizedEvent.event_id,
+      normalizedEvent.zendesk_ticket_id,
+      normalizedEvent.zendesk_comment_id ?? null,
+      normalizedEvent.event_type,
+      normalizedEvent.occurred_at,
+      normalizedEvent.payload ?? {},
     ],
   );
 }

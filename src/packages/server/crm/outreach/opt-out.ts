@@ -12,21 +12,24 @@ import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { addActivity } from "./store";
 import { recordOutreachSuppression } from "./observability";
 
-const NIL_ACCOUNT_ID = "00000000-0000-0000-0000-000000000000";
+export function validateOutreachOptOutToken(token: unknown): string {
+  if (typeof token !== "string" || !/^[A-Za-z0-9_-]{32,200}$/.test(token)) {
+    throw Error("invalid CRM outreach opt-out token");
+  }
+  return token;
+}
 
 export async function applyOutreachOptOut(token: string): Promise<void> {
-  if (!/^[A-Za-z0-9_-]{32,200}$/.test(token)) return;
+  const validatedToken = validateOutreachOptOutToken(token);
   if (getConfiguredBayId() !== getConfiguredClusterSeedBayId()) {
     await getInterBayBridge()
       .bayOps(getConfiguredClusterSeedBayId(), { timeout_ms: 30_000 })
-      .crm({
-        action: "applyOutreachOptOut",
-        actor_account_id: NIL_ACCOUNT_ID,
-        payload: { token },
+      .applyCrmOutreachOptOutInternal({
+        token: validatedToken,
       });
     return;
   }
-  const digest = createHash("sha256").update(token).digest("hex");
+  const digest = createHash("sha256").update(validatedToken).digest("hex");
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
