@@ -93,6 +93,10 @@ export const COMMERCIAL_INVOICE_STATUSES = [
 export type CommercialInvoiceStatus =
   (typeof COMMERCIAL_INVOICE_STATUSES)[number];
 
+export const COMMERCIAL_QUOTE_STATUSES = ["issued", "void"] as const;
+
+export type CommercialQuoteStatus = (typeof COMMERCIAL_QUOTE_STATUSES)[number];
+
 export const COMMERCIAL_PAYMENT_METHODS = [
   "card",
   "ach",
@@ -175,6 +179,29 @@ export interface CommercialInvoice {
   updated_at: string;
 }
 
+export interface CommercialQuote {
+  id: string;
+  commercial_order_id: string;
+  quote_number: string;
+  status: CommercialQuoteStatus;
+  currency: string;
+  subtotal: string;
+  total: string;
+  issued_at: string;
+  valid_until: string;
+  voided_at?: string | null;
+  document_filename: string;
+  document_mime_type: "application/pdf";
+  document_sha256: string;
+  document_size: number;
+  snapshot: Record<string, unknown>;
+  created_by_account_id: string;
+  voided_by_account_id?: string | null;
+  idempotency_key: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CommercialPayment {
   id: string;
   commercial_order_id: string;
@@ -243,13 +270,14 @@ export interface CommercialOrder {
   version: number;
   items: CommercialOrderItem[];
   contacts: CommercialOrderContact[];
+  quotes: CommercialQuote[];
   invoices: CommercialInvoice[];
   payments: CommercialPayment[];
 }
 
 export interface CommercialOrderSummary extends Omit<
   CommercialOrder,
-  "items" | "contacts" | "invoices" | "payments" | "terms_snapshot"
+  "items" | "contacts" | "quotes" | "invoices" | "payments" | "terms_snapshot"
 > {
   billing_email?: string | null;
   latest_invoice_id?: string | null;

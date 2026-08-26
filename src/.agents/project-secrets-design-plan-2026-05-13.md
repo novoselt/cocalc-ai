@@ -60,7 +60,8 @@ The section supports:
 - replace a secret value.
 - delete a secret.
 - show runtime path for each secret.
-- explain that changes require project restart.
+- explain that changes refresh the running mount without a project restart,
+  while programs that cache values may need their own reload.
 
 The UI does not reveal secret values after save. A user with runtime access can
 inspect the mounted file in a terminal if they truly need the value.
@@ -308,7 +309,7 @@ Suggested UI:
 - list source secret names only.
 - select all or selected names.
 - choose conflict behavior: skip existing or overwrite existing.
-- show restart-required notice for the target project.
+- show whether the target project's running mount refreshed or needs a retry.
 
 ## Project Clone Behavior
 
@@ -434,9 +435,10 @@ The host-side plaintext directory must be:
 Use atomic write into a temporary directory and rename into place to avoid
 partially materialized secret sets.
 
-Secret changes require project restart. Do not implement hot reload unless there
-is a strong future product reason; restart-required keeps the feature simpler
-and easier to audit.
+Secret changes refresh the running mount atomically without restarting the
+project. A stopped project caches the latest generation for its next start. A
+program that already read and cached a secret may still need its own reload;
+deleting a pathname cannot revoke a value that a process already holds.
 
 `COCALC_SECRETS` should be set even when a project has zero secrets. Prefer
 mounting an empty read-only directory for predictable scripts.
@@ -524,7 +526,8 @@ Project Settings:
 - actions: add, replace, delete.
 - copy secrets from another project by name, without revealing values.
 - no reveal button.
-- after add/replace/delete/copy, show “restart project to apply”.
+- after add/replace/delete/copy, show whether the running mount is current or
+  needs a retry; do not tell users to restart the project.
 - clone-project modal says project secrets are copied into the clone.
 
 Suggested copy:
@@ -607,7 +610,7 @@ Recommended first policy:
 - Add add/replace/delete flows.
 - Add copy-from-project flow.
 - Ensure no secret value reveal path.
-- Show restart-required notice.
+- Show live-refresh success or retry-pending status.
 
 ### Phase 7: End-to-End Security Audit
 
@@ -623,10 +626,12 @@ Recommended first policy:
       part of project filesystem backups.
 - [x] Verify project start logs redact plaintext runtime secrets. A first audit
       pass found and fixed a serious logging issue here.
-- [x] Verify project restart applies changes; manual testing confirmed mounted
-      secret and SSH deploy-key behavior after restart.
+- [x] Verify a running project sees add, replace, and delete changes without a
+      project restart; manual testing confirmed mounted secret and SSH
+      deploy-key behavior.
 - [x] Verify copied secrets are re-encrypted under the target project metadata
-      and only materialize in the target runtime after restart.
+      and materialize live in the target runtime, or at its next start when the
+      target is stopped.
 - [x] Verify cloned projects copy secrets through the re-encrypting copy helper
       and fail clone creation if secret copy fails.
 - [x] Verify central hub outage behavior: a project-host with warm encrypted
@@ -643,7 +648,8 @@ Recommended first policy:
 - Secret names are case-sensitive.
 - Caps are fixed constants, not membership-tier based.
 - Project-host receives the derived `project-secrets:v1` key at startup.
-- Secret changes require project restart.
+- Secret changes refresh a running project's mounted files without a project
+  restart; applications that cache values manage their own reloads.
 - Durable audit events are deferred. Current logging is sufficient for this
   first implementation, but product-grade durable audit history can be added
   later without changing the storage/runtime model.
@@ -656,7 +662,7 @@ unless we need to store operational secrets inside CoCalc projects for launch.
 If implemented before release, keep the implementation intentionally strict:
 
 - no reveal.
-- restart required.
+- live mount refresh with visible retry state.
 - hard caps.
 - project-scoped only.
 - file mounts only, no env injection.

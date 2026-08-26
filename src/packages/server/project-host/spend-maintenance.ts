@@ -74,17 +74,28 @@ type CandidateHostRow = {
   metadata: any;
 };
 
-function billingStateForHost(
+export function billingStateForHost(
   row: CandidateHostRow,
 ): DedicatedHostBillingState | undefined {
   const status = `${row.status ?? ""}`.trim().toLowerCase();
+  const runtime = row.metadata?.runtime;
+  const instanceId = `${runtime?.instance_id ?? ""}`.trim();
+  const providerStatus = `${runtime?.provider_status ?? ""}`
+    .trim()
+    .toLowerCase();
+
+  // A generic host error can still represent a provider VM that is accruing
+  // charges.  An explicit provider "missing" observation is different: never
+  // charge VM/GPU rates for an instance the provider says does not exist.  A
+  // retained disk may still be billable until reconciliation confirms that it
+  // is also gone, so use stopped pricing while the runtime identity remains.
+  if (providerStatus === "missing") {
+    return instanceId ? "stopped" : undefined;
+  }
   if (RUNNING_BILLING_STATUSES.has(status)) {
     return "running";
   }
-  if (
-    (status === "off" || status === "stopped") &&
-    `${row.metadata?.runtime?.instance_id ?? ""}`.trim()
-  ) {
+  if ((status === "off" || status === "stopped") && instanceId) {
     return "stopped";
   }
   return undefined;

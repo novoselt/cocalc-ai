@@ -17,6 +17,11 @@ const reviseOrder = jest.fn();
 const issueManualInvoice = jest.fn();
 const recordManualPayment = jest.fn();
 const voidInvoice = jest.fn();
+const quotePreview = jest.fn();
+const issueQuote = jest.fn();
+const voidQuote = jest.fn();
+const quoteDocument = jest.fn();
+const updateBillingDetails = jest.fn();
 const showSupportTicket = jest.fn();
 const getNames = jest.fn();
 const listSiteLicenseOverviews = jest.fn();
@@ -86,6 +91,12 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
           recordManualPayment: (...args: unknown[]) =>
             recordManualPayment(...args),
           voidInvoice: (...args: unknown[]) => voidInvoice(...args),
+          quotePreview: (...args: unknown[]) => quotePreview(...args),
+          issueQuote: (...args: unknown[]) => issueQuote(...args),
+          voidQuote: (...args: unknown[]) => voidQuote(...args),
+          quoteDocument: (...args: unknown[]) => quoteDocument(...args),
+          updateBillingDetails: (...args: unknown[]) =>
+            updateBillingDetails(...args),
           listAssignees: (...args: unknown[]) => listAssignees(...args),
         },
       },
@@ -137,6 +148,7 @@ const order: CommercialOrder = {
       updated_at: "2026-08-20T12:00:00.000Z",
     },
   ],
+  quotes: [],
   invoices: [
     {
       id: "invoice-1",
@@ -522,7 +534,7 @@ describe("receivable order detail", () => {
       expect.objectContaining({
         id: order.id,
         invoice_reference: "FIN-2026-0042",
-        due_at: "2026-09-15T12:00:00.000Z",
+        due_at: new Date("2026-09-15T12:00").toISOString(),
         document_url: "https://billing.example.edu/invoices/42",
         evidence_reference: "ERP record 42",
         expected_version: 7,
@@ -659,6 +671,103 @@ describe("receivable order detail", () => {
       within(voidDialog).getByRole("button", { name: "Void invoice" }),
     );
     await waitFor(() => expect(voidInvoice).toHaveBeenCalledTimes(1));
+  });
+
+  it("corrects billing details after fulfillment with fresh authentication", async () => {
+    const fulfilled = {
+      ...order,
+      invoices: [],
+      approved_at: "2026-08-23T12:00:00.000Z",
+      approved_by_account_id: "22222222-2222-4222-8222-222222222222",
+    };
+    getOrder.mockResolvedValue(fulfilled);
+    updateBillingDetails.mockResolvedValue({ ...fulfilled, version: 8 });
+    render(<ReceivableOrderDetail id={order.id} onBack={jest.fn()} />);
+
+    const correctionButtons = await screen.findAllByRole("button", {
+      name: "Correct billing details",
+    });
+    fireEvent.click(correctionButtons.at(-1)!);
+    const dialog = await screen.findByRole("dialog", {
+      name: "Correct billing details",
+    });
+    fireEvent.change(within(dialog).getByLabelText("Billing contact name"), {
+      target: { value: "Correct Accounts Payable" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Billing contact email"), {
+      target: { value: "correct-ap@example.edu" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Audit reason"), {
+      target: { value: "Procurement supplied the final billing contact" },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: "Save billing details (fresh authentication required)",
+      }),
+    );
+
+    await waitFor(() => expect(updateBillingDetails).toHaveBeenCalledTimes(1));
+    expect(updateBillingDetails).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: order.id,
+        expected_version: 7,
+        billing_contacts: [
+          expect.objectContaining({
+            role: "billing",
+            name_snapshot: "Correct Accounts Payable",
+            email_snapshot: "correct-ap@example.edu",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("previews and issues an immutable quote with fresh authentication", async () => {
+    const quotable = { ...order, invoices: [] };
+    const preview = {
+      order_id: order.id,
+      order_number: order.order_number,
+      organization_name: order.organization_name,
+      billing_contacts: order.contacts,
+      items: order.items,
+      currency: "usd",
+      subtotal: "3900.00",
+      total: "3900.00",
+      default_valid_until: "2026-09-30T12:00:00.000Z",
+      ready: true,
+      blockers: [],
+    };
+    getOrder.mockResolvedValue(quotable);
+    quotePreview.mockResolvedValue(preview);
+    issueQuote.mockResolvedValue({ ...quotable, version: 8 });
+    render(<ReceivableOrderDetail id={order.id} onBack={jest.fn()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Generate quote/ }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Review and issue quote",
+    });
+    expect(
+      within(dialog).getByText("Quote is ready to issue"),
+    ).toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText("Audit reason"), {
+      target: { value: "Send formal quote to procurement" },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: "Issue and store quote (fresh authentication required)",
+      }),
+    );
+
+    await waitFor(() => expect(issueQuote).toHaveBeenCalledTimes(1));
+    expect(issueQuote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: order.id,
+        expected_version: 7,
+        valid_until: "2026-09-30T12:00:00.000Z",
+      }),
+    );
   });
 
   it("removes financial and fulfillment actions from terminal orders", async () => {

@@ -59,22 +59,60 @@ leaving visibility enabled.
    owner, next action, and due date.
    Select the next action from the standard receivables task list. Put
    customer-specific instructions and context in an audited internal note.
-2. Approve the order after validating the customer agreement and delivery
+2. If procurement needs a formal pre-PO document, preview and issue a quote.
+   Download the stored PDF and attach it to the customer conversation. The PDF
+   and exact recipient, address, items, amounts, and service-term snapshot are
+   retained with the order.
+3. Approve the order after validating the customer agreement and delivery
    details.
-3. Preview the invoice. Resolve every blocker before creating a Stripe draft.
-4. Create a draft. This never sends automatically.
-5. Review the Stripe customer, contact, line items, total, currency, Net 21 (or
+4. Preview the invoice. Resolve every blocker before creating a Stripe draft.
+5. Create a draft. This never sends automatically.
+6. Review the Stripe customer, contact, line items, total, currency, Net 21 (or
    explicit negotiated) terms, PO/reference fields, and test/live mode.
-6. Send the invoice with fresh auth and the current order version.
-7. Preview and provision the site license. Provision-before-payment is allowed
+7. Send the invoice with fresh auth and the current order version.
+8. Preview and provision the site license. Provision-before-payment is allowed
    only with the explicit reviewed flag.
-8. Let Stripe webhooks update payment state. The scheduled reconciler repairs
+9. Let Stripe webhooks update payment state. The scheduled reconciler repairs
    dropped or out-of-order webhooks.
-9. The order becomes complete only when its configured collection and
-   fulfillment requirements are both satisfied.
+10. The order becomes complete only when its configured collection and
+    fulfillment requirements are both satisfied.
 
 Collection and fulfillment are intentionally independent. Provisioning a site
 license does not mark an invoice paid, and payment does not provision a license.
+
+## Quotes And Billing Corrections
+
+Quotes are first-class, customer-facing artifacts rather than temporary files.
+Issuance requires fresh auth and optimistic concurrency. An issued PDF is an
+immutable snapshot and has a stored SHA-256 digest; later order edits do not
+rewrite it. A void action changes quote status but deliberately retains the
+document and audit history.
+
+```sh
+cocalc admin receivables quote preview AR-2026-000123 --json
+cocalc admin receivables quote issue AR-2026-000123 \
+  --reason "send formal procurement quote" --json
+cocalc admin receivables quote issue AR-2026-000123 \
+  --reason "send formal procurement quote" --expected-version 4 --commit --json
+cocalc admin receivables quote download AR-2026-000123 \
+  --quote-id <uuid> --output quote.pdf
+```
+
+Use the dedicated billing correction action when procurement supplies a new
+invoice recipient or address after approval or fulfillment. It preserves the
+approved agreement and fulfillment state, replaces only billing/procurement
+contacts and future invoice address/memo fields, and records an immutable
+event. It fails closed once any non-void invoice exists; void the incorrect
+invoice before correcting and reissuing it.
+
+```sh
+cocalc admin receivables billing update AR-2026-000123 \
+  --file billing-details.json --reason "procurement supplied AP contact" --json
+```
+
+The JSON file must contain exactly one `billing` contact in
+`billing_contacts`. It may also contain `procurement_contacts`,
+`billing_address`, and `invoice_memo`.
 
 ## Recovery And Idempotency
 

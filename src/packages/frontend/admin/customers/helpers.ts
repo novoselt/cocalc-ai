@@ -57,3 +57,17 @@ export function filterCrmActivities(
     return searchable.includes(needle);
   });
 }
+
+export function safeExternalHttpUrl(
+  value: string | null | undefined,
+): string | undefined {
+  if (!value) return;
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol)) return;
+    if (!url.hostname || url.username || url.password) return;
+    return url.toString();
+  } catch {
+    return;
+  }
+}

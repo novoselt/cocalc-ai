@@ -2077,6 +2077,26 @@ export interface BayOpsCrmRequest {
   payload: Record<string, unknown>;
 }
 
+export interface BayOpsCrmOutreachZendeskEvent {
+  event_id: string;
+  event_type: string;
+  zendesk_ticket_id: number;
+  zendesk_comment_id?: number;
+  occurred_at: string;
+  payload?: {
+    ticket_status?: string;
+    source?: string;
+  };
+}
+
+export interface BayOpsCrmOutreachZendeskEventRequest {
+  event: BayOpsCrmOutreachZendeskEvent;
+}
+
+export interface BayOpsCrmOutreachOptOutRequest {
+  token: string;
+}
+
 export interface AuthTokenRequiresRequest {}
 
 export interface AuthTokenRedeemRequest {
@@ -2768,6 +2788,8 @@ export type BayOpsMethod =
   | "finish-site-funded-codex-turn"
   | "get-site-funded-codex-status"
   | "commercial-orders"
+  | "crm-outreach-ingest-zendesk-event-internal"
+  | "crm-outreach-apply-opt-out-internal"
   | "crm";
 export type ProjectCollabInviteMethod =
   | "upsert-inbox"
@@ -4466,6 +4488,12 @@ export interface InterBayBayOpsApi {
     opts: BayOpsSiteFundedCodexStatusRequest,
   ) => Promise<SiteFundedCodexStatus>;
   commercialOrders: (opts: BayOpsCommercialOrdersRequest) => Promise<unknown>;
+  ingestCrmOutreachZendeskEventInternal: (
+    opts: BayOpsCrmOutreachZendeskEventRequest,
+  ) => Promise<void>;
+  applyCrmOutreachOptOutInternal: (
+    opts: BayOpsCrmOutreachOptOutRequest,
+  ) => Promise<void>;
   crm: (opts: BayOpsCrmRequest) => Promise<unknown>;
 }
 
@@ -10059,6 +10087,24 @@ export function createInterBayBayOpsClient({
     ...serviceClientOptions({ client, timeout }),
     subject: bayOpsSubject({ dest_bay, method: "commercial-orders" }),
   });
+  const crmOutreachZendeskEventClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "ingestCrmOutreachZendeskEventInternal">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "crm-outreach-ingest-zendesk-event-internal",
+    }),
+  });
+  const crmOutreachOptOutClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "applyCrmOutreachOptOutInternal">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "crm-outreach-apply-opt-out-internal",
+    }),
+  });
   const crmClient = createServiceClient<Pick<InterBayBayOpsApi, "crm">>({
     ...serviceClientOptions({ client, timeout }),
     subject: bayOpsSubject({ dest_bay, method: "crm" }),
@@ -10142,6 +10188,12 @@ export function createInterBayBayOpsClient({
       await siteFundedCodexStatusClient.getSiteFundedCodexStatus(opts),
     commercialOrders: async (opts) =>
       await commercialOrdersClient.commercialOrders(opts),
+    ingestCrmOutreachZendeskEventInternal: async (opts) =>
+      await crmOutreachZendeskEventClient.ingestCrmOutreachZendeskEventInternal(
+        opts,
+      ),
+    applyCrmOutreachOptOutInternal: async (opts) =>
+      await crmOutreachOptOutClient.applyCrmOutreachOptOutInternal(opts),
     crm: async (opts) => await crmClient.crm(opts),
   };
 }
@@ -10560,6 +10612,34 @@ export function createInterBayBayOpsHandlers({
       subject: bayOpsSubject({ dest_bay: bay_id, method: "commercial-orders" }),
       impl: {
         commercialOrders: async (opts) => await impl.commercialOrders(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayBayOpsApi, "ingestCrmOutreachZendeskEventInternal">
+    >({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "crm-outreach-ingest-zendesk-event-internal",
+      }),
+      impl: {
+        ingestCrmOutreachZendeskEventInternal: async (opts) =>
+          await impl.ingestCrmOutreachZendeskEventInternal(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayBayOpsApi, "applyCrmOutreachOptOutInternal">
+    >({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "crm-outreach-apply-opt-out-internal",
+      }),
+      impl: {
+        applyCrmOutreachOptOutInternal: async (opts) =>
+          await impl.applyCrmOutreachOptOutInternal(opts),
       },
     }),
     createServiceHandler<Pick<InterBayBayOpsApi, "crm">>({

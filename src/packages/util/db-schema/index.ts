@@ -54,6 +54,7 @@ import "./compute-volumes";
 import "./collaborators";
 import "./commercial-orders";
 import "./crm";
+import "./crm-outreach";
 import "./deleted-projects";
 import "./email-counter";
 import "./email-auth";

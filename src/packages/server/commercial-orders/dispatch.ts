@@ -10,15 +10,20 @@ import {
   backfillCommercialOrders,
   cancelCommercialOrder,
   createCommercialOrder,
+  commercialQuotePreview,
   getCommercialOrder,
   getCommercialInvoice,
   getCommercialOrderDiagnostics,
+  getCommercialQuoteDocument,
+  issueCommercialQuote,
   issueManualCommercialInvoice,
   listCommercialOrderEvents,
   listCommercialOrders,
   reviseCommercialOrder,
   retryCommercialStripeEvent,
   updateCommercialOrder,
+  updateCommercialBillingDetails,
+  voidCommercialQuote,
   voidManualCommercialInvoice,
 } from "./store";
 import { assertCommercialReceivablesCapability } from "./feature-flags";
@@ -95,10 +100,20 @@ export async function dispatchCommercialSeedRequest(
       return await assignCommercialOrder(opts);
     case "addNote":
       return await addCommercialOrderNote(opts);
+    case "updateBillingDetails":
+      return await updateCommercialBillingDetails(opts);
     case "approve":
       return await approveCommercialOrder(opts);
     case "cancel":
       return await cancelCommercialOrder(opts);
+    case "quotePreview":
+      return await commercialQuotePreview(opts);
+    case "issueQuote":
+      return await issueCommercialQuote(opts);
+    case "voidQuote":
+      return await voidCommercialQuote(opts);
+    case "quoteDocument":
+      return await getCommercialQuoteDocument(opts);
     case "recordManualPayment":
       return await recordStripeAwareCommercialManualPayment(opts);
     case "issueManualInvoice":

@@ -64,6 +64,8 @@ import { CommercialOrderEditModal } from "./create";
 import { AccountIdentity, useAccountDisplayNames } from "./account-names";
 import { SiteLicenseReference } from "./site-license-reference";
 import { AccountSelector } from "./account-selector";
+import { BillingDetailsModal } from "./billing-details";
+import { CommercialQuotesCard } from "./quotes";
 import "./receivables.css";
 
 const { Paragraph, Text, Title } = Typography;
@@ -581,6 +583,7 @@ export function ReceivableOrderDetail({
     useState<ManualInvoiceFormValues | null>(null);
   const [manualInvoiceReviewed, setManualInvoiceReviewed] = useState(false);
   const [linkInvoiceOpen, setLinkInvoiceOpen] = useState(false);
+  const [billingDetailsOpen, setBillingDetailsOpen] = useState(false);
   const [assignmentForm] = Form.useForm();
   const [noteForm] = Form.useForm();
   const [paymentForm] = Form.useForm<ManualPaymentFormValues>();
@@ -1225,6 +1228,9 @@ export function ReceivableOrderDetail({
   const hasActiveInvoice = order.invoices.some((invoice) =>
     ["creating", "draft", "open"].includes(invoice.status),
   );
+  const billingDetailsLocked = order.invoices.some(
+    (invoice) => !["void", "failed"].includes(invoice.status),
+  );
 
   return (
     <Flex className="receivables-shell" vertical gap={18}>
@@ -1466,7 +1472,12 @@ export function ReceivableOrderDetail({
             </Button>
             {!terminalOrder && !order.approved_at ? (
               <Button
-                disabled={hasActiveInvoice}
+                disabled={billingDetailsLocked}
+                title={
+                  billingDetailsLocked
+                    ? "Void the live invoice before correcting billing details"
+                    : undefined
+                }
                 onClick={() => setEditMode("update")}
               >
                 Update draft
@@ -1478,6 +1489,19 @@ export function ReceivableOrderDetail({
                 onClick={() => setEditMode("revise")}
               >
                 Revise reviewed agreement
+              </Button>
+            ) : null}
+            {!terminalOrder ? (
+              <Button
+                disabled={billingDetailsLocked}
+                title={
+                  billingDetailsLocked
+                    ? "Void the live invoice before correcting billing details"
+                    : undefined
+                }
+                onClick={() => setBillingDetailsOpen(true)}
+              >
+                Correct billing details
               </Button>
             ) : null}
             {canApprove ? (
@@ -1551,6 +1575,21 @@ export function ReceivableOrderDetail({
         className="receivables-section-card"
         title="Contacts and invoice recipients"
         size="small"
+        extra={
+          !terminalOrder ? (
+            <Button
+              disabled={billingDetailsLocked}
+              title={
+                billingDetailsLocked
+                  ? "Void the live invoice before correcting billing details"
+                  : undefined
+              }
+              onClick={() => setBillingDetailsOpen(true)}
+            >
+              Correct billing details
+            </Button>
+          ) : null
+        }
       >
         <Table
           aria-label="Commercial order contacts"
@@ -1593,6 +1632,14 @@ export function ReceivableOrderDetail({
           )}
         />
       </Card>
+
+      <CommercialQuotesCard
+        order={order}
+        onOrderChanged={async (saved) => {
+          setOrder(saved);
+          await reloadEvents(saved.id);
+        }}
+      />
 
       <Card className="receivables-section-card" title="Invoices" size="small">
         {order.invoices.length === 0 ? (
@@ -2280,6 +2327,15 @@ export function ReceivableOrderDetail({
         open={editMode != null}
         order={order}
         onClose={() => setEditMode(null)}
+        onSaved={async (saved) => {
+          setOrder(saved);
+          await reloadEvents(saved.id);
+        }}
+      />
+      <BillingDetailsModal
+        open={billingDetailsOpen}
+        order={order}
+        onClose={() => setBillingDetailsOpen(false)}
         onSaved={async (saved) => {
           setOrder(saved);
           await reloadEvents(saved.id);

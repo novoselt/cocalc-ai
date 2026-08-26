@@ -20,6 +20,7 @@ import {
   Modal,
   Progress,
   Row,
+  Segmented,
   Select,
   Space,
   Spin,
@@ -65,9 +66,18 @@ import {
   useAccountDisplayNames,
 } from "../receivables/account-names";
 import { SiteLicenseSelector } from "../receivables/site-license-reference";
-import { crmMutationContext, filterCrmActivities } from "./helpers";
+import {
+  crmMutationContext,
+  filterCrmActivities,
+  safeExternalHttpUrl,
+} from "./helpers";
 import { CustomerSelector } from "./selector";
 import { TimelineFilter } from "./timeline-filter";
+import {
+  CustomerOutreachCard,
+  OutreachAdmin,
+  type QueueView,
+} from "./outreach";
 import "./customers.css";
 
 export { CustomerSelector } from "./selector";
@@ -1352,10 +1362,12 @@ function CustomerDetail({
   customerId,
   onAction,
   onBack,
+  onOpenOutreach,
 }: {
   customerId: string;
   onAction: (action: ActionState) => void;
   onBack: () => void;
+  onOpenOutreach: (create?: boolean, view?: QueueView) => void;
 }) {
   const [customer, setCustomer] = useState<CrmCustomer360 | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1407,6 +1419,7 @@ function CustomerDetail({
   if (!customer) return <Empty description="Customer not found" />;
 
   const organization = customer.organization;
+  const websiteUrl = safeExternalHttpUrl(organization.website);
   const closedPipeline = customer.opportunities.filter((x) =>
     ["won", "lost"].includes(x.stage),
   ).length;
@@ -1823,6 +1836,11 @@ function CustomerDetail({
               )}
             </Flex>
           </Card>
+
+          <CustomerOutreachCard
+            onOpenOutreach={onOpenOutreach}
+            organization={organization.id}
+          />
         </Flex>
 
         <Flex vertical gap={14} style={{ minWidth: 0 }}>
@@ -1851,16 +1869,12 @@ function CustomerDetail({
                   : "None"}
               </Descriptions.Item>
               <Descriptions.Item label="Website">
-                {organization.website ? (
-                  <a
-                    href={organization.website}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
+                {websiteUrl ? (
+                  <a href={websiteUrl} rel="noreferrer" target="_blank">
                     {organization.website} <Icon name="external-link" />
                   </a>
                 ) : (
-                  "Not recorded"
+                  organization.website || "Not recorded"
                 )}
               </Descriptions.Item>
               <Descriptions.Item label="Updated">
@@ -1973,6 +1987,12 @@ export function CustomersAdmin({
   const [action, setAction] = useState<ActionState | null>(null);
   const [detail, setDetail] = useState<CrmCustomer360 | undefined>();
   const [reloadKey, setReloadKey] = useState(0);
+  const [workspace, setWorkspace] = useState<"relationships" | "outreach">(
+    "relationships",
+  );
+  const [outreachOrganization, setOutreachOrganization] = useState<string>();
+  const [outreachView, setOutreachView] = useState<QueueView>("deliveries");
+  const [outreachStartNewKey, setOutreachStartNewKey] = useState(0);
 
   useEffect(() => {
     if (!customerId) {
@@ -2002,21 +2022,63 @@ export function CustomersAdmin({
 
   return (
     <>
-      {customerId ? (
-        <CustomerDetail
-          key={`${customerId}:${reloadKey}`}
-          customerId={customerId}
-          onAction={setAction}
-          onBack={onBack}
+      <Flex vertical gap={14}>
+        <Segmented
+          aria-label="Customer administration workspace"
+          onChange={(value) => {
+            const next = value as "relationships" | "outreach";
+            if (next === "outreach" && customerId)
+              setOutreachOrganization(customerId);
+            setWorkspace(next);
+          }}
+          options={[
+            {
+              label: (
+                <Space>
+                  <Icon name="address-card" /> Relationships
+                </Space>
+              ),
+              value: "relationships",
+            },
+            {
+              label: (
+                <Space>
+                  <Icon name="paper-plane" /> Outreach
+                </Space>
+              ),
+              value: "outreach",
+            },
+          ]}
+          value={workspace}
         />
-      ) : (
-        <CustomerQueue
-          onCreate={() =>
-            setAction({ kind: "create-customer", title: "Create customer" })
-          }
-          onOpen={onOpenCustomer}
-        />
-      )}
+        {workspace === "outreach" ? (
+          <OutreachAdmin
+            initialOrganization={outreachOrganization}
+            initialView={outreachView}
+            startNewKey={outreachStartNewKey}
+          />
+        ) : customerId ? (
+          <CustomerDetail
+            key={`${customerId}:${reloadKey}`}
+            customerId={customerId}
+            onAction={setAction}
+            onBack={onBack}
+            onOpenOutreach={(create, view) => {
+              setOutreachOrganization(customerId);
+              setOutreachView(view ?? "deliveries");
+              if (create) setOutreachStartNewKey((value) => value + 1);
+              setWorkspace("outreach");
+            }}
+          />
+        ) : (
+          <CustomerQueue
+            onCreate={() =>
+              setAction({ kind: "create-customer", title: "Create customer" })
+            }
+            onOpen={onOpenCustomer}
+          />
+        )}
+      </Flex>
       <CustomerActionModal
         action={action}
         customer={detail}

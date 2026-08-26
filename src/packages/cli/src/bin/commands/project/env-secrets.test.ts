@@ -187,3 +187,20 @@ test("project secrets copy resolves source and target projects", async () => {
     missing: [],
   });
 });
+
+test("project secrets help says changes do not require a restart", () => {
+  const capture: { value?: any } = {};
+  const program = makeProjectCommand({ capture, hubProjects: {} });
+  const project = program.commands.find(
+    (command) => command.name() === "project",
+  );
+  const secrets = project?.commands.find(
+    (command) => command.name() === "secrets",
+  );
+  const set = secrets?.commands.find((command) => command.name() === "set");
+
+  assert.ok(secrets);
+  assert.match(secrets.helpInformation(), /without a project restart/);
+  assert.ok(set);
+  assert.match(set.helpInformation(), /without restarting the project/);
+});

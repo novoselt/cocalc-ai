@@ -48,7 +48,12 @@ describe("CRM customer selector", () => {
         },
       ],
     });
-    render(<CustomerSelector onChange={onChange} />);
+    render(
+      <>
+        <label htmlFor="customer-selector">Customer organization</label>
+        <CustomerSelector id="customer-selector" onChange={onChange} />
+      </>,
+    );
 
     fireEvent.change(
       screen.getByRole("combobox", { name: "Customer organization" }),
@@ -93,11 +98,16 @@ describe("CRM customer selector", () => {
     };
     searchPeople.mockResolvedValue({ people: [person] });
     render(
-      <PersonSelector
-        onChange={onChange}
-        onSelectPerson={onSelectPerson}
-        organization="CRM-2026-000123"
-      />,
+      <>
+        <label htmlFor="contact-selector">CRM contact</label>
+        <PersonSelector
+          ariaLabel="CRM contact"
+          id="contact-selector"
+          onChange={onChange}
+          onSelectPerson={onSelectPerson}
+          organization="CRM-2026-000123"
+        />
+      </>,
     );
 
     fireEvent.change(screen.getByRole("combobox", { name: "CRM contact" }), {

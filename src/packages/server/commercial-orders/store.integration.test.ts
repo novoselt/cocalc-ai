@@ -77,6 +77,7 @@ describePglite("commercial order store", () => {
     await getPool().query("DELETE FROM commercial_order_events");
     await getPool().query("DELETE FROM commercial_payments");
     await getPool().query("DELETE FROM commercial_invoices");
+    await getPool().query("DELETE FROM commercial_quotes");
     await getPool().query("DELETE FROM commercial_order_contacts");
     await getPool().query("DELETE FROM commercial_order_items");
     await getPool().query("DELETE FROM commercial_orders");
@@ -534,6 +535,170 @@ describePglite("commercial order store", () => {
         reason: "attempt ambiguous invoice recipient",
       }),
     ).rejects.toThrow("exactly one billing contact");
+  });
+
+  it("issues, stores, downloads, and voids immutable quote PDFs", async () => {
+    const created = await store.createCommercialOrder(
+      request({
+        terms_snapshot: {
+          invoice: {
+            memo: "Campus-wide CoCalc adoption pilot",
+            billing_address: {
+              line1: "100 College Avenue",
+              city: "Example",
+              state: "PA",
+              postal_code: "19000",
+              country: "US",
+            },
+          },
+        },
+      }),
+    );
+    const issueRequest = {
+      account_id: actor,
+      id: created.id,
+      expected_version: created.version,
+      reason: "send formal procurement quote",
+      idempotency_key: `quote-issue-${randomUUID()}`,
+      valid_until: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+    };
+    const issued = await store.issueCommercialQuote(issueRequest);
+    const replay = await store.issueCommercialQuote(issueRequest);
+    expect(replay.version).toBe(issued.version);
+    expect(issued.quotes).toHaveLength(1);
+    expect(issued.quotes[0]).toMatchObject({
+      status: "issued",
+      currency: "usd",
+      total: "3900.0000000000",
+      document_mime_type: "application/pdf",
+    });
+    expect(issued.quotes[0].quote_number).toMatch(/^Q-\d{4}-[A-F0-9]{8}-01$/);
+    expect(issued.quotes[0].document_sha256).toMatch(/^[0-9a-f]{64}$/);
+
+    const document = await store.getCommercialQuoteDocument({
+      id: issued.id,
+      commercial_quote_id: issued.quotes[0].id,
+      reason: "verify generated quote document",
+    });
+    expect(
+      Buffer.from(document.content_base64, "base64").subarray(0, 4),
+    ).toEqual(Buffer.from("%PDF"));
+    expect(document.quote.snapshot).toMatchObject({
+      order_version: created.version,
+      organization_name: "Integration Test University",
+      billing_address: { line1: "100 College Avenue" },
+    });
+
+    const voided = await store.voidCommercialQuote({
+      account_id: actor,
+      id: issued.id,
+      commercial_quote_id: issued.quotes[0].id,
+      expected_version: issued.version,
+      reason: "customer requested revised quote",
+      idempotency_key: `quote-void-${randomUUID()}`,
+    });
+    expect(voided.quotes[0].status).toBe("void");
+    const retained = await store.getCommercialQuoteDocument({
+      id: voided.id,
+      commercial_quote_id: voided.quotes[0].id,
+      reason: "verify voided quote retention",
+    });
+    expect(retained.content_base64).toBe(document.content_base64);
+  });
+
+  it("corrects billing details after fulfillment but before invoicing", async () => {
+    const created = await store.createCommercialOrder(
+      request({
+        contacts: [
+          {
+            role: "primary",
+            name_snapshot: "Faculty Sponsor",
+            email_snapshot: "sponsor@example.edu",
+          },
+          {
+            role: "billing",
+            name_snapshot: "Original Billing",
+            email_snapshot: "old-ap@example.edu",
+          },
+        ],
+      }),
+    );
+    const approved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: created.id,
+      expected_version: created.version,
+      reason: "approve billing correction fixture",
+    });
+    const provisioned = await store.setCommercialFulfillment({
+      account_id: actor,
+      id: approved.id,
+      expected_version: approved.version,
+      reason: "provision before procurement correction",
+      fulfillment_state: "provisioned",
+    });
+    const corrected = await store.updateCommercialBillingDetails({
+      account_id: actor,
+      id: provisioned.id,
+      expected_version: provisioned.version,
+      reason: "procurement supplied accounts payable contact",
+      idempotency_key: `billing-correction-${randomUUID()}`,
+      billing_contacts: [
+        {
+          role: "billing",
+          name_snapshot: "Correct Accounts Payable",
+          email_snapshot: "correct-ap@example.edu",
+        },
+      ],
+      procurement_contacts: [
+        {
+          role: "procurement",
+          name_snapshot: "Procurement Reviewer",
+          email_snapshot: "procurement@example.edu",
+        },
+      ],
+      billing_address: {
+        line1: "200 Finance Way",
+        city: "Example",
+        state: "PA",
+        postal_code: "19001",
+        country: "US",
+      },
+    });
+    expect(corrected.approved_at).toBe(approved.approved_at);
+    expect(corrected.fulfillment_state).toBe("provisioned");
+    expect(
+      corrected.contacts.find(({ role }) => role === "primary")?.email_snapshot,
+    ).toBe("sponsor@example.edu");
+    expect(
+      corrected.contacts.find(({ role }) => role === "billing")?.email_snapshot,
+    ).toBe("correct-ap@example.edu");
+    expect(corrected.terms_snapshot).toMatchObject({
+      invoice: { billing_address: { line1: "200 Finance Way" } },
+    });
+
+    const invoiced = await store.issueManualCommercialInvoice({
+      account_id: actor,
+      id: corrected.id,
+      expected_version: corrected.version,
+      reason: "issue invoice to corrected recipient",
+      idempotency_key: `billing-correction-invoice-${randomUUID()}`,
+      invoice_reference: "FIN-CORRECTED-CONTACT",
+    });
+    await expect(
+      store.updateCommercialBillingDetails({
+        account_id: actor,
+        id: invoiced.id,
+        expected_version: invoiced.version,
+        reason: "attempt correction after invoice",
+        billing_contacts: [
+          {
+            role: "billing",
+            name_snapshot: "Too Late",
+            email_snapshot: "too-late@example.edu",
+          },
+        ],
+      }),
+    ).rejects.toThrow("billing details are locked after an invoice");
   });
 
   it("blocks cancellation during provider work and after collection", async () => {

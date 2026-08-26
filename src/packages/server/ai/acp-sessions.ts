@@ -68,6 +68,7 @@ export async function ensureAiSessionsSchema(): Promise<void> {
         payment_source_id TEXT,
         payment_source_label TEXT,
         payment_source_owner_account_id UUID,
+        site_funded_reservation_id UUID,
         model TEXT,
         agent_kind TEXT NOT NULL DEFAULT 'codex',
         run_kind TEXT,
@@ -98,6 +99,15 @@ export async function ensureAiSessionsSchema(): Promise<void> {
     await getPool().query(
       `CREATE INDEX IF NOT EXISTS ${TABLE}_payment_state_updated_idx
          ON ${TABLE} (payment_source_kind, payment_source_id, terminal, updated_at DESC)`,
+    );
+    await getPool().query(
+      `ALTER TABLE ${TABLE}
+         ADD COLUMN IF NOT EXISTS site_funded_reservation_id UUID`,
+    );
+    await getPool().query(
+      `CREATE INDEX IF NOT EXISTS ${TABLE}_site_funded_reservation_idx
+         ON ${TABLE} (site_funded_reservation_id)
+         WHERE site_funded_reservation_id IS NOT NULL`,
     );
     await getPool().query(
       `CREATE INDEX IF NOT EXISTS ${TABLE}_state_updated_idx
@@ -267,14 +277,15 @@ export async function upsertProjectHostAiSession({
         (session_key, session_id, op_id, project_id, account_id, approver_account_id,
          host_id, path, thread_id, message_id, parent_message_id, state, terminal,
          payment_source_kind, payment_source_id, payment_source_label,
-         payment_source_owner_account_id, model, agent_kind, run_kind, title,
+         payment_source_owner_account_id, site_funded_reservation_id, model,
+         agent_kind, run_kind, title,
          prompt_snippet, queued_at, started_at, updated_at, last_heartbeat_at,
          finished_at, error, metadata, source_bay_id)
       VALUES
         ($1, $2, $3, $4::UUID, $5::UUID, $6::UUID, $7::UUID, $8, $9, $10,
-         $11, $12, $13, $14, $15, $16, $17::UUID, $18, $19, $20, $21, $22,
-         $23::TIMESTAMPTZ, $24::TIMESTAMPTZ, $25::TIMESTAMPTZ,
-         $26::TIMESTAMPTZ, $27::TIMESTAMPTZ, $28, $29::jsonb, $30)
+         $11, $12, $13, $14, $15, $16, $17::UUID, $18::UUID, $19, $20, $21,
+         $22, $23, $24::TIMESTAMPTZ, $25::TIMESTAMPTZ, $26::TIMESTAMPTZ,
+         $27::TIMESTAMPTZ, $28::TIMESTAMPTZ, $29, $30::jsonb, $31)
       ON CONFLICT (session_key) DO UPDATE SET
         session_id = COALESCE(EXCLUDED.session_id, ${TABLE}.session_id),
         op_id = COALESCE(EXCLUDED.op_id, ${TABLE}.op_id),
@@ -297,6 +308,7 @@ export async function upsertProjectHostAiSession({
         payment_source_id = COALESCE(EXCLUDED.payment_source_id, ${TABLE}.payment_source_id),
         payment_source_label = COALESCE(EXCLUDED.payment_source_label, ${TABLE}.payment_source_label),
         payment_source_owner_account_id = COALESCE(EXCLUDED.payment_source_owner_account_id, ${TABLE}.payment_source_owner_account_id),
+        site_funded_reservation_id = COALESCE(EXCLUDED.site_funded_reservation_id, ${TABLE}.site_funded_reservation_id),
         model = COALESCE(EXCLUDED.model, ${TABLE}.model),
         agent_kind = COALESCE(EXCLUDED.agent_kind, ${TABLE}.agent_kind),
         run_kind = COALESCE(EXCLUDED.run_kind, ${TABLE}.run_kind),
@@ -334,6 +346,10 @@ export async function upsertProjectHostAiSession({
       cleanUuid(
         record.payment_source_owner_account_id,
         "payment_source_owner_account_id",
+      ),
+      cleanUuid(
+        record.site_funded_reservation_id,
+        "site_funded_reservation_id",
       ),
       cleanText(record.model, 160),
       cleanText(record.agent_kind, 80) ?? "codex",
@@ -408,7 +424,8 @@ export async function listAiSessionsForAccount({
              approver_account_id::TEXT, host_id::TEXT, path, thread_id,
              message_id, parent_message_id, state, terminal,
              payment_source_kind, payment_source_id, payment_source_label,
-             payment_source_owner_account_id::TEXT, model, agent_kind, run_kind,
+             payment_source_owner_account_id::TEXT,
+             site_funded_reservation_id::TEXT, model, agent_kind, run_kind,
              title, prompt_snippet, queued_at, started_at, updated_at,
              last_heartbeat_at, finished_at, error, metadata AS metadata_json
       FROM ${TABLE}
@@ -485,7 +502,8 @@ export async function listAiSessionsForAdmin({
              approver_account_id::TEXT, host_id::TEXT, path, thread_id,
              message_id, parent_message_id, state, terminal,
              payment_source_kind, payment_source_id, payment_source_label,
-             payment_source_owner_account_id::TEXT, model, agent_kind, run_kind,
+             payment_source_owner_account_id::TEXT,
+             site_funded_reservation_id::TEXT, model, agent_kind, run_kind,
              title, prompt_snippet, queued_at, started_at, updated_at,
              last_heartbeat_at, finished_at, error, metadata AS metadata_json
       FROM ${TABLE}
@@ -551,7 +569,8 @@ async function getAiSessionForAccount({
              approver_account_id::TEXT, host_id::TEXT, path, thread_id,
              message_id, parent_message_id, state, terminal,
              payment_source_kind, payment_source_id, payment_source_label,
-             payment_source_owner_account_id::TEXT, model, agent_kind, run_kind,
+             payment_source_owner_account_id::TEXT,
+             site_funded_reservation_id::TEXT, model, agent_kind, run_kind,
              title, prompt_snippet, queued_at, started_at, updated_at,
              last_heartbeat_at, finished_at, error, metadata AS metadata_json
       FROM ${TABLE}
@@ -585,7 +604,8 @@ async function getAiSessionForAdmin({
              approver_account_id::TEXT, host_id::TEXT, path, thread_id,
              message_id, parent_message_id, state, terminal,
              payment_source_kind, payment_source_id, payment_source_label,
-             payment_source_owner_account_id::TEXT, model, agent_kind, run_kind,
+             payment_source_owner_account_id::TEXT,
+             site_funded_reservation_id::TEXT, model, agent_kind, run_kind,
              title, prompt_snippet, queued_at, started_at, updated_at,
              last_heartbeat_at, finished_at, error, metadata AS metadata_json
       FROM ${TABLE}

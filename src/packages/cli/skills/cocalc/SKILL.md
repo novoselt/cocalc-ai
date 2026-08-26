@@ -151,6 +151,11 @@ When answering from docs:
 - If the docs are stale or contradict the visible product, say that plainly and
   verify with browser actions or source inspection before giving final guidance.
 
+Project secret changes are live. Adding, replacing, deleting, or copying a
+secret refreshes the mounted files in a running project without restarting the
+project. A program that already cached a credential may still need its own
+reload. Never advise a project restart merely to apply a secret update.
+
 Example answer shape for a usage question:
 
 ```text

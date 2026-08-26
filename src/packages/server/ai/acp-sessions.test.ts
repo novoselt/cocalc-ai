@@ -44,6 +44,7 @@ async function seedSession({
   payment_source_id = ACCOUNT_ID,
   payment_source_label = "User account",
   payment_source_owner_account_id,
+  site_funded_reservation_id,
 }: {
   session_key?: string;
   state?: "queued" | "running" | "completed" | "failed" | "interrupted";
@@ -53,6 +54,7 @@ async function seedSession({
   payment_source_id?: string;
   payment_source_label?: string;
   payment_source_owner_account_id?: string | null;
+  site_funded_reservation_id?: string | null;
 } = {}) {
   await upsertProjectHostAiSession({
     authenticated_project_id: PROJECT_ID,
@@ -73,6 +75,7 @@ async function seedSession({
       payment_source_id,
       payment_source_label,
       payment_source_owner_account_id,
+      site_funded_reservation_id,
       model: "codex-test",
       agent_kind: "codex",
       run_kind: "chat",
@@ -279,6 +282,20 @@ describe("AI ACP session registry interrupts", () => {
         terminal: false,
       }),
     ]);
+  });
+
+  it("preserves a funded reservation link through terminal updates", async () => {
+    const reservationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    await seedSession({ site_funded_reservation_id: reservationId });
+    await seedSession({ state: "completed", terminal: true });
+
+    const rows = await listAiSessionsForAdmin({
+      opts: { target_account_id: ACCOUNT_ID },
+    });
+    expect(rows[0]).toMatchObject({
+      terminal: true,
+      site_funded_reservation_id: reservationId,
+    });
   });
 
   it("lets admins list sessions without narrowing to the caller account", async () => {

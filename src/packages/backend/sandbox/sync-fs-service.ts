@@ -617,11 +617,28 @@ export class SyncFsService extends EventEmitter {
         return true;
       }
 
+      let diskContent: string;
+      let forceDiff = false;
+      try {
+        diskContent = (await readFile(path, "utf8")) as string;
+      } catch (err: any) {
+        if (err?.code !== "ENOENT" && err?.code !== "ENOTDIR") {
+          throw err;
+        }
+        if (hasHistory) {
+          // A missing path during startup may be a temporarily unavailable
+          // project volume. Keep the Patchflow baseline and arm the watcher.
+          return true;
+        }
+        diskContent = "";
+        forceDiff = true;
+      }
       const change = await this.store.handleExternalChange(
         path,
-        async () => (await readFile(path, "utf8")) as string,
+        async () => diskContent,
         false,
         codec,
+        forceDiff,
       );
       if (hasNonEmptyPatch(change.patch)) {
         const payload: ExternalChange = { ...change, deleted: false };

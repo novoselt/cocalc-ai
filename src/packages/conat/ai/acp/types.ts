@@ -251,6 +251,7 @@ export type AcpStreamEvent =
       sandbox?: string;
       workingDirectory?: string;
       authSource?: string;
+      siteFundedReservationId?: string;
     }
   | {
       type: "thinking";

@@ -1591,6 +1591,8 @@ test("software deploy static invokes Rocket with a local remote-backed bundle", 
       "static",
       "deploy-test",
       "staging",
+      "--remote",
+      "private-staging-target",
       "--env-file",
       join(dir, "missing.env"),
     ]);
@@ -1621,6 +1623,8 @@ test("software deploy static invokes Rocket with a local remote-backed bundle", 
     file.url,
     "--bundle-sha256",
     file.sha256,
+    "--remote",
+    "private-staging-target",
     "--api",
     "https://staging.cocalc.ai",
     "--yes",
@@ -1633,6 +1637,13 @@ test("software deploy static invokes Rocket with a local remote-backed bundle", 
   assert.equal(history.deployments[0].status, "succeeded");
   assert.equal(history.deployments[0].tag, "deploy-test");
   assert.equal(history.deployments[0].profile_or_channel, "staging");
+  assert.deepEqual(history.deployments[0].deployed_by, {});
+  assert.equal(history.deployments[0].target.remote, undefined);
+  const record = JSON.parse(
+    r2.objects.get(history.deployments[0].record_key)!.toString("utf8"),
+  );
+  assert.deepEqual(record.deployed_by, {});
+  assert.equal(record.target.remote, undefined);
 });
 
 test("software deploy stops before remote work when typecheck fails", async () => {
@@ -1719,13 +1730,7 @@ test("software deploy static accepts comma-separated profiles", async () => {
   assert.equal(firstRocket[2], "staging");
   assert.equal(firstRocket.includes("--remote"), false);
   assert.equal(secondRocket[2], "prod");
-  assert.deepEqual(
-    secondRocket.slice(
-      secondRocket.indexOf("--remote"),
-      secondRocket.indexOf("--remote") + 2,
-    ),
-    ["--remote", "ubuntu@10.206.0.38"],
-  );
+  assert.equal(secondRocket.includes("--remote"), false);
   const payload = JSON.parse(logs.at(-1) ?? "{}");
   assert.equal(payload.ok, true);
   assert.deepEqual(payload.data.targets, ["staging", "prod"]);
@@ -2432,7 +2437,7 @@ test("software deploy resolves API from auth profile without a hardcoded bay rem
   );
 });
 
-test("software deploy hub pushes a local-only artifact before Rocket deploy", async () => {
+test("software deploy leaves the bay remote to named Rocket cluster config", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-deploy-hub-"));
   const localStore = join(dir, "store");
   const source = join(dir, "hub.tar.xz");
@@ -2485,8 +2490,6 @@ test("software deploy hub pushes a local-only artifact before Rocket deploy", as
     file.url,
     "--bundle-sha256",
     file.sha256,
-    "--remote",
-    "ubuntu@10.206.0.38",
     "--api",
     "https://cocalc.ai",
     "--yes",
@@ -3274,8 +3277,6 @@ test("software deploy bay uses the full bay Rocket scope", async () => {
     file.url,
     "--bundle-sha256",
     file.sha256,
-    "--remote",
-    "ubuntu@10.206.0.38",
     "--api",
     "https://cocalc.ai",
     "--yes",
@@ -3441,10 +3442,7 @@ test("software deploy host-bootstrap separates publish from rollout", async () =
   const artifactId = "20260614T235912Z-e882d124-bootstrap-fix";
   const artifactKey = `software/artifacts/host-bootstrap/${artifactId}/files/bootstrap.py`;
   assert.equal(r2.objects.get(artifactKey)!.toString("utf8"), bootstrapBody);
-  assert.equal(
-    r2.objects.get("software/bootstrap/latest/bootstrap.py")!.toString("utf8"),
-    bootstrapBody,
-  );
+  assert.equal(r2.objects.has("software/bootstrap/latest/bootstrap.py"), false);
   assert.equal(
     r2.objects
       .get(`software/bootstrap/${artifactId}/bootstrap.py`)!
@@ -3453,10 +3451,8 @@ test("software deploy host-bootstrap separates publish from rollout", async () =
   );
   const sha256 = createHash("sha256").update(bootstrapBody).digest("hex");
   assert.equal(
-    r2.objects
-      .get("software/bootstrap/latest/bootstrap.py.sha256")!
-      .toString("utf8"),
-    `${sha256}  bootstrap.py\n`,
+    r2.objects.has("software/bootstrap/latest/bootstrap.py.sha256"),
+    false,
   );
   assert.equal(
     r2.objects
@@ -3510,6 +3506,7 @@ test("software deploy host-bootstrap separates publish from rollout", async () =
   );
   assert.equal(record.details.host_bootstrap_reconcile, false);
   assert.equal(record.details.host_bootstrap_scope, undefined);
+  assert.equal(record.details.host_bootstrap_publish_channel, undefined);
 
   runs.length = 0;
   process.argv[1] = "software";
@@ -3523,6 +3520,8 @@ test("software deploy host-bootstrap separates publish from rollout", async () =
       "--rollout",
       "--bootstrap-scope",
       "helpers",
+      "--bootstrap-publish-channel",
+      "staging",
       "host-bootstrap:bootstrap-fix",
       "staging",
       "--env-file",
@@ -3557,6 +3556,11 @@ test("software deploy host-bootstrap separates publish from rollout", async () =
   );
   assert.equal(record.details.host_bootstrap_reconcile, true);
   assert.equal(record.details.host_bootstrap_scope, "helpers");
+  assert.equal(record.details.host_bootstrap_publish_channel, "staging");
+  assert.equal(
+    r2.objects.get("software/bootstrap/staging/bootstrap.py")!.toString("utf8"),
+    bootstrapBody,
+  );
 });
 
 test("software deploy host-bootstrap requires scope only with rollout", async () => {
@@ -3595,6 +3599,34 @@ test("software deploy host-bootstrap requires scope only with rollout", async ()
       "staging",
     ]),
     /--bootstrap-scope requires --rollout/,
+  );
+  await assert.rejects(
+    program.parseAsync([
+      "node",
+      "test",
+      "--quiet",
+      "software",
+      "deploy",
+      "--bootstrap-publish-channel",
+      "candidate",
+      "host-bootstrap",
+      "staging",
+    ]),
+    /--bootstrap-publish-channel must be latest or staging/,
+  );
+  await assert.rejects(
+    program.parseAsync([
+      "node",
+      "test",
+      "--quiet",
+      "software",
+      "deploy",
+      "--bootstrap-publish-channel",
+      "staging",
+      "hub",
+      "staging",
+    ]),
+    /--bootstrap-publish-channel is only valid when deploying host-bootstrap/,
   );
 });
 

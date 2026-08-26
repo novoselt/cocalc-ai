@@ -3,12 +3,23 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Button, Card, Col, Progress, Row, Space, message } from "antd";
+import {
+  Alert,
+  Button,
+  Card,
+  Col,
+  Input,
+  Progress,
+  Row,
+  Space,
+  message,
+} from "antd";
 import { useState } from "react";
 import { FormattedMessage, useIntl } from "react-intl";
 
 import { useActions, useStore } from "@cocalc/frontend/app-framework";
 import { Icon } from "@cocalc/frontend/components";
+import { copyTextToClipboard } from "@cocalc/frontend/components/copy-button";
 import HelpPopover from "@cocalc/frontend/course/common/help-popover";
 import { course } from "@cocalc/frontend/i18n";
 import type { ProjectMap } from "@cocalc/frontend/todo-types";
@@ -238,6 +249,17 @@ export function ResendInvites({
 }) {
   const intl = useIntl();
   const [copyingInviteLinks, setCopyingInviteLinks] = useState<boolean>(false);
+  const [pendingInviteLinks, setPendingInviteLinks] = useState<string>("");
+
+  async function copyInviteLinks(links: string): Promise<void> {
+    const copied = await copyTextToClipboard({ text: links });
+    if (copied) {
+      setPendingInviteLinks("");
+      void message.success("Pending course invite links copied.");
+    } else {
+      setPendingInviteLinks(links);
+    }
+  }
 
   async function copyPendingInviteLinks() {
     setCopyingInviteLinks(true);
@@ -245,13 +267,13 @@ export function ResendInvites({
       const links =
         await actions.student_projects.get_pending_student_invite_links();
       if (!links) {
+        setPendingInviteLinks("");
         void message.info("No pending course invite links found.");
         return;
       }
-      await navigator.clipboard.writeText(links);
-      void message.success("Pending course invite links copied.");
+      await copyInviteLinks(links);
     } catch (err) {
-      void message.error(`${err}`);
+      void message.error(`Unable to get pending course invite links: ${err}`);
     } finally {
       setCopyingInviteLinks(false);
     }
@@ -308,6 +330,31 @@ export function ResendInvites({
           <Icon name="copy" /> Copy pending invite links
         </Button>
       </Space>
+      {pendingInviteLinks && (
+        <Alert
+          showIcon
+          type="warning"
+          style={{ marginTop: 16 }}
+          title="Clipboard access is unavailable"
+          description={
+            <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+              <div>
+                Select and copy the links below, then send each student their
+                own secure invitation link.
+              </div>
+              <Input.TextArea
+                aria-label="Pending course invite links"
+                readOnly
+                rows={8}
+                value={pendingInviteLinks}
+              />
+              <Button onClick={() => void copyInviteLinks(pendingInviteLinks)}>
+                <Icon name="copy" /> Try copying again
+              </Button>
+            </Space>
+          }
+        />
+      )}
     </Card>
   );
 }

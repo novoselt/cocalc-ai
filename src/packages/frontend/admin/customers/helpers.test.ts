@@ -4,7 +4,11 @@
  */
 
 import type { CrmActivity } from "@cocalc/util/crm";
-import { crmMutationContext, filterCrmActivities } from "./helpers";
+import {
+  crmMutationContext,
+  filterCrmActivities,
+  safeExternalHttpUrl,
+} from "./helpers";
 
 test("CRM committed mutations carry the browser identity from fresh auth", () => {
   expect(
@@ -64,4 +68,15 @@ test("timeline filtering searches humanized activity kinds and details", () => {
   expect(filterCrmActivities(activities, "settled")).toEqual([activities[0]]);
   expect(filterCrmActivities(activities, "20599")).toEqual([activities[1]]);
   expect(filterCrmActivities(activities, "")).toEqual(activities);
+});
+
+test("customer website links only allow HTTP and HTTPS URLs", () => {
+  expect(safeExternalHttpUrl("https://example.com/customer")).toBe(
+    "https://example.com/customer",
+  );
+  expect(safeExternalHttpUrl("javascript:alert(1)")).toBeUndefined();
+  expect(
+    safeExternalHttpUrl("https://user:secret@example.com"),
+  ).toBeUndefined();
+  expect(safeExternalHttpUrl("not a URL")).toBeUndefined();
 });

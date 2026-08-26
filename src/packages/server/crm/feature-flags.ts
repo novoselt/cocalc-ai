@@ -14,6 +14,10 @@ export const CRM_FLAGS = {
   metrics: "crm_metric_projections_enabled",
   export: "crm_exports_enabled",
   backfill: "crm_backfill_enabled",
+  outreach: "crm_outreach_enabled",
+  outreachMutate: "crm_outreach_mutations_enabled",
+  outreachDelivery: "crm_outreach_delivery_enabled",
+  outreachWebhook: "crm_outreach_webhook_enabled",
 } as const;
 
 export type CrmCapability = keyof typeof CRM_FLAGS;
@@ -34,6 +38,37 @@ const READ_ACTIONS = new Set([
   "getCustomerMetrics",
   "getDiagnostics",
   "getDailyDigest",
+  "listOutreachTemplates",
+  "getOutreachTemplate",
+  "listOutreachBatches",
+  "getOutreachBatch",
+  "listOutreachDeliveries",
+  "getOutreachDelivery",
+  "listOutreachProviderOperations",
+  "previewOutreachBatch",
+  "listContactSuppressions",
+  "getOutreachLimits",
+  "getOutreachDiagnostics",
+  "listOutreachEngagementEvents",
+  "listOutreachFollowups",
+  "previewOutreachFollowup",
+]);
+
+const OUTREACH_READ_ACTIONS = new Set([
+  "listOutreachTemplates",
+  "getOutreachTemplate",
+  "listOutreachBatches",
+  "getOutreachBatch",
+  "listOutreachDeliveries",
+  "getOutreachDelivery",
+  "listOutreachProviderOperations",
+  "previewOutreachBatch",
+  "listContactSuppressions",
+  "getOutreachLimits",
+  "getOutreachDiagnostics",
+  "listOutreachEngagementEvents",
+  "listOutreachFollowups",
+  "previewOutreachFollowup",
 ]);
 
 export function crmActionCapabilities(
@@ -43,7 +78,35 @@ export function crmActionCapabilities(
   if (action === "exportData") return ["visible", "export"];
   if (action === "backfill") return ["visible", "backfill"];
   if (action === "getCustomerMetrics") return ["visible", "metrics"];
+  if (OUTREACH_READ_ACTIONS.has(action)) {
+    return ["visible", "outreach"];
+  }
   if (READ_ACTIONS.has(action)) return ["visible"];
+  if (
+    [
+      "createOutreachTemplate",
+      "transitionOutreachTemplate",
+      "createOutreachBatch",
+      "updateOutreachBatch",
+      "addOutreachRecipient",
+      "removeOutreachRecipient",
+      "transitionOutreachBatch",
+      "mutateOutreachDelivery",
+      "mutateContactSuppression",
+    ].includes(action)
+  ) {
+    return ["visible", "mutate", "outreach", "outreachMutate"];
+  }
+  if (["sendOutreachFollowup", "syncOutreachDelivery"].includes(action)) {
+    return [
+      "visible",
+      "mutate",
+      "zendesk",
+      "outreach",
+      "outreachMutate",
+      "outreachDelivery",
+    ];
+  }
   if (
     [
       "createOpportunity",

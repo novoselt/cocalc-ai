@@ -5,6 +5,24 @@
 
 import type { CommercialOrder } from "@cocalc/util/commercial-orders";
 import type {
+  CrmContactSuppression,
+  CrmOutreachBatch,
+  CrmOutreachBatchDetail,
+  CrmOutreachBatchState,
+  CrmOutreachDelivery,
+  CrmOutreachDeliveryState,
+  CrmOutreachDiagnostics,
+  CrmOutreachEngagementEvent,
+  CrmOutreachFollowUpPolicy,
+  CrmOutreachKind,
+  CrmOutreachLimits,
+  CrmOutreachProviderOperation,
+  CrmOutreachSuppressionReason,
+  CrmOutreachSuppressionScope,
+  CrmOutreachTemplate,
+  CrmOutreachTemplateState,
+} from "@cocalc/util/crm-outreach";
+import type {
   CrmActivity,
   CrmActivityKind,
   CrmBackfillCandidate,
@@ -364,8 +382,9 @@ export interface CrmTaskUpdateRequest extends CrmMutationRequest {
 
 export interface CrmTaskTransitionRequest extends CrmMutationRequest {
   task: string;
-  action: "assign" | "complete" | "cancel";
+  action: "assign" | "reschedule" | "complete" | "cancel";
   assignee_account_id?: string;
+  due_at?: string;
 }
 
 export interface CrmActivityCreateRequest extends CrmMutationRequest {
@@ -413,6 +432,238 @@ export interface CrmBackfillResponse {
   candidates: CrmBackfillCandidate[];
   created: CrmOrganization[];
   skipped: Array<{ candidate_key: string; reason: string }>;
+}
+
+export interface CrmOutreachTemplateListRequest extends CrmPageRequest {
+  template_key?: string;
+  kind?: CrmOutreachKind;
+  status?: CrmOutreachTemplateState;
+}
+
+export interface CrmOutreachTemplateListResponse {
+  templates: CrmOutreachTemplate[];
+  truncated: boolean;
+}
+
+export interface CrmOutreachTemplateGetRequest extends CrmReadRequest {
+  template: string;
+}
+
+export interface CrmOutreachTemplateCreateRequest extends CrmMutationRequest {
+  template_key: string;
+  name: string;
+  kind: CrmOutreachKind;
+  subject_template: string;
+  body_markdown_template: string;
+  required_fields?: string[];
+  follow_up_policy?: CrmOutreachFollowUpPolicy;
+  follow_up_after_days?: number;
+  max_followups?: number;
+  final_review_after_days?: number;
+  revise_from?: string;
+}
+
+export interface CrmOutreachTemplateTransitionRequest extends CrmMutationRequest {
+  template: string;
+  action: "activate" | "retire";
+}
+
+export interface CrmOutreachBatchListRequest extends CrmPageRequest {
+  states?: CrmOutreachBatchState[];
+  kinds?: CrmOutreachKind[];
+  owner_account_id?: string;
+  organization?: string;
+  zendesk_ticket_id?: number;
+}
+
+export interface CrmOutreachBatchListResponse {
+  batches: CrmOutreachBatch[];
+  truncated: boolean;
+}
+
+export interface CrmOutreachBatchGetRequest extends CrmReadRequest {
+  batch: string;
+}
+
+export interface CrmOutreachDeliveryListRequest extends CrmPageRequest {
+  batch?: string;
+  organization?: string;
+  person?: string;
+  opportunity?: string;
+  states?: CrmOutreachDeliveryState[];
+  zendesk_ticket_id?: number;
+  engagement?: "viewed" | "unviewed" | "replied" | "unreplied";
+  suggested_action?: string;
+}
+
+export interface CrmOutreachDeliveryListResponse {
+  deliveries: CrmOutreachDelivery[];
+  truncated: boolean;
+}
+
+export interface CrmOutreachDeliveryGetRequest extends CrmReadRequest {
+  delivery: string;
+}
+
+export interface CrmOutreachBatchCreateRequest extends CrmMutationRequest {
+  name: string;
+  purpose: string;
+  kind: CrmOutreachKind;
+  owner_account_id: string;
+  template?: string;
+}
+
+export interface CrmOutreachBatchUpdateRequest extends CrmMutationRequest {
+  batch: string;
+  changes: Partial<
+    Pick<CrmOutreachBatch, "name" | "purpose" | "owner_account_id">
+  >;
+}
+
+export interface CrmOutreachRecipientRequest extends CrmMutationRequest {
+  batch: string;
+  person: string;
+  organization?: string;
+  opportunity?: string;
+  email?: string;
+  subject?: string;
+  body_markdown?: string;
+  override_reason?: string;
+}
+
+export interface CrmOutreachRecipientRemoveRequest extends CrmMutationRequest {
+  batch: string;
+  delivery: string;
+}
+
+export interface CrmOutreachBatchTransitionRequest extends CrmMutationRequest {
+  batch: string;
+  action: "approve" | "queue" | "pause" | "resume" | "cancel";
+}
+
+export interface CrmOutreachDeliveryActionRequest extends CrmMutationRequest {
+  delivery: string;
+  action: "retry" | "reconcile" | "cancel";
+}
+
+export interface CrmOutreachPreviewRequest extends CrmReadRequest {
+  batch: string;
+}
+
+export interface CrmOutreachPreview {
+  batch: CrmOutreachBatch;
+  deliveries: Array<{
+    delivery: CrmOutreachDelivery;
+    blocking_errors: string[];
+    warnings: string[];
+  }>;
+  effective_limits: CrmOutreachLimits;
+  provider_routing: {
+    support_address?: string;
+    submitter_id?: string;
+    group_id?: string;
+    form_id?: string;
+  };
+  can_approve: boolean;
+  can_queue: boolean;
+}
+
+export interface CrmContactSuppressionListRequest extends CrmPageRequest {
+  organization?: string;
+  person?: string;
+  active?: boolean;
+  scope?: CrmOutreachSuppressionScope;
+  search?: string;
+}
+
+export interface CrmContactSuppressionListResponse {
+  suppressions: CrmContactSuppression[];
+  truncated: boolean;
+}
+
+export interface CrmContactSuppressionMutationRequest extends CrmMutationRequest {
+  action: "add" | "revoke";
+  suppression?: string;
+  scope?: CrmOutreachSuppressionScope;
+  value?: string;
+  organization?: string;
+  person?: string;
+  email?: string;
+  suppression_reason?: CrmOutreachSuppressionReason;
+  note?: string;
+}
+
+export interface CrmOutreachLimitsRequest extends CrmReadRequest {
+  domain?: string;
+}
+
+export interface CrmOutreachDiagnosticsRequest extends CrmReadRequest {}
+
+export interface CrmOutreachEngagementListRequest extends CrmPageRequest {
+  delivery: string;
+}
+
+export interface CrmOutreachEngagementListResponse {
+  events: CrmOutreachEngagementEvent[];
+  truncated: boolean;
+}
+
+export interface CrmOutreachProviderOperationListRequest extends CrmPageRequest {
+  delivery: string;
+}
+
+export interface CrmOutreachProviderOperationListResponse {
+  operations: CrmOutreachProviderOperation[];
+  truncated: boolean;
+}
+
+export interface CrmOutreachFollowUpListRequest extends CrmPageRequest {
+  organization?: string;
+  opportunity?: string;
+  assignee_account_id?: string;
+  due_before?: string;
+  overdue?: boolean;
+  viewed?: boolean;
+  replied?: boolean;
+}
+
+export interface CrmOutreachFollowUp {
+  delivery: CrmOutreachDelivery;
+  task: CrmTask;
+  organization: Pick<
+    CrmOrganization,
+    "id" | "customer_number" | "display_name"
+  >;
+  support_show_command: string;
+  follow_up_command: string;
+}
+
+export interface CrmOutreachFollowUpListResponse {
+  followups: CrmOutreachFollowUp[];
+  truncated: boolean;
+}
+
+export interface CrmOutreachFollowUpPreviewRequest extends CrmReadRequest {
+  delivery: string;
+  body?: string;
+}
+
+export interface CrmOutreachFollowUpPreview {
+  delivery: CrmOutreachDelivery;
+  body: string;
+  zendesk_ticket_id: number;
+  next_due_at: string;
+  final_review: boolean;
+  warnings: string[];
+}
+
+export interface CrmOutreachFollowUpSendRequest extends CrmMutationRequest {
+  delivery: string;
+  body: string;
+}
+
+export interface CrmOutreachSyncRequest extends CrmMutationRequest {
+  delivery: string;
 }
 
 export interface AdminCrmApi {
@@ -500,6 +751,81 @@ export interface AdminCrmApi {
     opts: CrmOrderFromOpportunityRequest,
   ) => Promise<CrmMutationResult<CommercialOrder>>;
   backfill: (opts: CrmBackfillRequest) => Promise<CrmBackfillResponse>;
+  listOutreachTemplates: (
+    opts: CrmOutreachTemplateListRequest,
+  ) => Promise<CrmOutreachTemplateListResponse>;
+  getOutreachTemplate: (
+    opts: CrmOutreachTemplateGetRequest,
+  ) => Promise<CrmOutreachTemplate>;
+  listOutreachBatches: (
+    opts: CrmOutreachBatchListRequest,
+  ) => Promise<CrmOutreachBatchListResponse>;
+  getOutreachBatch: (
+    opts: CrmOutreachBatchGetRequest,
+  ) => Promise<CrmOutreachBatchDetail>;
+  listOutreachDeliveries: (
+    opts: CrmOutreachDeliveryListRequest,
+  ) => Promise<CrmOutreachDeliveryListResponse>;
+  getOutreachDelivery: (
+    opts: CrmOutreachDeliveryGetRequest,
+  ) => Promise<CrmOutreachDelivery>;
+  listOutreachProviderOperations: (
+    opts: CrmOutreachProviderOperationListRequest,
+  ) => Promise<CrmOutreachProviderOperationListResponse>;
+  previewOutreachBatch: (
+    opts: CrmOutreachPreviewRequest,
+  ) => Promise<CrmOutreachPreview>;
+  listContactSuppressions: (
+    opts: CrmContactSuppressionListRequest,
+  ) => Promise<CrmContactSuppressionListResponse>;
+  getOutreachLimits: (
+    opts: CrmOutreachLimitsRequest,
+  ) => Promise<CrmOutreachLimits>;
+  getOutreachDiagnostics: (
+    opts: CrmOutreachDiagnosticsRequest,
+  ) => Promise<CrmOutreachDiagnostics>;
+  listOutreachEngagementEvents: (
+    opts: CrmOutreachEngagementListRequest,
+  ) => Promise<CrmOutreachEngagementListResponse>;
+  listOutreachFollowups: (
+    opts: CrmOutreachFollowUpListRequest,
+  ) => Promise<CrmOutreachFollowUpListResponse>;
+  previewOutreachFollowup: (
+    opts: CrmOutreachFollowUpPreviewRequest,
+  ) => Promise<CrmOutreachFollowUpPreview>;
+  createOutreachTemplate: (
+    opts: CrmOutreachTemplateCreateRequest,
+  ) => Promise<CrmMutationResult<CrmOutreachTemplate>>;
+  transitionOutreachTemplate: (
+    opts: CrmOutreachTemplateTransitionRequest,
+  ) => Promise<CrmMutationResult<CrmOutreachTemplate>>;
+  createOutreachBatch: (
+    opts: CrmOutreachBatchCreateRequest,
+  ) => Promise<CrmMutationResult<CrmOutreachBatch>>;
+  updateOutreachBatch: (
+    opts: CrmOutreachBatchUpdateRequest,
+  ) => Promise<CrmMutationResult<CrmOutreachBatch>>;
+  addOutreachRecipient: (
+    opts: CrmOutreachRecipientRequest,
+  ) => Promise<CrmMutationResult<CrmOutreachDelivery>>;
+  removeOutreachRecipient: (
+    opts: CrmOutreachRecipientRemoveRequest,
+  ) => Promise<CrmMutationResult<CrmOutreachDelivery>>;
+  transitionOutreachBatch: (
+    opts: CrmOutreachBatchTransitionRequest,
+  ) => Promise<CrmMutationResult<CrmOutreachBatchDetail>>;
+  mutateOutreachDelivery: (
+    opts: CrmOutreachDeliveryActionRequest,
+  ) => Promise<CrmMutationResult<CrmOutreachDelivery>>;
+  mutateContactSuppression: (
+    opts: CrmContactSuppressionMutationRequest,
+  ) => Promise<CrmMutationResult<CrmContactSuppression>>;
+  sendOutreachFollowup: (
+    opts: CrmOutreachFollowUpSendRequest,
+  ) => Promise<CrmMutationResult<CrmOutreachDelivery>>;
+  syncOutreachDelivery: (
+    opts: CrmOutreachSyncRequest,
+  ) => Promise<CrmMutationResult<CrmOutreachDelivery>>;
 }
 
 export const adminCrm = {
@@ -539,4 +865,29 @@ export const adminCrm = {
   mutateExternalReference: authFirstRequireAccount,
   createCommercialOrderFromOpportunity: authFirstRequireAccount,
   backfill: authFirstRequireAccount,
+  listOutreachTemplates: authFirstRequireAccount,
+  getOutreachTemplate: authFirstRequireAccount,
+  listOutreachBatches: authFirstRequireAccount,
+  getOutreachBatch: authFirstRequireAccount,
+  listOutreachDeliveries: authFirstRequireAccount,
+  getOutreachDelivery: authFirstRequireAccount,
+  listOutreachProviderOperations: authFirstRequireAccount,
+  previewOutreachBatch: authFirstRequireAccount,
+  listContactSuppressions: authFirstRequireAccount,
+  getOutreachLimits: authFirstRequireAccount,
+  getOutreachDiagnostics: authFirstRequireAccount,
+  listOutreachEngagementEvents: authFirstRequireAccount,
+  listOutreachFollowups: authFirstRequireAccount,
+  previewOutreachFollowup: authFirstRequireAccount,
+  createOutreachTemplate: authFirstRequireAccount,
+  transitionOutreachTemplate: authFirstRequireAccount,
+  createOutreachBatch: authFirstRequireAccount,
+  updateOutreachBatch: authFirstRequireAccount,
+  addOutreachRecipient: authFirstRequireAccount,
+  removeOutreachRecipient: authFirstRequireAccount,
+  transitionOutreachBatch: authFirstRequireAccount,
+  mutateOutreachDelivery: authFirstRequireAccount,
+  mutateContactSuppression: authFirstRequireAccount,
+  sendOutreachFollowup: authFirstRequireAccount,
+  syncOutreachDelivery: authFirstRequireAccount,
 };

@@ -11,18 +11,21 @@ import {
   type SiteFundedCodexPolicy,
 } from "@cocalc/util/ai/site-funded-codex";
 import { uuid } from "@cocalc/util/misc";
+import { ensureAiSessionsSchema } from "./acp-sessions";
 import {
   ensureSiteFundedCodexReservationTables,
   expireAbandonedSiteFundedCodexReservations,
   finishSiteFundedCodexTurn,
   getSiteFundedCodexPoolStatus,
   recordSiteFundedCodexUsageEvent,
+  reconcileTerminalSiteFundedCodexReservations,
   reserveSiteFundedCodexTurn,
 } from "./site-funded-codex-reservations";
 
 beforeAll(async () => {
   await before({ noConat: true });
   await ensureSiteFundedCodexReservationTables();
+  await ensureAiSessionsSchema();
 }, 15_000);
 
 afterAll(after);
@@ -75,6 +78,7 @@ describe("site-funded Codex reservations", () => {
     await getPool().query("DELETE FROM site_ai_turn_reservations");
     await getPool().query("DELETE FROM site_ai_funding_periods");
     await getPool().query("DELETE FROM site_ai_account_holds");
+    await getPool().query("DELETE FROM ai_sessions");
   });
 
   it("atomically refuses reservations beyond the global pool", async () => {
@@ -306,5 +310,208 @@ describe("site-funded Codex reservations", () => {
     );
     expect(rows[0]?.status).toBe("expired");
     expect(Number(rows[0]?.committed_microusd)).toBe(1_520);
+  });
+
+  it("reconciles a linked terminal AI session after the delivery grace period", async () => {
+    const opts = options({ maxTurnCostMicrousd: 50_000 });
+    const admission = await reserveSiteFundedCodexTurn(opts);
+    if (!admission.allowed) throw new Error("expected reservation");
+    await recordSiteFundedCodexUsageEvent({
+      eventId: uuid(),
+      reservationId: admission.reservation.reservationId,
+      requestSequence: 1,
+      model: "gpt-5.6-luna",
+      inputTokens: 10_000,
+      cachedInputTokens: 6_000,
+      outputTokens: 500,
+    });
+    await getPool().query(
+      `INSERT INTO ai_sessions
+         (session_key, project_id, account_id, host_id, state, terminal,
+          payment_source_kind, site_funded_reservation_id, started_at,
+          updated_at, finished_at, source_bay_id)
+       VALUES ($1, $2, $3, $4, 'completed', TRUE, 'site_api_key', $5,
+               NOW() - INTERVAL '3 minutes', NOW() - INTERVAL '2 minutes',
+               NOW() - INTERVAL '2 minutes', 'bay-0')`,
+      [
+        `linked-${uuid()}`,
+        opts.projectId,
+        opts.accountId,
+        opts.hostId,
+        admission.reservation.reservationId,
+      ],
+    );
+
+    await expect(reconcileTerminalSiteFundedCodexReservations()).resolves.toBe(
+      1,
+    );
+    expect((await getSiteFundedCodexPoolStatus())[0]).toMatchObject({
+      reservedMicrousd: 0,
+      committedMicrousd: 1_520,
+      activeReservations: 0,
+    });
+    const { rows } = await getPool().query(
+      `SELECT status, outcome FROM site_ai_turn_reservations
+       WHERE reservation_id = $1`,
+      [admission.reservation.reservationId],
+    );
+    expect(rows[0]).toMatchObject({
+      status: "committed",
+      outcome: "reconciled from terminal AI session",
+    });
+  });
+
+  it("does not reconcile a newly terminal session before usage delivery grace", async () => {
+    const opts = options();
+    const admission = await reserveSiteFundedCodexTurn(opts);
+    if (!admission.allowed) throw new Error("expected reservation");
+    await getPool().query(
+      `INSERT INTO ai_sessions
+         (session_key, project_id, account_id, host_id, state, terminal,
+          payment_source_kind, site_funded_reservation_id, started_at,
+          updated_at, finished_at, source_bay_id)
+       VALUES ($1, $2, $3, $4, 'completed', TRUE, 'site_api_key', $5,
+               NOW(), NOW(), NOW(), 'bay-0')`,
+      [
+        `fresh-${uuid()}`,
+        opts.projectId,
+        opts.accountId,
+        opts.hostId,
+        admission.reservation.reservationId,
+      ],
+    );
+
+    await expect(reconcileTerminalSiteFundedCodexReservations()).resolves.toBe(
+      0,
+    );
+  });
+
+  it("admits the next turn after reconciling its linked terminal session", async () => {
+    const accountId = uuid();
+    const firstOpts = options({ accountId });
+    const first = await reserveSiteFundedCodexTurn(firstOpts);
+    if (!first.allowed) throw new Error("expected reservation");
+    await getPool().query(
+      `INSERT INTO ai_sessions
+         (session_key, project_id, account_id, host_id, state, terminal,
+          payment_source_kind, site_funded_reservation_id, started_at,
+          updated_at, finished_at, source_bay_id)
+       VALUES ($1, $2, $3, $4, 'completed', TRUE, 'site_api_key', $5,
+               NOW() - INTERVAL '3 minutes', NOW() - INTERVAL '2 minutes',
+               NOW() - INTERVAL '2 minutes', 'bay-0')`,
+      [
+        `next-${uuid()}`,
+        firstOpts.projectId,
+        accountId,
+        firstOpts.hostId,
+        first.reservation.reservationId,
+      ],
+    );
+
+    await expect(
+      reserveSiteFundedCodexTurn(options({ accountId })),
+    ).resolves.toMatchObject({ allowed: true });
+  });
+
+  it("recovers a stale legacy reservation using a terminal session match", async () => {
+    const opts = options();
+    const admission = await reserveSiteFundedCodexTurn(opts);
+    if (!admission.allowed) throw new Error("expected reservation");
+    await getPool().query(
+      `UPDATE site_ai_turn_reservations
+       SET started_at = NOW() - INTERVAL '3 minutes',
+           heartbeat_at = NOW() - INTERVAL '150 seconds'
+       WHERE reservation_id = $1`,
+      [admission.reservation.reservationId],
+    );
+    await getPool().query(
+      `INSERT INTO ai_sessions
+         (session_key, project_id, account_id, host_id, state, terminal,
+          payment_source_kind, started_at, updated_at, finished_at,
+          source_bay_id)
+       VALUES ($1, $2, $3, $4, 'completed', TRUE, 'site_api_key',
+               NOW() - INTERVAL '3 minutes', NOW() - INTERVAL '2 minutes',
+               NOW() - INTERVAL '2 minutes', 'bay-0')`,
+      [`legacy-${uuid()}`, opts.projectId, opts.accountId, opts.hostId],
+    );
+
+    await expect(reconcileTerminalSiteFundedCodexReservations()).resolves.toBe(
+      1,
+    );
+    const { rows } = await getPool().query(
+      `SELECT status, outcome FROM site_ai_turn_reservations
+       WHERE reservation_id = $1`,
+      [admission.reservation.reservationId],
+    );
+    expect(rows[0]).toMatchObject({
+      status: "committed",
+      outcome: "reconciled from terminal AI session during reservation rollout",
+    });
+  });
+
+  it("releases an orphaned reservation with no live AI session", async () => {
+    const opts = options();
+    const admission = await reserveSiteFundedCodexTurn(opts);
+    if (!admission.allowed) throw new Error("expected reservation");
+    await getPool().query(
+      `UPDATE site_ai_turn_reservations
+       SET heartbeat_at = NOW() - INTERVAL '6 minutes'
+       WHERE reservation_id = $1`,
+      [admission.reservation.reservationId],
+    );
+
+    await expect(reconcileTerminalSiteFundedCodexReservations()).resolves.toBe(
+      1,
+    );
+    const { rows } = await getPool().query(
+      `SELECT status, outcome FROM site_ai_turn_reservations
+       WHERE reservation_id = $1`,
+      [admission.reservation.reservationId],
+    );
+    expect(rows[0]).toMatchObject({
+      status: "failed",
+      outcome: "stale reservation had no live AI session",
+    });
+  });
+
+  it("keeps a legacy reservation while the account has a healthy live session", async () => {
+    const opts = options();
+    const admission = await reserveSiteFundedCodexTurn(opts);
+    if (!admission.allowed) throw new Error("expected reservation");
+    await getPool().query(
+      `UPDATE site_ai_turn_reservations
+       SET started_at = NOW() - INTERVAL '3 minutes',
+           heartbeat_at = NOW() - INTERVAL '150 seconds'
+       WHERE reservation_id = $1`,
+      [admission.reservation.reservationId],
+    );
+    await getPool().query(
+      `INSERT INTO ai_sessions
+         (session_key, project_id, account_id, host_id, state, terminal,
+          payment_source_kind, started_at, updated_at, last_heartbeat_at,
+          finished_at, source_bay_id)
+       VALUES
+         ($1, $3, $4, $5, 'completed', TRUE, 'site_api_key',
+          NOW() - INTERVAL '3 minutes', NOW() - INTERVAL '2 minutes', NULL,
+          NOW() - INTERVAL '2 minutes', 'bay-0'),
+         ($2, $3, $4, $5, 'running', FALSE, 'site_api_key',
+          NOW() - INTERVAL '30 seconds', NOW(), NOW(), NULL, 'bay-0')`,
+      [
+        `legacy-terminal-${uuid()}`,
+        `legacy-live-${uuid()}`,
+        opts.projectId,
+        opts.accountId,
+        opts.hostId,
+      ],
+    );
+
+    await expect(reconcileTerminalSiteFundedCodexReservations()).resolves.toBe(
+      0,
+    );
+    const { rows } = await getPool().query(
+      `SELECT status FROM site_ai_turn_reservations WHERE reservation_id = $1`,
+      [admission.reservation.reservationId],
+    );
+    expect(rows[0]?.status).toBe("active");
   });
 });

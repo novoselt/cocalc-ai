@@ -307,6 +307,7 @@ function getCoCalcProjectRuntimeGuidance(cliCommand: string): string[] {
     "- COCALC_PROJECT_ID",
     "- COCALC_API_URL",
     "- COCALC_BEARER_TOKEN",
+    "Project secret changes apply immediately to running projects; do not restart a project merely to apply a secret update. Programs that cache credentials may need their own reload.",
     "Prefer high-signal commands over raw browser scripts when available.",
     `For supported document builds, use \`${cliCommand} project build -h\` and \`${cliCommand} project build <path>\` so the complete editor pipeline runs without requiring a browser.`,
     "For notebook edits/execution that must survive browser refresh or disconnect, prefer `cocalc project jupyter -h` over `browser exec`.",
@@ -2566,6 +2567,7 @@ export class CodexAppServerAgent implements AcpAgent {
           sandbox: threadParams.sandbox,
           workingDirectory: cwd,
           authSource,
+          siteFundedReservationId: fundedTurn?.reservation.reservationId,
         },
       });
       logger.debug("codex app-server: resolved service tier", {

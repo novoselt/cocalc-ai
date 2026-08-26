@@ -31,6 +31,7 @@ export interface AiSessionRecord {
   payment_source_id?: string | null;
   payment_source_label?: string | null;
   payment_source_owner_account_id?: string | null;
+  site_funded_reservation_id?: string | null;
   model?: string | null;
   agent_kind?: string | null;
   run_kind?: string | null;

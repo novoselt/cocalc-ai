@@ -5,6 +5,7 @@ import {
 import {
   mkdtemp,
   mkdir,
+  readdir,
   realpath,
   rm,
   rename,
@@ -483,11 +484,13 @@ describeIfLinux("test watching a file and a folder in the sandbox", () => {
 
 describeIfLinux("patch write support", () => {
   let fs;
+  let sandboxRoot;
   const filename = "patched.txt";
 
   it("creates sandbox", async () => {
-    await mkdir(join(tempDir, "test-patch"));
-    fs = new SandboxedFilesystem(join(tempDir, "test-patch"));
+    sandboxRoot = join(tempDir, "test-patch");
+    await mkdir(sandboxRoot);
+    fs = new SandboxedFilesystem(sandboxRoot);
   });
 
   it("applies patch when base hash matches", async () => {
@@ -499,6 +502,18 @@ describeIfLinux("patch write support", () => {
     await fs.writeFile(filename, { patch, sha256: sha });
     const result = await fs.readFile(filename, "utf8");
     expect(result).toBe(updated);
+  });
+
+  it("atomically applies a delta save", async () => {
+    const original = "the original collaborative document";
+    const updated = "the updated collaborative document";
+    await fs.writeFile(filename, original);
+    await fs.writeFileDelta(filename, updated, {
+      baseContents: original,
+      minLength: 0,
+      saveLast: true,
+    });
+    expect(await fs.readFile(filename, "utf8")).toBe(updated);
   });
 
   it("rejects patch when base hash mismatches", async () => {
@@ -514,6 +529,52 @@ describeIfLinux("patch write support", () => {
       expect(err.code).toBe("ETAG_MISMATCH");
     }
   });
+
+  it.each(["full", "delta"])(
+    "does not truncate the destination when an atomic %s save fails",
+    async (kind) => {
+      const original = "the complete collaborative document";
+      const updated = "the replacement collaborative document";
+      await fs.writeFile(filename, original);
+
+      const originalRename = fs.rename;
+      let reachedCommit = false;
+      fs.rename = async (source: string, destination: string) => {
+        reachedCommit = true;
+        expect(source).toContain(`.${filename}.tmp.`);
+        expect(destination).toBe(filename);
+        expect(await readFile(join(sandboxRoot, filename), "utf8")).toBe(
+          original,
+        );
+        const err: NodeJS.ErrnoException = new Error("simulated I/O failure");
+        err.code = "EIO";
+        throw err;
+      };
+      try {
+        const save =
+          kind === "full"
+            ? fs.writeFile(filename, updated, true)
+            : fs.writeFileDelta(filename, updated, {
+                baseContents: original,
+                minLength: 0,
+                saveLast: true,
+              });
+        await expect(save).rejects.toThrow("simulated I/O failure");
+      } finally {
+        fs.rename = originalRename;
+      }
+
+      expect(reachedCommit).toBe(true);
+      expect(await readFile(join(sandboxRoot, filename), "utf8")).toBe(
+        original,
+      );
+      expect(
+        (await readdir(sandboxRoot)).filter((name) =>
+          name.includes(`.${filename}.tmp.`),
+        ),
+      ).toEqual([]);
+    },
+  );
 });
 
 describeIfLinux("unsafe mode sandbox", () => {

@@ -16,6 +16,7 @@ import type {
   CommercialOrderItem,
   CommercialOrderSummary,
   CommercialPaymentMethod,
+  CommercialQuote,
   CommercialSiteLicensePlan,
   CommercialWorkflowState,
 } from "@cocalc/util/commercial-orders";
@@ -181,6 +182,23 @@ export interface CommercialOrderNoteRequest extends CommercialMutationRequest {
   note: string;
 }
 
+export interface CommercialBillingAddress {
+  line1?: string;
+  line2?: string;
+  city?: string;
+  state?: string;
+  postal_code?: string;
+  country?: string;
+}
+
+export interface CommercialBillingDetailsUpdateRequest extends CommercialMutationRequest {
+  id: string;
+  billing_contacts: CommercialOrderContactInput[];
+  procurement_contacts?: CommercialOrderContactInput[];
+  billing_address?: CommercialBillingAddress | null;
+  invoice_memo?: string | null;
+}
+
 export interface CommercialOrderTransitionRequest extends CommercialMutationRequest {
   id: string;
 }
@@ -208,6 +226,50 @@ export interface CommercialInvoicePreview {
 
 export interface CommercialInvoicePreviewRequest extends CommercialReadRequest {
   id: string;
+}
+
+export interface CommercialQuotePreview {
+  order_id: string;
+  order_number: string;
+  organization_name: string;
+  billing_contacts: CommercialOrderContact[];
+  items: CommercialOrderItem[];
+  currency: string;
+  subtotal: string;
+  total: string;
+  service_starts_at?: string | null;
+  service_ends_at?: string | null;
+  po_number?: string | null;
+  customer_reference?: string | null;
+  quote_memo?: string | null;
+  billing_address?: CommercialBillingAddress | null;
+  default_valid_until: string;
+  ready: boolean;
+  blockers: string[];
+}
+
+export interface CommercialQuotePreviewRequest extends CommercialReadRequest {
+  id: string;
+}
+
+export interface CommercialQuoteIssueRequest extends CommercialMutationRequest {
+  id: string;
+  valid_until?: string;
+}
+
+export interface CommercialQuoteVoidRequest extends CommercialMutationRequest {
+  id: string;
+  commercial_quote_id: string;
+}
+
+export interface CommercialQuoteDocumentRequest extends CommercialReadRequest {
+  id: string;
+  commercial_quote_id: string;
+}
+
+export interface CommercialQuoteDocument {
+  quote: CommercialQuote;
+  content_base64: string;
 }
 
 export interface CommercialInvoiceMutationRequest extends CommercialMutationRequest {
@@ -329,8 +391,19 @@ export interface CommercialOrdersApi {
   revise: (opts: CommercialOrderRevisionRequest) => Promise<CommercialOrder>;
   assign: (opts: CommercialOrderAssignRequest) => Promise<CommercialOrder>;
   addNote: (opts: CommercialOrderNoteRequest) => Promise<CommercialOrder>;
+  updateBillingDetails: (
+    opts: CommercialBillingDetailsUpdateRequest,
+  ) => Promise<CommercialOrder>;
   approve: (opts: CommercialOrderTransitionRequest) => Promise<CommercialOrder>;
   cancel: (opts: CommercialOrderTransitionRequest) => Promise<CommercialOrder>;
+  quotePreview: (
+    opts: CommercialQuotePreviewRequest,
+  ) => Promise<CommercialQuotePreview>;
+  issueQuote: (opts: CommercialQuoteIssueRequest) => Promise<CommercialOrder>;
+  voidQuote: (opts: CommercialQuoteVoidRequest) => Promise<CommercialOrder>;
+  quoteDocument: (
+    opts: CommercialQuoteDocumentRequest,
+  ) => Promise<CommercialQuoteDocument>;
   invoicePreview: (
     opts: CommercialInvoicePreviewRequest,
   ) => Promise<CommercialInvoicePreview>;
@@ -386,8 +459,13 @@ export const commercialOrders = {
   revise: authFirstRequireAccount,
   assign: authFirstRequireAccount,
   addNote: authFirstRequireAccount,
+  updateBillingDetails: authFirstRequireAccount,
   approve: authFirstRequireAccount,
   cancel: authFirstRequireAccount,
+  quotePreview: authFirstRequireAccount,
+  issueQuote: authFirstRequireAccount,
+  voidQuote: authFirstRequireAccount,
+  quoteDocument: authFirstRequireAccount,
   invoicePreview: authFirstRequireAccount,
   createInvoiceDraft: authFirstRequireAccount,
   linkExistingInvoice: authFirstRequireAccount,

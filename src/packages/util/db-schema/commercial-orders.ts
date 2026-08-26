@@ -246,6 +246,88 @@ Table({
 });
 
 Table({
+  name: "commercial_quotes",
+  rules: {
+    primary_key: "id",
+    pg_indexes: [
+      "commercial_order_id",
+      "status",
+      "issued_at",
+      "valid_until",
+      "updated_at",
+    ],
+    pg_unique_indexes: ["quote_number", "idempotency_key"],
+  },
+  fields: {
+    id: { type: "uuid", not_null: true },
+    commercial_order_id: { type: "uuid", not_null: true },
+    quote_number: {
+      type: "string",
+      pg_type: "VARCHAR(64)",
+      not_null: true,
+      pg_check: "CHECK (btrim(quote_number) <> '')",
+    },
+    status: {
+      type: "string",
+      pg_type: "VARCHAR(32)",
+      not_null: true,
+      pg_default: "'issued'::character varying",
+      pg_check:
+        "CHECK (status IN ('issued','void')) " +
+        "CHECK (status <> 'void' OR (voided_at IS NOT NULL AND voided_by_account_id IS NOT NULL))",
+    },
+    currency: {
+      type: "string",
+      pg_type: "VARCHAR(3)",
+      not_null: true,
+      pg_check: "CHECK (currency = 'usd')",
+    },
+    subtotal: { ...money, pg_check: "CHECK (subtotal > 0)" },
+    total: { ...money, pg_check: "CHECK (total >= subtotal)" },
+    issued_at: { type: "timestamp", not_null: true },
+    valid_until: {
+      type: "timestamp",
+      not_null: true,
+      pg_check: "CHECK (valid_until > issued_at)",
+    },
+    voided_at: { type: "timestamp" },
+    document_filename: {
+      type: "string",
+      not_null: true,
+      pg_check: "CHECK (btrim(document_filename) <> '')",
+    },
+    document_mime_type: {
+      type: "string",
+      pg_type: "VARCHAR(64)",
+      not_null: true,
+      pg_check: "CHECK (document_mime_type = 'application/pdf')",
+    },
+    document_sha256: {
+      type: "string",
+      pg_type: "VARCHAR(64)",
+      not_null: true,
+      pg_check: "CHECK (document_sha256 ~ '^[0-9a-f]{64}$')",
+    },
+    document_size: {
+      type: "integer",
+      not_null: true,
+      pg_check: "CHECK (document_size > 0 AND document_size <= 2097152)",
+    },
+    document_data: { type: "Buffer", not_null: true },
+    snapshot: { type: "map", not_null: true, pg_default: "'{}'::jsonb" },
+    created_by_account_id: {
+      type: "uuid",
+      not_null: true,
+      render: { type: "account" },
+    },
+    voided_by_account_id: { type: "uuid", render: { type: "account" } },
+    idempotency_key: { type: "string", not_null: true },
+    created_at: { type: "timestamp", not_null: true, pg_default: "now()" },
+    updated_at: { type: "timestamp", not_null: true, pg_default: "now()" },
+  },
+});
+
+Table({
   name: "commercial_invoices",
   rules: {
     primary_key: "id",
