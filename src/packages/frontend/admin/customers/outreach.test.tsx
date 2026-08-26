@@ -197,6 +197,18 @@ describe("CRM outreach admin", () => {
     expect(screen.getByLabelText("Outreach queue summary")).toBeVisible();
   });
 
+  it("keeps history readable while mutation entry points are disabled", async () => {
+    api.getOutreachLimits.mockResolvedValue({
+      ...limits,
+      mutations_enabled: false,
+    });
+    render(<OutreachAdmin />);
+
+    expect(await screen.findByText("CRM outreach is read-only")).toBeVisible();
+    expect(screen.getByRole("button", { name: /New outreach/ })).toBeDisabled();
+    expect(screen.getByLabelText("Outreach queue summary")).toBeVisible();
+  });
+
   it("previews an exact batch mutation before a fresh-authenticated commit", async () => {
     api.createOutreachBatch.mockImplementation(async (request) =>
       request.commit
@@ -219,7 +231,9 @@ describe("CRM outreach admin", () => {
     );
     render(<OutreachAdmin />);
 
-    fireEvent.click(screen.getByRole("button", { name: /New outreach/ }));
+    const newOutreach = screen.getByRole("button", { name: /New outreach/ });
+    await waitFor(() => expect(newOutreach).toBeEnabled());
+    fireEvent.click(newOutreach);
     fireEvent.change(screen.getByLabelText("Batch name"), {
       target: { value: "Internal adoption pilot test" },
     });
@@ -267,7 +281,9 @@ describe("CRM outreach admin", () => {
       .mockRejectedValueOnce(new Error("Zendesk test provider unavailable"));
     render(<OutreachAdmin />);
 
-    fireEvent.click(screen.getByRole("button", { name: /New outreach/ }));
+    const newOutreach = screen.getByRole("button", { name: /New outreach/ });
+    await waitFor(() => expect(newOutreach).toBeEnabled());
+    fireEvent.click(newOutreach);
     fireEvent.change(screen.getByLabelText("Batch name"), {
       target: { value: "Internal test" },
     });

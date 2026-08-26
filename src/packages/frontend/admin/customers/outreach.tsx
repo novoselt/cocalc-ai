@@ -803,10 +803,12 @@ function OutreachActionModal({
 
 function DeliveryCard({
   delivery,
+  mutationsEnabled,
   onAction,
   onOpen,
 }: {
   delivery: CrmOutreachDelivery;
+  mutationsEnabled: boolean;
   onAction: (action: OutreachAction) => void;
   onOpen: () => void;
 }) {
@@ -863,6 +865,7 @@ function DeliveryCard({
           </Button>
           {delivery.state === "failed" ? (
             <Button
+              disabled={!mutationsEnabled}
               onClick={() =>
                 onAction({
                   kind: "delivery-action",
@@ -879,6 +882,7 @@ function DeliveryCard({
             delivery.state,
           ) ? (
             <Button
+              disabled={!mutationsEnabled}
               onClick={() =>
                 onAction({
                   kind: "delivery-action",
@@ -909,10 +913,12 @@ function DeliveryCard({
 
 function DeliveryDrawer({
   delivery,
+  mutationsEnabled,
   onAction,
   onClose,
 }: {
   delivery?: CrmOutreachDelivery;
+  mutationsEnabled: boolean;
   onAction: (action: OutreachAction) => void;
   onClose: () => void;
 }) {
@@ -1143,6 +1149,7 @@ function DeliveryDrawer({
           !delivery.replied_at &&
           delivery.task_id ? (
             <Button
+              disabled={!mutationsEnabled}
               onClick={() => onAction({ kind: "follow-up", delivery })}
               type="primary"
             >
@@ -1151,6 +1158,7 @@ function DeliveryDrawer({
           ) : null}
           {delivery.task_id ? (
             <Button
+              disabled={!mutationsEnabled}
               onClick={() =>
                 onAction({
                   kind: "task-transition",
@@ -1164,6 +1172,7 @@ function DeliveryDrawer({
           ) : null}
           {delivery.task_id ? (
             <Button
+              disabled={!mutationsEnabled}
               onClick={() =>
                 onAction({
                   kind: "task-transition",
@@ -1180,6 +1189,7 @@ function DeliveryDrawer({
           ) ? (
             <Button
               danger
+              disabled={!mutationsEnabled}
               onClick={() =>
                 onAction({
                   kind: "delivery-action",
@@ -1192,6 +1202,7 @@ function DeliveryDrawer({
             </Button>
           ) : null}
           <Button
+            disabled={!mutationsEnabled}
             onClick={() => onAction({ kind: "add-suppression", delivery })}
           >
             Suppress contact
@@ -1203,6 +1214,7 @@ function DeliveryDrawer({
           ) : null}
           {delivery.task_id ? (
             <Button
+              disabled={!mutationsEnabled}
               onClick={() =>
                 onAction({
                   kind: "task-transition",
@@ -1231,10 +1243,12 @@ function DeliveryDrawer({
 
 function BatchDrawer({
   batch,
+  mutationsEnabled,
   onAction,
   onClose,
 }: {
   batch?: CrmOutreachBatch;
+  mutationsEnabled: boolean;
   onAction: (action: OutreachAction) => void;
   onClose: () => void;
 }) {
@@ -1303,6 +1317,7 @@ function BatchDrawer({
           <Flex gap={8} wrap>
             {detail.batch.state === "draft" ? (
               <Button
+                disabled={!mutationsEnabled}
                 onClick={() =>
                   onAction({ kind: "add-recipient", batch: detail.batch })
                 }
@@ -1312,7 +1327,7 @@ function BatchDrawer({
             ) : null}
             {detail.batch.state === "draft" ? (
               <Button
-                disabled={!preview.can_approve}
+                disabled={!mutationsEnabled || !preview.can_approve}
                 onClick={() =>
                   onAction({
                     kind: "batch-transition",
@@ -1327,7 +1342,7 @@ function BatchDrawer({
             ) : null}
             {detail.batch.state === "approved" ? (
               <Button
-                disabled={!preview.can_queue}
+                disabled={!mutationsEnabled || !preview.can_queue}
                 onClick={() =>
                   onAction({
                     kind: "batch-transition",
@@ -1342,6 +1357,7 @@ function BatchDrawer({
             ) : null}
             {["queued", "sending"].includes(detail.batch.state) ? (
               <Button
+                disabled={!mutationsEnabled}
                 onClick={() =>
                   onAction({
                     kind: "batch-transition",
@@ -1355,6 +1371,7 @@ function BatchDrawer({
             ) : null}
             {detail.batch.state === "paused" ? (
               <Button
+                disabled={!mutationsEnabled}
                 onClick={() =>
                   onAction({
                     kind: "batch-transition",
@@ -1511,6 +1528,8 @@ export function OutreachAdmin({
   const [openBatch, setOpenBatch] = useState<CrmOutreachBatch>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>("");
+  const [truncatedSources, setTruncatedSources] = useState<string[]>([]);
+  const mutationsEnabled = limits?.mutations_enabled === true;
   const names = useAccountDisplayNames([
     ...batches.map(({ owner_account_id }) => owner_account_id),
     ...followups.map(({ task }) => task.assignee_account_id),
@@ -1564,6 +1583,15 @@ export function OutreachAdmin({
       setFollowups(followUpRows.followups);
       setLimits(nextLimits);
       setDiagnostics(nextDiagnostics);
+      setTruncatedSources(
+        [
+          deliveryRows.truncated ? "deliveries" : undefined,
+          batchRows.truncated ? "batches" : undefined,
+          templateRows.truncated ? "templates" : undefined,
+          suppressionRows.truncated ? "suppressions" : undefined,
+          followUpRows.truncated ? "follow-ups" : undefined,
+        ].filter((value): value is string => value != null),
+      );
     } catch (err) {
       setError(err);
     } finally {
@@ -1580,8 +1608,8 @@ export function OutreachAdmin({
   }, [initialOrganization]);
 
   useEffect(() => {
-    if (startNewKey) setAction({ kind: "create-batch" });
-  }, [startNewKey]);
+    if (startNewKey && mutationsEnabled) setAction({ kind: "create-batch" });
+  }, [mutationsEnabled, startNewKey]);
 
   const needle = search.trim().toLowerCase();
   const batchById = new Map(batches.map((batch) => [batch.id, batch]));
@@ -1693,6 +1721,7 @@ export function OutreachAdmin({
               Refresh
             </Button>
             <Button
+              disabled={!mutationsEnabled}
               onClick={() => setAction({ kind: "create-batch" })}
               icon={<Icon name="plus" />}
               size="large"
@@ -1722,6 +1751,15 @@ export function OutreachAdmin({
               : "Zendesk delivery kill switch is off"
           }
           type={limits.delivery_enabled ? "success" : "warning"}
+        />
+      ) : null}
+
+      {limits && !limits.mutations_enabled ? (
+        <Alert
+          description="Queue history, exact messages, engagement, and diagnostics remain available. Draft, approval, suppression, and task changes are disabled at seed authority."
+          showIcon
+          title="CRM outreach is read-only"
+          type="info"
         />
       ) : null}
 
@@ -1803,6 +1841,52 @@ export function OutreachAdmin({
             </Card>
           ))}
         </div>
+      ) : null}
+
+      {limits?.provider_not_before || limits?.next_eligible_send_at ? (
+        <Alert
+          description={
+            <Space wrap>
+              {limits.provider_not_before ? (
+                <Text>
+                  Provider backoff ends{" "}
+                  <TimeAgo date={limits.provider_not_before} />.
+                </Text>
+              ) : null}
+              {limits.next_eligible_send_at ? (
+                <Text>
+                  Next eligible provider claim{" "}
+                  <TimeAgo date={limits.next_eligible_send_at} />.
+                </Text>
+              ) : null}
+            </Space>
+          }
+          showIcon
+          title="Provider pacing is active"
+          type="warning"
+        />
+      ) : null}
+
+      {limits && Object.keys(limits.rolling_usage.by_domain).length ? (
+        <Collapse
+          items={[
+            {
+              key: "domain-rate-usage",
+              label: "Recipient-domain usage in the rolling 24-hour window",
+              children: (
+                <Flex gap={8} wrap>
+                  {Object.entries(limits.rolling_usage.by_domain)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([domain, count]) => (
+                      <Tag key={domain}>
+                        {domain} · {count} / {limits.send_per_domain_per_day}
+                      </Tag>
+                    ))}
+                </Flex>
+              ),
+            },
+          ]}
+        />
       ) : null}
 
       <div className="crm-filter-panel">
@@ -2011,6 +2095,14 @@ export function OutreachAdmin({
       {error ? (
         <ErrorDisplay error={error} onClose={() => setError("")} />
       ) : null}
+      {truncatedSources.length ? (
+        <Alert
+          description={`This bounded workspace snapshot does not include every ${truncatedSources.join(", ")} record. Use narrower filters or the agent CLI for complete operational review.`}
+          showIcon
+          title="Some outreach records are outside this snapshot"
+          type="warning"
+        />
+      ) : null}
       {loading ? <Spin description="Loading CRM outreach" /> : null}
 
       {!loading && view === "deliveries" ? (
@@ -2020,6 +2112,7 @@ export function OutreachAdmin({
               <DeliveryCard
                 delivery={delivery}
                 key={delivery.id}
+                mutationsEnabled={mutationsEnabled}
                 onAction={setAction}
                 onOpen={() => setOpenDelivery(delivery)}
               />
@@ -2065,6 +2158,7 @@ export function OutreachAdmin({
                   </Button>
                   {batch.state === "draft" ? (
                     <Button
+                      disabled={!mutationsEnabled}
                       onClick={() =>
                         setAction({ kind: "add-recipient", batch })
                       }
@@ -2087,6 +2181,7 @@ export function OutreachAdmin({
       {!loading && view === "templates" ? (
         <Flex vertical gap={12}>
           <Button
+            disabled={!mutationsEnabled}
             icon={<Icon name="plus" />}
             onClick={() => setAction({ kind: "create-template" })}
             style={{ alignSelf: "flex-start" }}
@@ -2124,6 +2219,7 @@ export function OutreachAdmin({
                   />
                   {template.status === "draft" ? (
                     <Button
+                      disabled={!mutationsEnabled}
                       onClick={() =>
                         setAction({
                           kind: "template-transition",
@@ -2138,6 +2234,7 @@ export function OutreachAdmin({
                   ) : null}
                   {template.status === "active" ? (
                     <Button
+                      disabled={!mutationsEnabled}
                       onClick={() =>
                         setAction({
                           kind: "template-transition",
@@ -2159,6 +2256,7 @@ export function OutreachAdmin({
       {!loading && view === "suppressions" ? (
         <Flex vertical gap={12}>
           <Button
+            disabled={!mutationsEnabled}
             icon={<Icon name="ban" />}
             onClick={() => setAction({ kind: "add-suppression" })}
             style={{ alignSelf: "flex-start" }}
@@ -2187,6 +2285,7 @@ export function OutreachAdmin({
                     <Paragraph>{suppression.note}</Paragraph>
                   ) : null}
                   <Button
+                    disabled={!mutationsEnabled}
                     onClick={() =>
                       setAction({ kind: "revoke-suppression", suppression })
                     }
@@ -2250,11 +2349,13 @@ export function OutreachAdmin({
       />
       <DeliveryDrawer
         delivery={openDelivery}
+        mutationsEnabled={mutationsEnabled}
         onAction={setAction}
         onClose={() => setOpenDelivery(undefined)}
       />
       <BatchDrawer
         batch={openBatch}
+        mutationsEnabled={mutationsEnabled}
         onAction={setAction}
         onClose={() => setOpenBatch(undefined)}
       />
