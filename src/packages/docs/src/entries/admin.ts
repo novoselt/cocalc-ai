@@ -10,6 +10,7 @@ import {
   ADMIN_BAY_OPS_BODY,
   ADMIN_CLI_BODY,
   ADMIN_CRM_BODY,
+  ADMIN_CRM_OUTREACH_BODY,
   ADMIN_CRM_UI_BODY,
   ADMIN_MANAGED_EGRESS_BODY,
   ADMIN_MEMBERSHIP_AND_LICENSES_BODY,
@@ -185,6 +186,27 @@ export const ADMIN_ENTRIES: DocsEntry[] = [
     summary:
       "Use the Customers queue and Customer 360 workspace to coordinate institutional relationships safely.",
     title: "Use the customer relationships workspace",
+    visibility: "admin",
+  },
+  {
+    audiences: ["agents", "teams"],
+    body: ADMIN_CRM_OUTREACH_BODY.trim(),
+    category: "Admin",
+    id: "admin.crm-outreach",
+    image: docsIcon(
+      "/public/docs/collaborators-8ce1955f.webp",
+      "A reviewed CRM outreach queue connected to Zendesk and internal follow-up",
+    ),
+    lastReviewed: "2026-08-26",
+    noActionReason:
+      "Admin operations runbook; use cocalc admin crm outreach or Admin -> Customers -> Outreach.",
+    searchKeywords:
+      "CRM outreach proactive Zendesk institutional prospects adoption pilot follow-up viewed no reply MyReadReceipt suppression opt out bounce complaint rate limit throttle template batch",
+    slug: "admin/crm-outreach",
+    status: "ready",
+    summary:
+      "Initiate reviewed institutional conversations with shared visibility, safe throttling, and durable follow-up.",
+    title: "Operate CRM outreach",
     visibility: "admin",
   },
   {

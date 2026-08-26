@@ -234,6 +234,7 @@ export interface CrmOutreachProviderOperation {
   provider_external_id: string;
   zendesk_ticket_id?: number | null;
   rate_limit_snapshot: Record<string, unknown>;
+  request_payload: Record<string, unknown>;
   lease_owner?: string | null;
   lease_expires_at?: string | null;
   not_before: string;

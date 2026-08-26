@@ -547,6 +547,155 @@ Enable visibility first, then normal mutations, and only then export/backfill.
 Rollback should disable effectful controls while preserving read visibility.
 `;
 
+export const ADMIN_CRM_OUTREACH_BODY = String.raw`
+## Read this runbook from the CLI
+
+CRM outreach lets the team initiate a small, reviewed institutional
+conversation while keeping every message, reply, follow-up, and suppression
+visible to all admins. Zendesk owns the conversation thread; CoCalc CRM owns
+the prospect, review workflow, throttling, follow-up task, and audit history.
+
+~~~sh
+cocalc docs show admin/crm-outreach --include-admin
+cocalc admin crm outreach --help
+cocalc admin crm outreach diagnostics --json
+cocalc admin crm outreach limits --json
+~~~
+
+## Safety model
+
+- Outreach is seed-global and admin-only. Mutations preview by default and a
+  committed mutation requires fresh authentication, \`expected_version\`, and
+  the preview's idempotency key.
+- Sending is disabled independently from visibility and drafting. Enable it
+  only after diagnostics reports valid Zendesk and webhook configuration.
+- Every recipient must be a reviewed CRM contact with an active relationship
+  to the target organization and a reviewed email address.
+- Suppressions, duplicate checks, organization cooldowns, per-domain limits,
+  and global limits are rechecked when work is claimed, not only at preview.
+- CoCalc records \`notification_requested\`; it does not claim that an email was
+  delivered. Zendesk and its notification trigger remain authoritative.
+- Never use this system for bulk marketing lists. It is designed for one
+  recipient or a deliberately small reviewed batch.
+
+## Prepare one reviewed outreach
+
+Search before creating anything, and create an opportunity and contact when
+they do not already exist. Then create a draft batch and add the recipient:
+
+~~~sh
+cocalc admin crm outreach batch create \
+  --name "Example University adoption pilot" \
+  --purpose "Offer a reviewed institutional adoption pilot" \
+  --kind adoption-pilot --owner admin@example.com \
+  --template adoption-pilot \
+  --reason "Prepare a reviewed pilot offer" --json
+
+cocalc admin crm outreach draft <batch-id> \
+  --person ada@example.edu --organization CRM-2026-000123 \
+  --opportunity <opportunity-id> \
+  --reason "Ada is the reviewed institutional contact" --json
+
+cocalc admin crm outreach preview <batch-id> --json
+~~~
+
+Templates are immutable revisions. Create a draft revision, review its exact
+rendered subject and body, then activate it. Merge fields are allowlisted and
+HTML in Markdown is disabled. A custom per-recipient subject or body is stored
+as an exact immutable snapshot before approval.
+
+## Approve and queue
+
+Approval freezes recipient and content snapshots. Queueing makes the worker
+eligible to create exactly one proactive Zendesk ticket per recipient. Run
+each mutation first as a preview, then repeat it with the returned version and
+idempotency key plus \`--commit\`.
+
+~~~sh
+cocalc admin crm outreach approve <batch-id> --reason "Reviewed exact content"
+cocalc admin crm outreach queue <batch-id> --reason "Approved for controlled send"
+cocalc admin crm outreach list --state queued,sent --json
+cocalc admin crm outreach show <delivery-id> --json
+~~~
+
+The provider operation has a stable external id. On a timeout, retry or
+reconcile the same delivery; do not create a replacement batch or ticket.
+Pause or cancel a batch to stop work that has not started. A cancellation does
+not erase tickets or messages already created.
+
+## Replies, view observations, and follow-up
+
+Requester replies are synchronized from Zendesk into the CRM timeline and
+complete the open outreach follow-up task. MyReadReceipt observations are
+stored as immutable engagement events when they can be tied strictly to the
+configured integration and Zendesk comment. A view observation is useful
+evidence, but it is not proof that a human read or understood the message and
+it never completes the task.
+
+The standard policy is:
+
+1. Send creates one waiting follow-up task, due after the configured interval
+   (seven days by default).
+2. A reply completes the task and moves the shared work to the relationship
+   owner.
+3. Viewed with no reply is shown as “view observed, no reply” and is eligible
+   for a concise same-thread follow-up after review.
+4. No view and no reply should first prompt delivery/address verification,
+   rather than a more aggressive message.
+5. After the configured maximum follow-ups (two by default), the task becomes
+   a final review. Close the opportunity as no response or set a deliberate
+   later action; do not continue an automatic sequence.
+
+~~~sh
+cocalc admin crm outreach followups list --overdue --unreplied --json
+cocalc admin crm outreach followups list --viewed --unreplied --json
+cocalc admin crm outreach engagement <delivery-id> --json
+cocalc admin crm outreach followups preview <delivery-id> --json
+cocalc admin crm outreach followups send <delivery-id> \
+  --body-file follow-up.md --reason "Reviewed seven-day follow-up"
+~~~
+
+Follow-ups are never sent automatically. An admin reviews the current ticket,
+exact body, suppression state, limits, and timing before queueing a public
+comment on the existing Zendesk ticket.
+
+## Suppression and opt-out
+
+An opt-out, provider complaint, hard bounce, or manual suppression immediately
+prevents new work and cancels queued delivery/follow-up work in its scope.
+The public opt-out endpoint uses an opaque one-time-looking token and always
+returns a generic confirmation page.
+
+~~~sh
+cocalc admin crm outreach suppressions list --json
+cocalc admin crm outreach suppressions add --scope email \
+  --value ada@example.edu --suppression-reason manual \
+  --note "Requested no further proactive contact" \
+  --reason "Recorded contact preference"
+~~~
+
+Revoking a suppression requires a reviewed reason and does not automatically
+resume cancelled work.
+
+## Configuration and controlled validation
+
+Admins configure all outreach limits and provider identifiers under Site
+Settings. Effective values are hard-clamped by the server, reload without a
+deploy, and are exposed by \`outreach limits\`. Keep delivery disabled until:
+
+1. The shared support address, Zendesk group, form, submitter, trigger, and
+   webhook are configured and diagnostics is healthy.
+2. A proactive ticket with a public comment notifies a controlled internal
+   requester, and that requester's reply appends to the same ticket.
+3. The webhook signature is rejected when invalid or stale.
+4. A clearly labelled test message exercises reply, view observation,
+   suppression, timeout reconciliation, and follow-up without duplicates.
+
+Use a subject and first line such as \`[TEST CRM OUTREACH - DO NOT ACTION]\` for
+all tests against the real Zendesk tenant. Never use an actual prospect as a
+test recipient.
+`;
+
 export const ADMIN_CRM_UI_BODY = String.raw`
 ## What the Customers workspace is for
 

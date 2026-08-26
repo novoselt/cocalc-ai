@@ -2774,6 +2774,11 @@ export async function transitionTask(
   if (opts.action === "assign" && !opts.assignee_account_id) {
     throw Error("assignee_account_id is required when assigning a task");
   }
+  if (opts.action === "reschedule" && !opts.due_at) {
+    throw Error("due_at is required when rescheduling a task");
+  }
+  const dueAt =
+    opts.action === "reschedule" ? isoRequired(opts.due_at) : original.due_at;
   const assigneeAccountId =
     opts.assignee_account_id ?? original.assignee_account_id;
   if (!isValidUUID(assigneeAccountId))
@@ -2795,14 +2800,15 @@ export async function transitionTask(
     proposed: {
       state,
       assignee_account_id: assigneeAccountId,
+      due_at: dueAt,
     },
     resultType: "task",
     currentVersion: async (db) =>
       (await loadTask(db, id, db !== getPool())).version,
     apply: async (client, eventId) => {
       await client.query(
-        `UPDATE crm_tasks SET state=$1,assignee_account_id=$2,updated_by_account_id=$3,updated_at=NOW(),version=version+1,completed_at=CASE WHEN $1='completed' THEN NOW() ELSE completed_at END,completed_by_account_id=CASE WHEN $1='completed' THEN $3::uuid ELSE completed_by_account_id END,cancelled_at=CASE WHEN $1='cancelled' THEN NOW() ELSE cancelled_at END,cancelled_by_account_id=CASE WHEN $1='cancelled' THEN $3::uuid ELSE cancelled_by_account_id END WHERE id=$4`,
-        [state, assigneeAccountId, opts.account_id, id],
+        `UPDATE crm_tasks SET state=$1,assignee_account_id=$2,due_at=$3,updated_by_account_id=$4,updated_at=NOW(),version=version+1,completed_at=CASE WHEN $1='completed' THEN NOW() ELSE completed_at END,completed_by_account_id=CASE WHEN $1='completed' THEN $4::uuid ELSE completed_by_account_id END,cancelled_at=CASE WHEN $1='cancelled' THEN NOW() ELSE cancelled_at END,cancelled_by_account_id=CASE WHEN $1='cancelled' THEN $4::uuid ELSE cancelled_by_account_id END WHERE id=$5`,
+        [state, assigneeAccountId, dueAt, opts.account_id, id],
       );
       const result = await loadTask(client, id);
       await insertActivity(client, {

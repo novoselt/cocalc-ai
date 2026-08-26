@@ -28,5 +28,23 @@ describe("CRM rollout capabilities", () => {
       }),
     ).toEqual(["visible", "mutate", "commercial"]);
     expect(crmActionCapabilities("backfill")).toEqual(["visible", "backfill"]);
+    expect(crmActionCapabilities("listContactSuppressions")).toEqual([
+      "visible",
+      "outreach",
+    ]);
+    expect(crmActionCapabilities("createOutreachBatch")).toEqual([
+      "visible",
+      "mutate",
+      "outreach",
+      "outreachMutate",
+    ]);
+    expect(crmActionCapabilities("sendOutreachFollowup")).toEqual([
+      "visible",
+      "mutate",
+      "zendesk",
+      "outreach",
+      "outreachMutate",
+      "outreachDelivery",
+    ]);
   });
 });

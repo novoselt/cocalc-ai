@@ -168,3 +168,31 @@ export const createCommercialOrderFromOpportunity = mutation(
   "createCommercialOrderFromOpportunity",
 );
 export const backfill = mutation("backfill");
+export const listOutreachTemplates = read("listOutreachTemplates");
+export const getOutreachTemplate = read("getOutreachTemplate");
+export const listOutreachBatches = read("listOutreachBatches");
+export const getOutreachBatch = read("getOutreachBatch");
+export const listOutreachDeliveries = read("listOutreachDeliveries");
+export const getOutreachDelivery = read("getOutreachDelivery");
+export const previewOutreachBatch = read("previewOutreachBatch");
+export const listContactSuppressions = read("listContactSuppressions");
+export const getOutreachLimits = read("getOutreachLimits");
+export const getOutreachDiagnostics = read("getOutreachDiagnostics");
+export const listOutreachEngagementEvents = read(
+  "listOutreachEngagementEvents",
+);
+export const listOutreachFollowups = read("listOutreachFollowups");
+export const previewOutreachFollowup = read("previewOutreachFollowup");
+export const createOutreachTemplate = mutation("createOutreachTemplate");
+export const transitionOutreachTemplate = mutation(
+  "transitionOutreachTemplate",
+);
+export const createOutreachBatch = mutation("createOutreachBatch");
+export const updateOutreachBatch = mutation("updateOutreachBatch");
+export const addOutreachRecipient = mutation("addOutreachRecipient");
+export const removeOutreachRecipient = mutation("removeOutreachRecipient");
+export const transitionOutreachBatch = mutation("transitionOutreachBatch");
+export const mutateOutreachDelivery = mutation("mutateOutreachDelivery");
+export const mutateContactSuppression = mutation("mutateContactSuppression");
+export const sendOutreachFollowup = mutation("sendOutreachFollowup");
+export const syncOutreachDelivery = mutation("syncOutreachDelivery");

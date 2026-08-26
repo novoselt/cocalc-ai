@@ -619,6 +619,9 @@ Table({
     }),
     zendesk_ticket_id: { type: "integer", desc: "Provider ticket result." },
     rate_limit_snapshot: json("Effective limits used for this claim."),
+    request_payload: json(
+      "Bounded immutable provider request needed for asynchronous execution.",
+    ),
     lease_owner: { type: "string", desc: "Claiming worker." },
     lease_expires_at: nullableTimestamp("Claim lease expiry."),
     not_before: timestamp("Earliest attempt time."),

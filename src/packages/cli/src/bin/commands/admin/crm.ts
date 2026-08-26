@@ -18,6 +18,12 @@ import {
   CRM_TASK_PRIORITIES,
   CRM_TASK_TYPES,
 } from "@cocalc/util/crm";
+import {
+  CRM_OUTREACH_FOLLOW_UP_POLICIES,
+  CRM_OUTREACH_KINDS,
+  CRM_OUTREACH_SUPPRESSION_REASONS,
+  CRM_OUTREACH_SUPPRESSION_SCOPES,
+} from "@cocalc/util/crm-outreach";
 
 export type CrmCommandDeps = {
   withContext: any;
@@ -910,7 +916,12 @@ function registerTasks(crm: Command, deps: CrmCommandDeps): void {
         ),
     ),
   );
-  for (const action of ["assign", "complete", "cancel"] as const) {
+  for (const action of [
+    "assign",
+    "reschedule",
+    "complete",
+    "cancel",
+  ] as const) {
     addMutationOptions(
       tasks
         .command(`${action} <task>`)
@@ -918,11 +929,14 @@ function registerTasks(crm: Command, deps: CrmCommandDeps): void {
         .option(
           "--assignee <account>",
           action === "assign" ? "new assignee (required)" : "optional assignee",
-        ),
+        )
+        .option("--due <iso>", "new due timestamp (required for reschedule)"),
     ).action(async (task: string, opts: any, cmd: Command) =>
       deps.withContext(cmd, `admin crm tasks ${action}`, async (ctx) => {
         if (action === "assign" && !opts.assignee)
           throw Error("--assignee is required");
+        if (action === "reschedule" && !opts.due)
+          throw Error("--due is required");
         return await ctx.hub.adminCrm.transitionTask(
           mutationRequest(`task.${action}`, opts, {
             task,
@@ -930,6 +944,7 @@ function registerTasks(crm: Command, deps: CrmCommandDeps): void {
             assignee_account_id: opts.assignee
               ? await resolveAccount(ctx, opts.assignee, deps)
               : undefined,
+            due_at: opts.due,
           }),
         );
       }),
@@ -1221,6 +1236,660 @@ function registerTopLevel(crm: Command, deps: CrmCommandDeps): void {
     );
 }
 
+function registerOutreach(crm: Command, deps: CrmCommandDeps): void {
+  const outreach = crm
+    .command("outreach")
+    .description("reviewed proactive Zendesk conversations")
+    .addHelpText(
+      "after",
+      `\nOutreach runbook:\n  cocalc docs show admin/crm-outreach --include-admin\n  cocalc docs search "CRM outreach adoption pilot" --include-admin\n  cocalc docs skill-context --query "send reviewed prospect outreach" --include-admin\n\nQueue commits only create durable work. The seed worker performs rate-limited Zendesk calls. Full conversations remain in Zendesk; use 'cocalc admin support show|reply'.\n`,
+    );
+
+  addPageOptions(
+    outreach
+      .command("list")
+      .description("list outreach deliveries")
+      .option("--batch <batch>", "batch number or UUID")
+      .option("--organization <customer>", "CRM customer")
+      .option("--person <person>", "CRM contact or email")
+      .option("--opportunity <opportunity>", "CRM opportunity")
+      .option("--state <states>", "comma-separated delivery states")
+      .option("--ticket <id>", "Zendesk ticket ID")
+      .option(
+        "--engagement <filter>",
+        "viewed, unviewed, replied, or unreplied",
+      )
+      .option("--suggested-action <action>", "follow-up suggested action"),
+  ).action(async (opts: any, cmd: Command) =>
+    deps.withContext(
+      cmd,
+      "admin crm outreach list",
+      async (ctx) =>
+        await ctx.hub.adminCrm.listOutreachDeliveries({
+          ...page(opts),
+          batch: opts.batch,
+          organization: opts.organization,
+          person: opts.person,
+          opportunity: opts.opportunity,
+          states: csv(opts.state),
+          zendesk_ticket_id: positiveInteger(opts.ticket, "--ticket"),
+          engagement: opts.engagement
+            ? normalizeState(opts.engagement)
+            : undefined,
+          suggested_action: opts.suggestedAction
+            ? normalizeState(opts.suggestedAction)
+            : undefined,
+          reason: readReason(opts.reason, "Review CRM outreach queue"),
+        }),
+    ),
+  );
+  outreach
+    .command("show <delivery>")
+    .description("show an outreach delivery by UUID, provider key, or ticket")
+    .option("--reason <text>", "audit reason")
+    .action(async (delivery: string, opts: any, cmd: Command) =>
+      deps.withContext(
+        cmd,
+        "admin crm outreach show",
+        async (ctx) =>
+          await ctx.hub.adminCrm.getOutreachDelivery({
+            delivery,
+            reason: readReason(opts.reason, "Review CRM outreach delivery"),
+          }),
+      ),
+    );
+  outreach
+    .command("preview <batch>")
+    .description("render exact recipients, content, preflight, and limits")
+    .option("--reason <text>", "audit reason")
+    .action(async (batch: string, opts: any, cmd: Command) =>
+      deps.withContext(
+        cmd,
+        "admin crm outreach preview",
+        async (ctx) =>
+          await ctx.hub.adminCrm.previewOutreachBatch({
+            batch,
+            reason: readReason(opts.reason, "Preview CRM outreach batch"),
+          }),
+      ),
+    );
+
+  addMutationOptions(
+    outreach
+      .command("draft <batch>")
+      .description("preview or add one reviewed recipient to a draft batch")
+      .requiredOption("--person <person>", "reviewed CRM contact or email")
+      .option(
+        "--organization <customer>",
+        "CRM organization when contact has several",
+      )
+      .option("--opportunity <opportunity>", "linked CRM opportunity")
+      .option("--email <email>", "specific reviewed contact email")
+      .option("--subject <subject>", "custom exact subject")
+      .option("--body-file <path>", "custom Markdown body file")
+      .option("--override-reason <text>", "reviewed cooldown warning override"),
+  ).action(async (batch: string, opts: any, cmd: Command) =>
+    deps.withContext(cmd, "admin crm outreach draft", async (ctx) => {
+      const body = opts.bodyFile
+        ? await readFile(opts.bodyFile, "utf8")
+        : undefined;
+      return await ctx.hub.adminCrm.addOutreachRecipient(
+        mutationRequest("outreach.recipient.add", opts, {
+          batch,
+          person: opts.person,
+          organization: opts.organization,
+          opportunity: opts.opportunity,
+          email: opts.email,
+          subject: opts.subject,
+          body_markdown: body,
+          override_reason: opts.overrideReason,
+        }),
+      );
+    }),
+  );
+
+  for (const action of [
+    "approve",
+    "queue",
+    "pause",
+    "resume",
+    "cancel",
+  ] as const) {
+    addMutationOptions(
+      outreach
+        .command(`${action} <batch>`)
+        .description(`preview or ${action} an outreach batch`),
+    ).action(async (batch: string, opts: any, cmd: Command) =>
+      deps.withContext(
+        cmd,
+        `admin crm outreach ${action}`,
+        async (ctx) =>
+          await ctx.hub.adminCrm.transitionOutreachBatch(
+            mutationRequest(`outreach.batch.${action}`, opts, {
+              batch,
+              action,
+            }),
+          ),
+      ),
+    );
+  }
+
+  for (const action of ["retry", "reconcile"] as const) {
+    addMutationOptions(
+      outreach
+        .command(`${action} <delivery>`)
+        .description(`preview or ${action} one delivery`),
+    ).action(async (delivery: string, opts: any, cmd: Command) =>
+      deps.withContext(
+        cmd,
+        `admin crm outreach ${action}`,
+        async (ctx) =>
+          await ctx.hub.adminCrm.mutateOutreachDelivery(
+            mutationRequest(`outreach.delivery.${action}`, opts, {
+              delivery,
+              action,
+            }),
+          ),
+      ),
+    );
+  }
+
+  outreach
+    .command("limits")
+    .description("show effective limits, rolling usage, and provider backoff")
+    .option(
+      "--domain <domain>",
+      "include current usage for one recipient domain",
+    )
+    .option("--reason <text>", "audit reason")
+    .action(async (opts: any, cmd: Command) =>
+      deps.withContext(
+        cmd,
+        "admin crm outreach limits",
+        async (ctx) =>
+          await ctx.hub.adminCrm.getOutreachLimits({
+            domain: opts.domain,
+            reason: readReason(opts.reason, "Review CRM outreach limits"),
+          }),
+      ),
+    );
+  outreach
+    .command("diagnostics")
+    .description("show provider configuration and consistency diagnostics")
+    .option("--reason <text>", "audit reason")
+    .action(async (opts: any, cmd: Command) =>
+      deps.withContext(
+        cmd,
+        "admin crm outreach diagnostics",
+        async (ctx) =>
+          await ctx.hub.adminCrm.getOutreachDiagnostics({
+            reason: readReason(opts.reason, "Review CRM outreach diagnostics"),
+          }),
+      ),
+    );
+
+  const batches = outreach
+    .command("batch")
+    .alias("batches")
+    .description("reviewed one-recipient and small-batch workflows");
+  addPageOptions(
+    batches
+      .command("list")
+      .description("list outreach batches")
+      .option("--state <states>", "comma-separated batch states")
+      .option("--kind <kinds>", "comma-separated outreach kinds")
+      .option("--owner <account>", "batch owner")
+      .option("--organization <customer>", "contains this customer")
+      .option("--ticket <id>", "contains this Zendesk ticket"),
+  ).action(async (opts: any, cmd: Command) =>
+    deps.withContext(cmd, "admin crm outreach batch list", async (ctx) => {
+      return await ctx.hub.adminCrm.listOutreachBatches({
+        ...page(opts),
+        states: csv(opts.state),
+        kinds: csv(opts.kind),
+        owner_account_id: opts.owner
+          ? await resolveAccount(ctx, opts.owner, deps)
+          : undefined,
+        organization: opts.organization,
+        zendesk_ticket_id: positiveInteger(opts.ticket, "--ticket"),
+        reason: readReason(opts.reason, "Review CRM outreach batches"),
+      });
+    }),
+  );
+  batches
+    .command("show <batch>")
+    .description("show one batch and every recipient delivery")
+    .option("--reason <text>", "audit reason")
+    .action(async (batch: string, opts: any, cmd: Command) =>
+      deps.withContext(
+        cmd,
+        "admin crm outreach batch show",
+        async (ctx) =>
+          await ctx.hub.adminCrm.getOutreachBatch({
+            batch,
+            reason: readReason(opts.reason, "Review CRM outreach batch"),
+          }),
+      ),
+    );
+  addMutationOptions(
+    batches
+      .command("create")
+      .description("preview or create a draft outreach batch")
+      .requiredOption("--name <name>", "batch name")
+      .requiredOption("--purpose <purpose>", "reviewed business purpose")
+      .requiredOption("--kind <kind>", CRM_OUTREACH_KINDS.join(", "))
+      .requiredOption("--owner <account>", "responsible admin")
+      .option(
+        "--template <template>",
+        "active template key, key@revision, or UUID",
+      ),
+  ).action(async (opts: any, cmd: Command) =>
+    deps.withContext(cmd, "admin crm outreach batch create", async (ctx) => {
+      return await ctx.hub.adminCrm.createOutreachBatch(
+        mutationRequest("outreach.batch.create", opts, {
+          name: opts.name,
+          purpose: opts.purpose,
+          kind: enumValue(opts.kind, CRM_OUTREACH_KINDS, "--kind"),
+          owner_account_id: await resolveAccount(ctx, opts.owner, deps),
+          template: opts.template,
+        }),
+      );
+    }),
+  );
+  addMutationOptions(
+    batches
+      .command("update <batch>")
+      .description("preview or update draft batch fields from JSON")
+      .requiredOption("--file <path>", "JSON object with reviewed changes"),
+  ).action(async (batch: string, opts: any, cmd: Command) =>
+    deps.withContext(
+      cmd,
+      "admin crm outreach batch update",
+      async (ctx) =>
+        await ctx.hub.adminCrm.updateOutreachBatch(
+          mutationRequest("outreach.batch.update", opts, {
+            batch,
+            changes: await readJson(opts.file),
+          }),
+        ),
+    ),
+  );
+  addMutationOptions(
+    batches
+      .command("remove <batch> <delivery>")
+      .description("preview or remove a draft recipient"),
+  ).action(async (batch: string, delivery: string, opts: any, cmd: Command) =>
+    deps.withContext(
+      cmd,
+      "admin crm outreach batch remove",
+      async (ctx) =>
+        await ctx.hub.adminCrm.removeOutreachRecipient(
+          mutationRequest("outreach.recipient.remove", opts, {
+            batch,
+            delivery,
+          }),
+        ),
+    ),
+  );
+
+  const templates = outreach
+    .command("templates")
+    .description("immutable outreach template revisions");
+  addPageOptions(
+    templates
+      .command("list")
+      .option("--key <key>", "stable template key")
+      .option("--kind <kind>", "outreach kind")
+      .option("--status <status>", "draft, active, or retired"),
+  ).action(async (opts: any, cmd: Command) =>
+    deps.withContext(
+      cmd,
+      "admin crm outreach templates list",
+      async (ctx) =>
+        await ctx.hub.adminCrm.listOutreachTemplates({
+          ...page(opts),
+          template_key: opts.key,
+          kind: opts.kind ? normalizeState(opts.kind) : undefined,
+          status: opts.status ? normalizeState(opts.status) : undefined,
+          reason: readReason(opts.reason, "Review CRM outreach templates"),
+        }),
+    ),
+  );
+  templates
+    .command("show <template>")
+    .description("show a template revision")
+    .option("--reason <text>", "audit reason")
+    .action(async (template: string, opts: any, cmd: Command) =>
+      deps.withContext(
+        cmd,
+        "admin crm outreach templates show",
+        async (ctx) =>
+          await ctx.hub.adminCrm.getOutreachTemplate({
+            template,
+            reason: readReason(opts.reason, "Review CRM outreach template"),
+          }),
+      ),
+    );
+  addMutationOptions(
+    templates
+      .command("create")
+      .alias("revise")
+      .description("preview or create an immutable draft template revision")
+      .requiredOption("--key <key>", "stable lower-case template key")
+      .requiredOption("--name <name>", "human template name")
+      .requiredOption("--kind <kind>", CRM_OUTREACH_KINDS.join(", "))
+      .requiredOption("--subject <template>", "allowlisted merge-field subject")
+      .requiredOption("--body-file <path>", "Markdown body template")
+      .option("--required-fields <fields>", "comma-separated merge fields")
+      .option(
+        "--follow-up-policy <policy>",
+        CRM_OUTREACH_FOLLOW_UP_POLICIES.join(", "),
+        "no_response",
+      )
+      .option("--follow-up-after-days <n>", "override follow-up interval")
+      .option("--max-followups <n>", "override reviewed follow-up maximum")
+      .option(
+        "--final-review-after-days <n>",
+        "override final review interval",
+      ),
+  ).action(async (opts: any, cmd: Command) =>
+    deps.withContext(
+      cmd,
+      "admin crm outreach templates create",
+      async (ctx) =>
+        await ctx.hub.adminCrm.createOutreachTemplate(
+          mutationRequest("outreach.template.create", opts, {
+            template_key: opts.key,
+            name: opts.name,
+            kind: enumValue(opts.kind, CRM_OUTREACH_KINDS, "--kind"),
+            subject_template: opts.subject,
+            body_markdown_template: await readFile(opts.bodyFile, "utf8"),
+            required_fields: `${opts.requiredFields ?? ""}`
+              .split(",")
+              .map((value) => value.trim())
+              .filter(Boolean),
+            follow_up_policy: enumValue(
+              opts.followUpPolicy,
+              CRM_OUTREACH_FOLLOW_UP_POLICIES,
+              "--follow-up-policy",
+            ),
+            follow_up_after_days: positiveInteger(
+              opts.followUpAfterDays,
+              "--follow-up-after-days",
+              90,
+            ),
+            max_followups: positiveInteger(
+              opts.maxFollowups,
+              "--max-followups",
+              5,
+            ),
+            final_review_after_days: positiveInteger(
+              opts.finalReviewAfterDays,
+              "--final-review-after-days",
+              90,
+            ),
+          }),
+        ),
+    ),
+  );
+  for (const action of ["activate", "retire"] as const) {
+    addMutationOptions(
+      templates
+        .command(`${action} <template>`)
+        .description(`preview or ${action} a template revision`),
+    ).action(async (template: string, opts: any, cmd: Command) =>
+      deps.withContext(
+        cmd,
+        `admin crm outreach templates ${action}`,
+        async (ctx) =>
+          await ctx.hub.adminCrm.transitionOutreachTemplate(
+            mutationRequest(`outreach.template.${action}`, opts, {
+              template,
+              action,
+            }),
+          ),
+      ),
+    );
+  }
+
+  const suppressions = outreach
+    .command("suppressions")
+    .description("shared opt-out, bounce, complaint, and manual suppressions");
+  addPageOptions(
+    suppressions
+      .command("list")
+      .option("--organization <customer>", "CRM customer")
+      .option("--person <person>", "CRM person")
+      .option("--scope <scope>", CRM_OUTREACH_SUPPRESSION_SCOPES.join(", "))
+      .option("--search <text>", "scope value or note")
+      .option("--inactive", "show revoked suppressions"),
+  ).action(async (opts: any, cmd: Command) =>
+    deps.withContext(
+      cmd,
+      "admin crm outreach suppressions list",
+      async (ctx) =>
+        await ctx.hub.adminCrm.listContactSuppressions({
+          ...page(opts),
+          organization: opts.organization,
+          person: opts.person,
+          scope: opts.scope ? normalizeState(opts.scope) : undefined,
+          search: opts.search,
+          active: opts.inactive ? false : true,
+          reason: readReason(opts.reason, "Review CRM outreach suppressions"),
+        }),
+    ),
+  );
+  addMutationOptions(
+    suppressions
+      .command("add")
+      .requiredOption(
+        "--scope <scope>",
+        CRM_OUTREACH_SUPPRESSION_SCOPES.join(", "),
+      )
+      .option("--value <value>", "normalized email/domain or CRM ID")
+      .option("--organization <customer>", "CRM organization")
+      .option("--person <person>", "CRM person")
+      .option("--email <email>", "reviewed email")
+      .option(
+        "--suppression-reason <reason>",
+        CRM_OUTREACH_SUPPRESSION_REASONS.join(", "),
+        "manual",
+      )
+      .option("--note <text>", "bounded internal note"),
+  ).action(async (opts: any, cmd: Command) =>
+    deps.withContext(
+      cmd,
+      "admin crm outreach suppressions add",
+      async (ctx) =>
+        await ctx.hub.adminCrm.mutateContactSuppression(
+          mutationRequest("outreach.suppression.add", opts, {
+            action: "add",
+            scope: enumValue(
+              opts.scope,
+              CRM_OUTREACH_SUPPRESSION_SCOPES,
+              "--scope",
+            ),
+            value: opts.value,
+            organization: opts.organization,
+            person: opts.person,
+            email: opts.email,
+            suppression_reason: enumValue(
+              opts.suppressionReason,
+              CRM_OUTREACH_SUPPRESSION_REASONS,
+              "--suppression-reason",
+            ),
+            note: opts.note,
+          }),
+        ),
+    ),
+  );
+  addMutationOptions(
+    suppressions
+      .command("revoke <suppression>")
+      .description("preview or revoke an active suppression"),
+  ).action(async (suppression: string, opts: any, cmd: Command) =>
+    deps.withContext(
+      cmd,
+      "admin crm outreach suppressions revoke",
+      async (ctx) =>
+        await ctx.hub.adminCrm.mutateContactSuppression(
+          mutationRequest("outreach.suppression.revoke", opts, {
+            action: "revoke",
+            suppression,
+          }),
+        ),
+    ),
+  );
+
+  const followups = outreach
+    .command("followups")
+    .description("shared no-response follow-up work");
+  addPageOptions(
+    followups
+      .command("list")
+      .option("--organization <customer>", "CRM customer")
+      .option("--opportunity <opportunity>", "CRM opportunity")
+      .option("--assignee <account>", "task assignee")
+      .option("--due-before <iso>", "task deadline")
+      .option("--overdue", "only overdue tasks")
+      .option("--viewed", "view observed")
+      .option("--unviewed", "no view observed")
+      .option("--replied", "requester replied")
+      .option("--unreplied", "no requester reply"),
+  ).action(async (opts: any, cmd: Command) =>
+    deps.withContext(cmd, "admin crm outreach followups list", async (ctx) => {
+      if (opts.viewed && opts.unviewed)
+        throw Error("choose --viewed or --unviewed");
+      if (opts.replied && opts.unreplied)
+        throw Error("choose --replied or --unreplied");
+      return await ctx.hub.adminCrm.listOutreachFollowups({
+        ...page(opts),
+        organization: opts.organization,
+        opportunity: opts.opportunity,
+        assignee_account_id: opts.assignee
+          ? await resolveAccount(ctx, opts.assignee, deps)
+          : undefined,
+        due_before: opts.dueBefore,
+        overdue: opts.overdue || undefined,
+        viewed: opts.viewed ? true : opts.unviewed ? false : undefined,
+        replied: opts.replied ? true : opts.unreplied ? false : undefined,
+        reason: readReason(opts.reason, "Review CRM outreach follow-ups"),
+      });
+    }),
+  );
+  followups
+    .command("show <delivery>")
+    .description("show the linked delivery and follow-up task")
+    .option("--reason <text>", "audit reason")
+    .action(async (delivery: string, opts: any, cmd: Command) =>
+      deps.withContext(
+        cmd,
+        "admin crm outreach followups show",
+        async (ctx) => {
+          const record = await ctx.hub.adminCrm.getOutreachDelivery({
+            delivery,
+            reason: readReason(opts.reason, "Review CRM outreach follow-up"),
+          });
+          const task = record.task_id
+            ? await ctx.hub.adminCrm.getTask({
+                task: record.task_id,
+                reason: readReason(
+                  opts.reason,
+                  "Review CRM outreach follow-up task",
+                ),
+              })
+            : undefined;
+          return { delivery: record, task };
+        },
+      ),
+    );
+  followups
+    .command("preview <delivery>")
+    .alias("draft")
+    .option("--body-file <path>", "reviewed follow-up body")
+    .option("--reason <text>", "audit reason")
+    .action(async (delivery: string, opts: any, cmd: Command) =>
+      deps.withContext(
+        cmd,
+        "admin crm outreach followups preview",
+        async (ctx) =>
+          await ctx.hub.adminCrm.previewOutreachFollowup({
+            delivery,
+            body: opts.bodyFile
+              ? await readFile(opts.bodyFile, "utf8")
+              : undefined,
+            reason: readReason(opts.reason, "Preview CRM outreach follow-up"),
+          }),
+      ),
+    );
+  addMutationOptions(
+    followups
+      .command("send <delivery>")
+      .description("preview or queue a reviewed same-thread Zendesk comment")
+      .requiredOption("--body-file <path>", "reviewed public follow-up body"),
+  ).action(async (delivery: string, opts: any, cmd: Command) =>
+    deps.withContext(
+      cmd,
+      "admin crm outreach followups send",
+      async (ctx) =>
+        await ctx.hub.adminCrm.sendOutreachFollowup(
+          mutationRequest("outreach.followup.queue", opts, {
+            delivery,
+            body: await readFile(opts.bodyFile, "utf8"),
+          }),
+        ),
+    ),
+  );
+
+  for (const action of ["reschedule", "complete", "cancel"] as const) {
+    addMutationOptions(
+      followups
+        .command(`${action} <delivery>`)
+        .description(`preview or ${action} the shared follow-up task`)
+        .option("--due <iso>", "new due timestamp (required for reschedule)"),
+    ).action(async (delivery: string, opts: any, cmd: Command) =>
+      deps.withContext(
+        cmd,
+        `admin crm outreach followups ${action}`,
+        async (ctx) => {
+          if (action === "reschedule" && !opts.due)
+            throw Error("--due is required");
+          const record = await ctx.hub.adminCrm.getOutreachDelivery({
+            delivery,
+            reason: readReason(opts.reason, "Resolve outreach follow-up task"),
+          });
+          if (!record.task_id)
+            throw Error("outreach delivery has no linked follow-up task");
+          return await ctx.hub.adminCrm.transitionTask(
+            mutationRequest(`task.${action}`, opts, {
+              task: record.task_id,
+              action,
+              due_at: opts.due,
+            }),
+          );
+        },
+      ),
+    );
+  }
+
+  const engagement = outreach
+    .command("engagement <delivery>")
+    .description("list immutable view observations for one opening message");
+  addPageOptions(engagement).action(
+    async (delivery: string, opts: any, cmd: Command) =>
+      deps.withContext(
+        cmd,
+        "admin crm outreach engagement",
+        async (ctx) =>
+          await ctx.hub.adminCrm.listOutreachEngagementEvents({
+            ...page(opts),
+            delivery,
+            reason: readReason(opts.reason, "Review CRM outreach engagement"),
+          }),
+      ),
+  );
+}
+
 export function registerCrmCommand(
   admin: Command,
   deps: CrmCommandDeps,
@@ -1241,7 +1910,7 @@ export function registerCrmCommand(
     .description("seed-global customer relationship management")
     .addHelpText(
       "after",
-      `\nAdmin runbook:\n  cocalc docs show admin/crm --include-admin\n  cocalc docs search "customer relationship CRM" --include-admin\n  cocalc docs skill-context --query "institutional customer CRM" --include-admin\n\nMutations preview by default. Review the returned expected_version and idempotency_key, then re-run with --expected-version, --idempotency-key, and --commit. Committed writes and exports require browser-approved fresh authentication.\n`,
+      `\nAdmin runbooks:\n  cocalc docs show admin/crm --include-admin\n  cocalc docs show admin/crm-outreach --include-admin\n  cocalc docs search "customer relationship CRM" --include-admin\n  cocalc docs skill-context --query "institutional customer CRM" --include-admin\n\nMutations preview by default. Review the returned expected_version and idempotency_key, then re-run with --expected-version, --idempotency-key, and --commit. Committed writes and exports require browser-approved fresh authentication.\n`,
     );
   registerOrganizations(crm, cliDeps);
   registerDomains(crm, cliDeps);
@@ -1251,6 +1920,7 @@ export function registerCrmCommand(
   registerActivities(crm, cliDeps);
   registerLinks(crm, cliDeps);
   registerOrder(crm, cliDeps);
+  registerOutreach(crm, cliDeps);
   registerTopLevel(crm, cliDeps);
   return crm;
 }

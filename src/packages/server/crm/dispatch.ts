@@ -40,6 +40,34 @@ import {
   updatePerson,
   updateTask,
 } from "./store";
+import {
+  addOutreachRecipient,
+  createOutreachBatch,
+  createOutreachTemplate,
+  getOutreachBatch,
+  getOutreachDelivery,
+  getOutreachDiagnostics,
+  getOutreachLimits,
+  getOutreachTemplate,
+  listContactSuppressions,
+  listOutreachBatches,
+  listOutreachDeliveries,
+  listOutreachEngagementEvents,
+  listOutreachFollowups,
+  listOutreachTemplates,
+  mutateContactSuppression,
+  mutateOutreachDelivery,
+  previewOutreachBatch,
+  previewOutreachFollowup,
+  removeOutreachRecipient,
+  sendOutreachFollowup,
+  syncOutreachDelivery,
+  transitionOutreachBatch,
+  transitionOutreachTemplate,
+  updateOutreachBatch,
+} from "./outreach/store";
+import { applyOutreachOptOut } from "./outreach/opt-out";
+import { enqueueOutreachZendeskEvent } from "./outreach/webhook";
 
 export interface CrmSeedRequest {
   action: string;
@@ -128,6 +156,58 @@ export async function dispatchCrmSeedRequest(
       return await createOrderFromOpportunity(opts);
     case "backfill":
       return await backfill(opts);
+    case "listOutreachTemplates":
+      return await listOutreachTemplates(opts);
+    case "getOutreachTemplate":
+      return await getOutreachTemplate(opts);
+    case "listOutreachBatches":
+      return await listOutreachBatches(opts);
+    case "getOutreachBatch":
+      return await getOutreachBatch(opts);
+    case "listOutreachDeliveries":
+      return await listOutreachDeliveries(opts);
+    case "getOutreachDelivery":
+      return await getOutreachDelivery(opts);
+    case "previewOutreachBatch":
+      return await previewOutreachBatch(opts);
+    case "listContactSuppressions":
+      return await listContactSuppressions(opts);
+    case "getOutreachLimits":
+      return await getOutreachLimits(opts);
+    case "getOutreachDiagnostics":
+      return await getOutreachDiagnostics(opts);
+    case "listOutreachEngagementEvents":
+      return await listOutreachEngagementEvents(opts);
+    case "listOutreachFollowups":
+      return await listOutreachFollowups(opts);
+    case "previewOutreachFollowup":
+      return await previewOutreachFollowup(opts);
+    case "createOutreachTemplate":
+      return await createOutreachTemplate(opts);
+    case "transitionOutreachTemplate":
+      return await transitionOutreachTemplate(opts);
+    case "createOutreachBatch":
+      return await createOutreachBatch(opts);
+    case "updateOutreachBatch":
+      return await updateOutreachBatch(opts);
+    case "addOutreachRecipient":
+      return await addOutreachRecipient(opts);
+    case "removeOutreachRecipient":
+      return await removeOutreachRecipient(opts);
+    case "transitionOutreachBatch":
+      return await transitionOutreachBatch(opts);
+    case "mutateOutreachDelivery":
+      return await mutateOutreachDelivery(opts);
+    case "mutateContactSuppression":
+      return await mutateContactSuppression(opts);
+    case "sendOutreachFollowup":
+      return await sendOutreachFollowup(opts);
+    case "syncOutreachDelivery":
+      return await syncOutreachDelivery(opts);
+    case "ingestOutreachZendeskEvent":
+      return await enqueueOutreachZendeskEvent(opts);
+    case "applyOutreachOptOut":
+      return await applyOutreachOptOut(opts.token);
     default:
       throw Error(`unsupported CRM seed action '${request.action}'`);
   }
