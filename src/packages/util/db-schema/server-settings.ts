@@ -110,6 +110,9 @@ export interface Customize {
   commercial_receivables_mutations_enabled?: boolean;
   commercial_receivables_stripe_drafts_enabled?: boolean;
   commercial_receivables_stripe_send_enabled?: boolean;
+  commercial_receivables_stripe_quotes_enabled?: boolean;
+  commercial_receivables_stripe_quote_finalize_enabled?: boolean;
+  commercial_receivables_stripe_quote_accept_enabled?: boolean;
   commercial_receivables_manual_settlement_enabled?: boolean;
   commercial_receivables_reconciliation_enabled?: boolean;
   commercial_receivables_fulfillment_enabled?: boolean;

@@ -5,6 +5,17 @@
 
 import { Table } from "./types";
 
+export const COMMERCIAL_QUOTE_LIFECYCLE_CONSTRAINT =
+  "commercial_quotes_lifecycle_v2_check";
+export const COMMERCIAL_QUOTE_LIFECYCLE_EXPRESSION =
+  "status IN ('draft','issued','accepted','void') " +
+  "AND (status NOT IN ('issued','accepted') OR " +
+  "(issued_at IS NOT NULL AND document_filename IS NOT NULL " +
+  "AND document_mime_type IS NOT NULL AND document_sha256 IS NOT NULL " +
+  "AND document_size IS NOT NULL AND document_data IS NOT NULL)) " +
+  "AND (status <> 'void' OR " +
+  "(voided_at IS NOT NULL AND voided_by_account_id IS NOT NULL))";
+
 const money = {
   type: "number" as const,
   pg_type: "numeric(20,10)",
@@ -252,11 +263,20 @@ Table({
     pg_indexes: [
       "commercial_order_id",
       "status",
+      "provider",
+      "provider_status",
       "issued_at",
       "valid_until",
       "updated_at",
     ],
-    pg_unique_indexes: ["quote_number", "idempotency_key"],
+    pg_unique_indexes: ["quote_number", "provider_quote_id", "idempotency_key"],
+    pg_constraints: [
+      {
+        name: COMMERCIAL_QUOTE_LIFECYCLE_CONSTRAINT,
+        type: "check",
+        expression: COMMERCIAL_QUOTE_LIFECYCLE_EXPRESSION,
+      },
+    ],
   },
   fields: {
     id: { type: "uuid", not_null: true },
@@ -272,9 +292,30 @@ Table({
       pg_type: "VARCHAR(32)",
       not_null: true,
       pg_default: "'issued'::character varying",
+    },
+    provider_quote_id: { type: "string" },
+    provider_status: {
+      type: "string",
+      pg_type: "VARCHAR(32)",
       pg_check:
-        "CHECK (status IN ('issued','void')) " +
-        "CHECK (status <> 'void' OR (voided_at IS NOT NULL AND voided_by_account_id IS NOT NULL))",
+        "CHECK (provider_status IN ('draft','open','accepted','canceled'))",
+    },
+    provider_invoice_id: { type: "string" },
+    // Declare the referenced provider columns first so existing databases can
+    // add this cross-column constraint during an in-place schema sync.
+    provider: {
+      type: "string",
+      pg_type: "VARCHAR(32)",
+      not_null: true,
+      pg_default: "'local'::character varying",
+      pg_check:
+        "CHECK (provider IN ('local','stripe')) " +
+        "CHECK (provider <> 'local' OR (provider_quote_id IS NULL AND provider_status IS NULL AND provider_invoice_id IS NULL)) " +
+        "CHECK (provider_status IS NULL OR provider_quote_id IS NOT NULL) " +
+        "CHECK (provider_status <> 'draft' OR status = 'draft') " +
+        "CHECK (provider_status <> 'open' OR status = 'issued') " +
+        "CHECK (provider_status <> 'accepted' OR status = 'accepted') " +
+        "CHECK (provider_status <> 'canceled' OR status = 'void')",
     },
     currency: {
       type: "string",
@@ -284,37 +325,44 @@ Table({
     },
     subtotal: { ...money, pg_check: "CHECK (subtotal > 0)" },
     total: { ...money, pg_check: "CHECK (total >= subtotal)" },
-    issued_at: { type: "timestamp", not_null: true },
+    issued_at: { type: "timestamp", not_null: false },
     valid_until: {
       type: "timestamp",
       not_null: true,
-      pg_check: "CHECK (valid_until > issued_at)",
+      pg_check: "CHECK (issued_at IS NULL OR valid_until > issued_at)",
     },
     voided_at: { type: "timestamp" },
     document_filename: {
       type: "string",
-      not_null: true,
+      not_null: false,
       pg_check: "CHECK (btrim(document_filename) <> '')",
     },
     document_mime_type: {
       type: "string",
       pg_type: "VARCHAR(64)",
-      not_null: true,
+      not_null: false,
       pg_check: "CHECK (document_mime_type = 'application/pdf')",
     },
     document_sha256: {
       type: "string",
       pg_type: "VARCHAR(64)",
-      not_null: true,
+      not_null: false,
       pg_check: "CHECK (document_sha256 ~ '^[0-9a-f]{64}$')",
     },
     document_size: {
       type: "integer",
-      not_null: true,
+      not_null: false,
       pg_check: "CHECK (document_size > 0 AND document_size <= 2097152)",
     },
-    document_data: { type: "Buffer", not_null: true },
+    document_data: { type: "Buffer", not_null: false },
     snapshot: { type: "map", not_null: true, pg_default: "'{}'::jsonb" },
+    provider_snapshot: {
+      type: "map",
+      not_null: true,
+      pg_default: "'{}'::jsonb",
+    },
+    provider_updated_at: { type: "timestamp" },
+    last_reconciled_at: { type: "timestamp" },
     created_by_account_id: {
       type: "uuid",
       not_null: true,
@@ -591,7 +639,14 @@ Table({
   name: "commercial_stripe_events",
   rules: {
     primary_key: "event_id",
-    pg_indexes: ["status", "next_attempt_at", "lease_expires_at", "created_at"],
+    pg_indexes: [
+      "commercial_quote_id",
+      "provider_quote_id",
+      "status",
+      "next_attempt_at",
+      "lease_expires_at",
+      "created_at",
+    ],
     pg_custom_indexes: [
       {
         name: "commercial_stripe_events_claim_idx",
@@ -605,7 +660,9 @@ Table({
     event_type: { type: "string", not_null: true },
     livemode: { type: "boolean", not_null: true },
     commercial_order_id: { type: "uuid" },
+    commercial_quote_id: { type: "uuid" },
     commercial_invoice_id: { type: "uuid" },
+    provider_quote_id: { type: "string" },
     provider_invoice_id: { type: "string" },
     status: {
       type: "string",
@@ -639,6 +696,7 @@ Table({
     primary_key: "id",
     pg_indexes: [
       "commercial_order_id",
+      "commercial_quote_id",
       "commercial_invoice_id",
       "operation",
       "status",
@@ -649,6 +707,7 @@ Table({
   fields: {
     id: { type: "uuid", not_null: true },
     commercial_order_id: { type: "uuid", not_null: true },
+    commercial_quote_id: { type: "uuid" },
     commercial_invoice_id: { type: "uuid" },
     operation: {
       type: "string",

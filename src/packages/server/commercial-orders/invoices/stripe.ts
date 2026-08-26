@@ -68,7 +68,7 @@ function dueAt(order: CommercialOrder, from = new Date()): string {
   return date.toISOString();
 }
 
-function approvedInvoiceTerms(order: CommercialOrder): {
+export function approvedInvoiceTerms(order: CommercialOrder): {
   memo?: string;
   billing_address?: Record<string, string>;
 } {
@@ -476,13 +476,27 @@ async function resolveCustomer(opts: {
   invoice: CommercialInvoice;
   keyPrefix: string;
 }): Promise<string> {
+  return await resolveCommercialStripeCustomer({
+    stripe: opts.stripe,
+    order: opts.order,
+    providerCustomerId: opts.invoice.provider_customer_id,
+    keyPrefix: opts.keyPrefix,
+  });
+}
+
+export async function resolveCommercialStripeCustomer(opts: {
+  stripe: Awaited<ReturnType<typeof getConn>>;
+  order: CommercialOrder;
+  providerCustomerId?: string | null;
+  keyPrefix: string;
+}): Promise<string> {
   const billing = opts.order.contacts.find(({ role }) => role === "billing");
   if (!billing) throw Error("a billing contact is required");
   const site = await currentStripeSite();
   const existing = await findExistingCustomer({
     stripe: opts.stripe,
     order: opts.order,
-    providerCustomerId: opts.invoice.provider_customer_id,
+    providerCustomerId: opts.providerCustomerId,
     site,
   });
   if (existing) return existing;
@@ -548,6 +562,15 @@ async function findExistingCustomer(opts: {
   return undefined;
 }
 
+export async function findExistingCommercialStripeCustomer(opts: {
+  stripe: Awaited<ReturnType<typeof getConn>>;
+  order: CommercialOrder;
+  providerCustomerId?: string | null;
+  site?: string;
+}): Promise<string | undefined> {
+  return await findExistingCustomer(opts);
+}
+
 function normalizeText(value: unknown): string {
   return `${value ?? ""}`.trim().replace(/\s+/g, " ").toLowerCase();
 }
@@ -606,7 +629,7 @@ function assertCustomerMatchesOrder(
   }
 }
 
-function customFields(order: CommercialOrder): Array<{
+export function customFields(order: CommercialOrder): Array<{
   name: string;
   value: string;
 }> {
@@ -1606,19 +1629,26 @@ export async function acceptCommercialStripeWebhookEvent(
   event: any,
 ): Promise<boolean> {
   const metadata = commercialMetadata(event?.data?.object);
-  if (metadata.flow !== FLOW) return false;
+  const quoteFlow =
+    metadata.flow === "commercial_quote" && !!metadata.commercial_quote_id;
+  const invoiceFlow = metadata.flow === FLOW;
+  if (!invoiceFlow && !quoteFlow) return false;
   const site = await currentStripeSite();
   if (metadata.cocalc_site !== site) return false;
+  const object = event?.data?.object;
+  const isQuote = `${object?.object}` === "quote";
   const payload = {
     event_id: `${event.id}`,
     event_type: `${event.type}`,
     livemode: event.livemode === true,
     commercial_order_id: metadata.commercial_order_id,
-    commercial_invoice_id: metadata.commercial_invoice_id,
+    commercial_quote_id: quoteFlow ? metadata.commercial_quote_id : undefined,
+    commercial_invoice_id: invoiceFlow
+      ? metadata.commercial_invoice_id
+      : undefined,
+    provider_quote_id: isQuote ? object.id : undefined,
     provider_invoice_id:
-      `${event?.data?.object?.object}` === "invoice"
-        ? event.data.object.id
-        : event?.data?.object?.invoice,
+      `${object?.object}` === "invoice" ? object.id : object?.invoice,
     created: event.created,
   };
   if (getConfiguredBayId() !== getConfiguredClusterSeedBayId()) {

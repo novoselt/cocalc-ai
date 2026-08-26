@@ -10,6 +10,7 @@ const mockUpdateMetrics = jest.fn();
 const mockDiagnostics = jest.fn();
 const mockProcessWebhookQueue = jest.fn();
 const mockReconcileInvoices = jest.fn();
+const mockReconcileQuotes = jest.fn();
 const mockBayId = jest.fn();
 const mockSeedBayId = jest.fn();
 
@@ -51,6 +52,8 @@ jest.mock("./reconcile", () => ({
     mockProcessWebhookQueue(...args),
   reconcileStaleCommercialInvoices: (...args: unknown[]) =>
     mockReconcileInvoices(...args),
+  reconcileStaleCommercialQuotes: (...args: unknown[]) =>
+    mockReconcileQuotes(...args),
 }));
 
 import {
@@ -64,6 +67,7 @@ describe("commercial receivables maintenance", () => {
     counts: { open_orders: 2 },
     amounts: { open_amount: "6630.0000000000" },
     stale_invoice_ids: [],
+    stale_quote_ids: [],
     inconsistent_order_ids: [],
     reconciliation: {
       provider_local_mismatch_count: 0,
@@ -89,6 +93,7 @@ describe("commercial receivables maintenance", () => {
     mockCapability.mockResolvedValue(true);
     mockProcessWebhookQueue.mockResolvedValue({ processed: 1, failed: 0 });
     mockReconcileInvoices.mockResolvedValue({ reconciled: 2, failed: 0 });
+    mockReconcileQuotes.mockResolvedValue({ reconciled: 3, failed: 0 });
     mockDiagnostics.mockResolvedValue(diagnostics);
     mockCentralLog.mockResolvedValue(undefined);
     mockQuery.mockImplementation(async (sql: string) => {
@@ -108,12 +113,14 @@ describe("commercial receivables maintenance", () => {
 
     expect(mockProcessWebhookQueue).toHaveBeenCalledWith(100);
     expect(mockReconcileInvoices).toHaveBeenCalledWith({ limit: 100 });
+    expect(mockReconcileQuotes).toHaveBeenCalledWith({ limit: 100 });
     expect(mockUpdateMetrics).toHaveBeenCalledWith(diagnostics);
     expect(mockCentralLog).toHaveBeenCalledWith({
       event: "commercial_receivables_maintenance",
       value: {
         webhook: { processed: 1, failed: 0 },
         reconciliation: { reconciled: 2, failed: 0 },
+        quoteReconciliation: { reconciled: 3, failed: 0 },
         diagnostics,
       },
     });

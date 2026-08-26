@@ -93,9 +93,29 @@ export const COMMERCIAL_INVOICE_STATUSES = [
 export type CommercialInvoiceStatus =
   (typeof COMMERCIAL_INVOICE_STATUSES)[number];
 
-export const COMMERCIAL_QUOTE_STATUSES = ["issued", "void"] as const;
+export const COMMERCIAL_QUOTE_STATUSES = [
+  "draft",
+  "issued",
+  "accepted",
+  "void",
+] as const;
 
 export type CommercialQuoteStatus = (typeof COMMERCIAL_QUOTE_STATUSES)[number];
+
+export const COMMERCIAL_QUOTE_PROVIDERS = ["local", "stripe"] as const;
+
+export type CommercialQuoteProvider =
+  (typeof COMMERCIAL_QUOTE_PROVIDERS)[number];
+
+export const COMMERCIAL_QUOTE_PROVIDER_STATUSES = [
+  "draft",
+  "open",
+  "accepted",
+  "canceled",
+] as const;
+
+export type CommercialQuoteProviderStatus =
+  (typeof COMMERCIAL_QUOTE_PROVIDER_STATUSES)[number];
 
 export const COMMERCIAL_ORDER_DOCUMENT_KINDS = ["purchase_order"] as const;
 
@@ -196,17 +216,24 @@ export interface CommercialQuote {
   commercial_order_id: string;
   quote_number: string;
   status: CommercialQuoteStatus;
+  provider: CommercialQuoteProvider;
+  provider_quote_id?: string | null;
+  provider_status?: CommercialQuoteProviderStatus | null;
+  provider_invoice_id?: string | null;
   currency: string;
   subtotal: string;
   total: string;
-  issued_at: string;
+  issued_at?: string | null;
   valid_until: string;
   voided_at?: string | null;
-  document_filename: string;
-  document_mime_type: "application/pdf";
-  document_sha256: string;
-  document_size: number;
+  document_filename?: string | null;
+  document_mime_type?: "application/pdf" | null;
+  document_sha256?: string | null;
+  document_size?: number | null;
   snapshot: Record<string, unknown>;
+  provider_snapshot: Record<string, unknown>;
+  provider_updated_at?: string | null;
+  last_reconciled_at?: string | null;
   created_by_account_id: string;
   voided_by_account_id?: string | null;
   idempotency_key: string;
@@ -368,6 +395,7 @@ export interface CommercialOrderDiagnostics {
     oldest_reconciliation_lag_seconds: number;
   };
   stale_invoice_ids: string[];
+  stale_quote_ids: string[];
   inconsistent_order_ids: string[];
   review_queues: {
     truncated: Record<string, boolean>;
@@ -378,7 +406,9 @@ export interface CommercialOrderDiagnostics {
       event_type: string;
       status: string;
       commercial_order_id?: string | null;
+      commercial_quote_id?: string | null;
       commercial_invoice_id?: string | null;
+      provider_quote_id?: string | null;
       provider_invoice_id?: string | null;
       attempt_count: number;
       next_attempt_at: string;
@@ -389,6 +419,7 @@ export interface CommercialOrderDiagnostics {
     indeterminate_provider_operations: Array<{
       id: string;
       commercial_order_id: string;
+      commercial_quote_id?: string | null;
       commercial_invoice_id?: string | null;
       operation: string;
       status: string;

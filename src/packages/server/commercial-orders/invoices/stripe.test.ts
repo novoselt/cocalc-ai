@@ -1236,6 +1236,42 @@ describe("commercial Stripe invoices", () => {
     expect(mockEnqueueCommercialStripeEvent).not.toHaveBeenCalled();
   });
 
+  it("queues Stripe quote events with quote identities", async () => {
+    await expect(
+      acceptCommercialStripeWebhookEvent({
+        id: "evt_quote_1",
+        type: "quote.finalized",
+        livemode: false,
+        created: 1787529600,
+        data: {
+          object: {
+            id: "qt_1",
+            object: "quote",
+            invoice: null,
+            metadata: {
+              flow: "commercial_quote",
+              commercial_order_id: "co_1",
+              commercial_quote_id: "cq_1",
+              cocalc_site: SITE,
+            },
+          },
+        },
+      }),
+    ).resolves.toBe(true);
+
+    expect(mockEnqueueCommercialStripeEvent).toHaveBeenCalledWith({
+      event_id: "evt_quote_1",
+      event_type: "quote.finalized",
+      livemode: false,
+      commercial_order_id: "co_1",
+      commercial_quote_id: "cq_1",
+      commercial_invoice_id: undefined,
+      provider_quote_id: "qt_1",
+      provider_invoice_id: null,
+      created: 1787529600,
+    });
+  });
+
   it("routes accepted commercial webhooks from a non-seed bay to the seed", async () => {
     const commercialOrders = jest.fn().mockResolvedValue(undefined);
     const bayOps = jest.fn(() => ({ commercialOrders }));
