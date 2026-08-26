@@ -584,6 +584,22 @@ type Waiter = {
   timer?: NodeJS.Timeout;
 };
 
+function formatAppServerExitMessage(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  stderrDetail: string,
+): string {
+  if (code === 137 || signal === "SIGKILL") {
+    return (
+      "Codex was killed by SIGKILL (exit code 137). This is usually caused " +
+      "by the project running out of RAM. Increase the project's RAM or " +
+      `reduce memory use, then retry.${stderrDetail}`
+    );
+  }
+  const exitDetail = signal ? `signal:${signal}` : `${code ?? "?"}`;
+  return `codex app-server exited unexpectedly: ${exitDetail}${stderrDetail}`;
+}
+
 class AppServerClient {
   private nextId = 1;
   private readonly pendingRequests = new Map<number, RequestEntry>();
@@ -650,7 +666,7 @@ class AppServerClient {
       );
       const err = new Error(
         blockedCommandError ??
-          `codex app-server exited unexpectedly: ${this.exitDetail}${stderrDetail}`,
+          formatAppServerExitMessage(code, signal, stderrDetail),
       ) as Error & { stderrTail?: string[] };
       err.stderrTail = stderrTail;
       this.exitError = err;
