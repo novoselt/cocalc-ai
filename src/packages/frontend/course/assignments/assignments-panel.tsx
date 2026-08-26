@@ -351,8 +351,8 @@ export function AddAssignments({ name, actions, close }) {
     <AddItems
       itemName="assignment"
       items={assignments}
-      addItems={(paths) => {
-        actions.assignments.addAssignment(paths);
+      addItems={async (paths) => {
+        await actions.assignments.addAssignment(paths);
         close?.();
       }}
       selectorStyle={{

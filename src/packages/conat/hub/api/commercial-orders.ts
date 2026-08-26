@@ -11,6 +11,8 @@ import type {
   CommercialNextAction,
   CommercialOrder,
   CommercialOrderContact,
+  CommercialOrderDocument,
+  CommercialOrderDocumentKind,
   CommercialOrderDiagnostics,
   CommercialOrderEvent,
   CommercialOrderItem,
@@ -272,6 +274,30 @@ export interface CommercialQuoteDocument {
   content_base64: string;
 }
 
+export interface CommercialOrderDocumentUploadRequest extends CommercialMutationRequest {
+  id: string;
+  document_kind: CommercialOrderDocumentKind;
+  document_filename: string;
+  content_base64: string;
+  document_reference?: string;
+  note?: string;
+}
+
+export interface CommercialOrderDocumentVoidRequest extends CommercialMutationRequest {
+  id: string;
+  commercial_order_document_id: string;
+}
+
+export interface CommercialOrderDocumentDownloadRequest extends CommercialReadRequest {
+  id: string;
+  commercial_order_document_id: string;
+}
+
+export interface CommercialOrderDocumentDownload {
+  document: CommercialOrderDocument;
+  content_base64: string;
+}
+
 export interface CommercialInvoiceMutationRequest extends CommercialMutationRequest {
   id: string;
   commercial_invoice_id?: string;
@@ -404,6 +430,15 @@ export interface CommercialOrdersApi {
   quoteDocument: (
     opts: CommercialQuoteDocumentRequest,
   ) => Promise<CommercialQuoteDocument>;
+  uploadDocument: (
+    opts: CommercialOrderDocumentUploadRequest,
+  ) => Promise<CommercialOrder>;
+  voidDocument: (
+    opts: CommercialOrderDocumentVoidRequest,
+  ) => Promise<CommercialOrder>;
+  downloadDocument: (
+    opts: CommercialOrderDocumentDownloadRequest,
+  ) => Promise<CommercialOrderDocumentDownload>;
   invoicePreview: (
     opts: CommercialInvoicePreviewRequest,
   ) => Promise<CommercialInvoicePreview>;
@@ -466,6 +501,9 @@ export const commercialOrders = {
   issueQuote: authFirstRequireAccount,
   voidQuote: authFirstRequireAccount,
   quoteDocument: authFirstRequireAccount,
+  uploadDocument: authFirstRequireAccount,
+  voidDocument: authFirstRequireAccount,
+  downloadDocument: authFirstRequireAccount,
   invoicePreview: authFirstRequireAccount,
   createInvoiceDraft: authFirstRequireAccount,
   linkExistingInvoice: authFirstRequireAccount,

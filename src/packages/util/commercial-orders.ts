@@ -97,6 +97,18 @@ export const COMMERCIAL_QUOTE_STATUSES = ["issued", "void"] as const;
 
 export type CommercialQuoteStatus = (typeof COMMERCIAL_QUOTE_STATUSES)[number];
 
+export const COMMERCIAL_ORDER_DOCUMENT_KINDS = ["purchase_order"] as const;
+
+export type CommercialOrderDocumentKind =
+  (typeof COMMERCIAL_ORDER_DOCUMENT_KINDS)[number];
+
+export const COMMERCIAL_ORDER_DOCUMENT_STATUSES = ["active", "void"] as const;
+
+export type CommercialOrderDocumentStatus =
+  (typeof COMMERCIAL_ORDER_DOCUMENT_STATUSES)[number];
+
+export const COMMERCIAL_ORDER_DOCUMENT_MAX_BYTES = 5 * 1024 * 1024;
+
 export const COMMERCIAL_PAYMENT_METHODS = [
   "card",
   "ach",
@@ -202,6 +214,25 @@ export interface CommercialQuote {
   updated_at: string;
 }
 
+export interface CommercialOrderDocument {
+  id: string;
+  commercial_order_id: string;
+  document_kind: CommercialOrderDocumentKind;
+  status: CommercialOrderDocumentStatus;
+  document_reference?: string | null;
+  note?: string | null;
+  document_filename: string;
+  document_mime_type: "application/pdf";
+  document_sha256: string;
+  document_size: number;
+  created_by_account_id: string;
+  voided_by_account_id?: string | null;
+  voided_at?: string | null;
+  idempotency_key: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CommercialPayment {
   id: string;
   commercial_order_id: string;
@@ -271,13 +302,20 @@ export interface CommercialOrder {
   items: CommercialOrderItem[];
   contacts: CommercialOrderContact[];
   quotes: CommercialQuote[];
+  documents: CommercialOrderDocument[];
   invoices: CommercialInvoice[];
   payments: CommercialPayment[];
 }
 
 export interface CommercialOrderSummary extends Omit<
   CommercialOrder,
-  "items" | "contacts" | "quotes" | "invoices" | "payments" | "terms_snapshot"
+  | "items"
+  | "contacts"
+  | "quotes"
+  | "documents"
+  | "invoices"
+  | "payments"
+  | "terms_snapshot"
 > {
   billing_email?: string | null;
   latest_invoice_id?: string | null;

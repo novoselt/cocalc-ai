@@ -233,18 +233,21 @@ leaving visibility enabled.
    audited internal note.
 2. If procurement requires a formal pre-PO document, preview and issue a quote.
    Download the stored PDF and attach it to the customer conversation.
-3. Approve the order after validating the customer agreement and delivery
+3. When procurement sends a purchase order, attach its PDF and reviewed PO
+   reference to the order. The file remains available after payment or order
+   completion.
+4. Approve the order after validating the customer agreement and delivery
    details.
-4. Preview the invoice. Resolve every blocker before creating a Stripe draft.
-5. Create a draft. This never sends automatically.
-6. Review the Stripe customer, contact, line items, total, currency, negotiated
+5. Preview the invoice. Resolve every blocker before creating a Stripe draft.
+6. Create a draft. This never sends automatically.
+7. Review the Stripe customer, contact, line items, total, currency, negotiated
    payment terms, PO/reference fields, and test/live mode.
-7. Send the invoice with fresh auth and the current order version.
-8. Preview and provision the site license. Provision-before-payment is allowed
+8. Send the invoice with fresh auth and the current order version.
+9. Preview and provision the site license. Provision-before-payment is allowed
    only with the explicit reviewed flag.
-9. Let Stripe webhooks update payment state. The scheduled reconciler repairs
+10. Let Stripe webhooks update payment state. The scheduled reconciler repairs
    dropped or out-of-order webhooks.
-10. The order becomes complete only when its configured collection and
+11. The order becomes complete only when its configured collection and
    fulfillment requirements are both satisfied.
 
 Collection and fulfillment are intentionally independent. Provisioning a site
@@ -264,7 +267,28 @@ cocalc admin receivables quote issue AR-2026-000123 \
 cocalc admin receivables quote issue AR-2026-000123 \
   --reason "send formal procurement quote" --expected-version 4 --commit --json
 cocalc admin receivables quote download AR-2026-000123 \
-  --quote-id <uuid> --output quote.pdf
+  --quote-id <uuid> --output-file quote.pdf
+~~~
+
+Purchase-order PDFs are also immutable, digest-verified commercial documents.
+Uploading a PO reference fills an empty order \`po_number\`; it fails closed if
+the reference conflicts with a PO number already reviewed on the order. An
+incorrect or superseded attachment is voided, never deleted, and remains
+downloadable for audit. Attachments are accepted even after an order is paid or
+complete because procurement evidence can arrive late.
+
+~~~sh
+cocalc admin receivables document upload AR-2026-000123 \
+  --file purchase-order.pdf --reference PO-5874860 \
+  --reason "attach purchase order received from procurement" --json
+cocalc admin receivables document upload AR-2026-000123 \
+  --file purchase-order.pdf --reference PO-5874860 \
+  --reason "attach purchase order received from procurement" \
+  --expected-version 7 --commit --json
+cocalc admin receivables document download AR-2026-000123 \
+  --document-id <uuid> --output-file purchase-order.pdf
+cocalc admin receivables document void AR-2026-000123 \
+  --document-id <uuid> --reason "superseded by corrected PO"
 ~~~
 
 Use the dedicated billing correction action when procurement supplies a new

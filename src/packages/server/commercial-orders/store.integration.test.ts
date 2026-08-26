@@ -77,6 +77,7 @@ describePglite("commercial order store", () => {
     await getPool().query("DELETE FROM commercial_order_events");
     await getPool().query("DELETE FROM commercial_payments");
     await getPool().query("DELETE FROM commercial_invoices");
+    await getPool().query("DELETE FROM commercial_order_documents");
     await getPool().query("DELETE FROM commercial_quotes");
     await getPool().query("DELETE FROM commercial_order_contacts");
     await getPool().query("DELETE FROM commercial_order_items");
@@ -604,6 +605,76 @@ describePglite("commercial order store", () => {
       reason: "verify voided quote retention",
     });
     expect(retained.content_base64).toBe(document.content_base64);
+  });
+
+  it("attaches, downloads, and voids immutable purchase-order PDFs", async () => {
+    const created = await store.createCommercialOrder(request());
+    const content = Buffer.from("%PDF-1.4\nPurchase order 5874860\n%%EOF\n");
+    const uploadRequest = {
+      account_id: actor,
+      id: created.id,
+      document_kind: "purchase_order" as const,
+      document_filename: "upenn-po-5874860.pdf",
+      document_reference: "5874860",
+      note: "Received from Penn procurement",
+      content_base64: content.toString("base64"),
+      expected_version: created.version,
+      reason: "attach received purchase order",
+      idempotency_key: `document-upload-${randomUUID()}`,
+    };
+    const attached = await store.uploadCommercialOrderDocument(uploadRequest);
+    const replay = await store.uploadCommercialOrderDocument(uploadRequest);
+    expect(replay.version).toBe(attached.version);
+    expect(attached.po_number).toBe("5874860");
+    expect(attached.documents).toHaveLength(1);
+    expect(attached.documents[0]).toMatchObject({
+      document_kind: "purchase_order",
+      status: "active",
+      document_reference: "5874860",
+      document_filename: "upenn-po-5874860.pdf",
+      document_size: content.length,
+    });
+    expect(attached.documents[0].document_sha256).toMatch(/^[0-9a-f]{64}$/);
+    await expect(
+      store.uploadCommercialOrderDocument({
+        ...uploadRequest,
+        expected_version: attached.version,
+        document_reference: "DIFFERENT-PO",
+        idempotency_key: `document-conflict-${randomUUID()}`,
+      }),
+    ).rejects.toThrow("conflicts with existing PO number 5874860");
+    await expect(
+      store.uploadCommercialOrderDocument({
+        ...uploadRequest,
+        expected_version: attached.version,
+        idempotency_key: `document-duplicate-${randomUUID()}`,
+      }),
+    ).rejects.toThrow("already attached");
+
+    const downloaded = await store.getCommercialOrderDocument({
+      id: attached.id,
+      commercial_order_document_id: attached.documents[0].id,
+      reason: "verify stored purchase order",
+    });
+    expect(Buffer.from(downloaded.content_base64, "base64")).toEqual(content);
+    expect(downloaded.document).not.toHaveProperty("document_data");
+
+    const voided = await store.voidCommercialOrderDocument({
+      account_id: actor,
+      id: attached.id,
+      commercial_order_document_id: attached.documents[0].id,
+      expected_version: attached.version,
+      reason: "replace superseded purchase order",
+      idempotency_key: `document-void-${randomUUID()}`,
+    });
+    expect(voided.documents[0].status).toBe("void");
+    expect(voided.documents[0].voided_by_account_id).toBe(actor);
+    const retained = await store.getCommercialOrderDocument({
+      id: voided.id,
+      commercial_order_document_id: voided.documents[0].id,
+      reason: "verify voided purchase order retention",
+    });
+    expect(retained.content_base64).toBe(downloaded.content_base64);
   });
 
   it("corrects billing details after fulfillment but before invoicing", async () => {
