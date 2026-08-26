@@ -105,17 +105,12 @@ function planCourseManagedProjectReconciliation(
   const { account_id, course_project_id, type } = request;
   const { desiredAccountIds, managerAccountIds } =
     validateCourseManagedProjectRequest(request);
-  const course = {
+  let course = {
     ...request.course,
     project_id: course_project_id,
     path: normalizeCoursePath(request.course_path),
   };
   const users = { ...(row.users ?? {}) };
-  const missingDesiredAccountIds = [...desiredAccountIds].filter(
-    (desiredAccountId) =>
-      !managerAccountIds.includes(desiredAccountId) &&
-      users[desiredAccountId] == null,
-  );
   const currentCourse = row.course;
   const currentCourseProjectId = `${currentCourse?.project_id ?? ""}`;
   if (currentCourseProjectId && currentCourseProjectId !== course_project_id) {
@@ -133,7 +128,28 @@ function planCourseManagedProjectReconciliation(
 
   const preserveStudentCourse =
     type === "nbgrader" && currentCourse?.type === "student";
+  if (type === "student" && request.student_deleted !== true) {
+    const requestedStudentAccountId = `${course.account_id ?? ""}`.trim();
+    const currentStudentAccountId = `${currentCourse?.account_id ?? ""}`.trim();
+    if (isValidUUID(requestedStudentAccountId)) {
+      desiredAccountIds.add(requestedStudentAccountId);
+    } else if (isValidUUID(currentStudentAccountId)) {
+      // Accepting a course email invite records the student account on the
+      // authoritative project before the collaborative course document may
+      // observe it. Do not let that stale roster snapshot erase the binding.
+      course = { ...course, account_id: currentStudentAccountId };
+      desiredAccountIds.add(currentStudentAccountId);
+    }
+  }
   const nextCourse = preserveStudentCourse ? currentCourse : course;
+  const hasResolvedStudentAccount = [...desiredAccountIds].some(
+    (desiredAccountId) => !managerAccountIds.includes(desiredAccountId),
+  );
+  const missingDesiredAccountIds = [...desiredAccountIds].filter(
+    (desiredAccountId) =>
+      !managerAccountIds.includes(desiredAccountId) &&
+      users[desiredAccountId] == null,
+  );
   const changedFields = new Set<string>();
   if (!sameJson(row.course, nextCourse)) {
     changedFields.add("course");
@@ -154,11 +170,19 @@ function planCourseManagedProjectReconciliation(
     users[account_id] = { ...users[account_id], hide: true };
     usersChanged = true;
   }
+  // A student may accept an email invite before the collaborative course
+  // roster observes their account id. Until identity resolves, preserving
+  // extra collaborators is safer than removing the newly accepted student.
+  const mayRemoveUnexpectedCollaborators =
+    type !== "student" ||
+    request.student_deleted === true ||
+    hasResolvedStudentAccount;
   const removeUnexpectedCollaborators =
-    !request.allow_collabs ||
-    (type === "student" &&
-      request.course.student_project_functionality?.disableCollaborators ===
-        true);
+    mayRemoveUnexpectedCollaborators &&
+    (!request.allow_collabs ||
+      (type === "student" &&
+        request.course.student_project_functionality?.disableCollaborators ===
+          true));
   if (removeUnexpectedCollaborators) {
     for (const [existingAccountId, info] of Object.entries(users)) {
       if (
