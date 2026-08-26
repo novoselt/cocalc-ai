@@ -2567,6 +2567,7 @@ export class CodexAppServerAgent implements AcpAgent {
           sandbox: threadParams.sandbox,
           workingDirectory: cwd,
           authSource,
+          siteFundedReservationId: fundedTurn?.reservation.reservationId,
         },
       });
       logger.debug("codex app-server: resolved service tier", {
