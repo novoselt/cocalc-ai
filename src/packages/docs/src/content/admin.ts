@@ -213,16 +213,26 @@ Receivable**:
 | --- | --- |
 | \`commercial_receivables_visible\` | Admin queue, detail, audit, preview, and diagnostics reads. |
 | \`commercial_receivables_mutations_enabled\` | Order creation, editing, assignment, notes, approval, cancellation, and backfill. |
-| \`commercial_receivables_stripe_drafts_enabled\` | Stripe draft creation and reviewed adoption of an existing Stripe invoice. |
+| \`commercial_receivables_stripe_drafts_enabled\` | Stripe invoice draft creation and reviewed adoption of an existing Stripe invoice. |
+| \`commercial_receivables_stripe_quotes_enabled\` | Stripe quote preview and draft creation. |
+| \`commercial_receivables_stripe_quote_finalize_enabled\` | Stripe quote finalization and PDF retention. |
+| \`commercial_receivables_stripe_quote_accept_enabled\` | Stripe quote acceptance and draft-invoice conversion. |
 | \`commercial_receivables_stripe_send_enabled\` | Stripe invoice finalize/send and void. |
 | \`commercial_receivables_manual_settlement_enabled\` | Recording externally verified checks, wires, or other manual settlements. |
 | \`commercial_receivables_reconciliation_enabled\` | Manual reconciliation, durable webhook processing, and scheduled reconciliation. |
 | \`commercial_receivables_fulfillment_enabled\` | Site-license linking, provisioning, and ending fulfillment. |
 
 All controls default off. Normal rollout enables visibility first, then order
-mutations, Stripe drafts in test mode, Stripe send, reconciliation, and finally
-fulfillment/manual settlement. Rollback should disable effectful controls while
-leaving visibility enabled.
+mutations, Stripe quote creation in test mode, quote finalization, quote
+acceptance, Stripe invoice send, reconciliation, and finally
+fulfillment/manual settlement. Rollback should disable effectful controls
+while leaving visibility enabled.
+
+Stripe requires Invoicing Plus for live-mode one-time quote finalization, PDF
+download, and acceptance. Confirm the production Stripe subscription before
+enabling either quote finalization or acceptance. The three quote controls are
+independent so an admin can leave acceptance disabled after enabling reviewed
+draft creation and finalization.
 
 ## Standard workflow
 
@@ -231,15 +241,19 @@ leaving visibility enabled.
    owner, next action, and due date. Select the next action from the standard
    receivables task list. Put customer-specific instructions and context in an
    audited internal note.
-2. If procurement requires a formal pre-PO document, preview and issue a quote.
-   Download the stored PDF and attach it to the customer conversation.
+2. If procurement requires a formal pre-PO document, choose a Stripe-native
+   quote or the local PDF fallback. Preview the exact terms before creating or
+   issuing it. Finalize a Stripe quote only after reviewing its provider state
+   and PDF. Do not accept it until an authorized customer has explicitly
+   accepted those terms.
 3. When procurement sends a purchase order, attach its PDF and reviewed PO
    reference to the order. The file remains available after payment or order
    completion.
 4. Approve the order after validating the customer agreement and delivery
    details.
 5. Preview the invoice. Resolve every blocker before creating a Stripe draft.
-6. Create a draft. This never sends automatically.
+6. If a Stripe quote was accepted, use its generated draft invoice. Otherwise,
+   create a draft invoice. Neither path sends automatically.
 7. Review the Stripe customer, contact, line items, total, currency, negotiated
    payment terms, PO/reference fields, and test/live mode.
 8. Send the invoice with fresh auth and the current order version.
@@ -253,12 +267,122 @@ leaving visibility enabled.
 Collection and fulfillment are intentionally independent. Provisioning a site
 license does not mark an invoice paid, and payment does not provision a license.
 
-## Quotes and billing corrections
+## Stripe-native quotes
 
-An issued quote is a first-class immutable PDF snapshot retained with the
-order. It records its exact recipient, billing address, items, total, service
-term, validity date, and SHA-256 digest. Voiding a quote changes its status but
-does not delete or rewrite the document.
+CoCalc remains the source of truth for commercial terms and the durable quote
+identity. Stripe owns the provider state and generated PDF. A Stripe quote
+moves through these reviewed states:
+
+1. **Preview** validates customer identity, items, amounts, currency, payment
+   terms, Stripe mode, and provider readiness without changing Stripe.
+2. **Create draft** creates one Stripe draft quote and records its provider id.
+3. **Finalize** revalidates the provider totals, opens the quote, downloads the
+   Stripe PDF, and retains the PDF and SHA-256 digest in CoCalc.
+4. **Accept** is permitted only after documented, explicit customer acceptance.
+   It accepts the provider quote and adopts the resulting invoice as a local
+   draft invoice.
+5. **Cancel** cancels a draft or open Stripe quote and retains its audit history
+   and any finalized PDF.
+6. **Reconcile** repairs local state after a timeout or webhook gap. It does not
+   create a replacement quote or invoice.
+
+**Quote acceptance creates exactly one draft invoice. It never finalizes,
+sends, or emails that invoice.** Invoice delivery remains a separate reviewed
+AR action.
+
+Set the order and use the current version returned by \`show\`. Every effectful
+command previews without \`--commit\`; repeat it with the reviewed current
+version and \`--commit\` to apply it.
+
+~~~sh
+ORDER=AR-2026-000123
+
+cocalc admin receivables quote stripe preview "$ORDER" --json
+
+cocalc admin receivables quote stripe create "$ORDER" \
+  --valid-until 2026-10-01T00:00:00Z \
+  --reason "prepare Stripe quote for procurement review" --json
+cocalc admin receivables quote stripe create "$ORDER" \
+  --valid-until 2026-10-01T00:00:00Z \
+  --reason "prepare Stripe quote for procurement review" \
+  --expected-version 4 --commit --json
+
+cocalc admin receivables show "$ORDER" --json
+~~~
+
+Copy the internal commercial quote id and refreshed order version from the
+result before each later mutation:
+
+~~~sh
+QUOTE_ID="replace-with-internal-quote-uuid"
+
+cocalc admin receivables quote stripe finalize "$ORDER" \
+  --quote-id "$QUOTE_ID" --reason "reviewed Stripe quote and totals" --json
+cocalc admin receivables quote stripe finalize "$ORDER" \
+  --quote-id "$QUOTE_ID" --reason "reviewed Stripe quote and totals" \
+  --expected-version 5 --commit --json
+
+cocalc admin receivables quote download "$ORDER" \
+  --quote-id "$QUOTE_ID" --output-file quote.pdf
+~~~
+
+Do not infer acceptance from an email open, PDF view, purchase-order request,
+or silence. Record or reference the authorized customer's affirmative
+acceptance in the audit reason, then supply the required acknowledgment:
+
+~~~sh
+cocalc admin receivables quote stripe accept "$ORDER" \
+  --quote-id "$QUOTE_ID" --customer-acceptance-confirmed \
+  --reason "customer accepted quote in Zendesk ticket 12345" --json
+cocalc admin receivables quote stripe accept "$ORDER" \
+  --quote-id "$QUOTE_ID" --customer-acceptance-confirmed \
+  --reason "customer accepted quote in Zendesk ticket 12345" \
+  --expected-version 6 --commit --json
+~~~
+
+After acceptance, refresh the order, obtain the generated internal invoice id,
+review its draft, and send it through the existing invoice workflow only when
+delivery is intended:
+
+~~~sh
+INVOICE_ID="replace-with-internal-invoice-uuid"
+
+cocalc admin receivables show "$ORDER" --json
+cocalc admin receivables invoice preview "$ORDER" --json
+cocalc admin receivables invoice send "$ORDER" --invoice-id "$INVOICE_ID" \
+  --reason "reviewed quote-generated draft invoice for delivery" --json
+cocalc admin receivables invoice send "$ORDER" --invoice-id "$INVOICE_ID" \
+  --reason "reviewed quote-generated draft invoice for delivery" \
+  --expected-version 7 --commit --json
+~~~
+
+Cancel a quote that must not proceed. Reconcile the existing quote after an
+ambiguous timeout or provider webhook gap; never create another quote merely
+because a command timed out.
+
+~~~sh
+cocalc admin receivables quote stripe cancel "$ORDER" \
+  --quote-id "$QUOTE_ID" --reason "customer declined reviewed quote" --json
+cocalc admin receivables quote stripe cancel "$ORDER" \
+  --quote-id "$QUOTE_ID" --reason "customer declined reviewed quote" \
+  --expected-version 6 --commit --json
+
+cocalc admin receivables quote stripe reconcile "$ORDER" \
+  --quote-id "$QUOTE_ID" --reason "repair state after Stripe timeout" --json
+cocalc admin receivables quote stripe reconcile "$ORDER" \
+  --quote-id "$QUOTE_ID" --reason "repair state after Stripe timeout" \
+  --expected-version 6 --commit --json
+~~~
+
+## Local PDF quote fallback
+
+Use the local PDF provider for sites without Invoicing Plus or when procurement
+needs a standalone document rather than a Stripe-managed quote. An issued local
+quote is a first-class immutable PDF snapshot retained with the order. It
+records its exact recipient, billing address, items, total, service term,
+validity date, and SHA-256 digest. Voiding changes status but does not delete or
+rewrite the document. Existing local quotes are never migrated or rewritten as
+Stripe quotes.
 
 ~~~sh
 cocalc admin receivables quote preview AR-2026-000123 --json
@@ -269,6 +393,8 @@ cocalc admin receivables quote issue AR-2026-000123 \
 cocalc admin receivables quote download AR-2026-000123 \
   --quote-id <uuid> --output-file quote.pdf
 ~~~
+
+## Billing corrections and purchase orders
 
 Purchase-order PDFs are also immutable, digest-verified commercial documents.
 Uploading a PO reference fills an empty order \`po_number\`; it fails closed if
@@ -312,8 +438,10 @@ operations therefore reserve durable idempotency keys before remote calls.
 
 - Retry a timed-out command with the same input and idempotency key.
 - Do not create a replacement invoice after a timeout.
-- Run invoice reconcile when Stripe may have succeeded but local state is
-  uncertain.
+- Run quote or invoice reconcile when Stripe may have succeeded but local state
+  is uncertain.
+- Never create a replacement quote or invoice merely because a provider call
+  timed out.
 - \`indeterminate\` provider operations and failed webhook events appear in
   diagnostics review queues.
 - An existing Stripe invoice can be adopted only after mode, currency, total,
@@ -370,15 +498,19 @@ historical invoice, site license, purchase, or support ticket automatically.
 Before production send is enabled:
 
 1. Create and approve a test university order.
-2. Preview and create a draft.
-3. Retry draft creation and verify no duplicate invoice exists.
-4. Send it and provision a test site license before payment.
-5. Pay through the hosted invoice page.
-6. Verify payment, fulfillment, completion, and immutable audit events.
-7. Replay the webhook and retry commands; verify no duplicate invoice,
-   payment, license, or account credit.
-8. Disable webhook processing temporarily, pay another invoice, re-enable it,
-   and verify scheduled reconciliation converges.
+2. Preview and create a Stripe draft quote.
+3. Retry creation and verify no duplicate quote exists.
+4. Finalize the quote, download the retained PDF, and verify exact totals.
+5. Record explicit test-customer acceptance and accept the quote.
+6. Verify acceptance created exactly one draft invoice and sent no email.
+7. Preview and send that invoice, then provision a test site license.
+8. Pay through the hosted invoice page.
+9. Verify payment, fulfillment, completion, and immutable audit events.
+10. Replay the webhook and retry commands; verify no duplicate quote, invoice,
+    payment, license, or account credit.
+11. Cancel a second open quote and verify its PDF and history remain retained.
+12. Disable webhook processing temporarily, transition another quote, re-enable
+    it, and verify scheduled reconciliation converges.
 
 Provider/local currency or amount mismatches fail closed and must be reviewed;
 they are never normalized silently.
