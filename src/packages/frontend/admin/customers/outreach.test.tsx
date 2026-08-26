@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { message } from "antd";
 
-import { OutreachAdmin } from "./outreach";
+import { CustomerOutreachCard, OutreachAdmin } from "./outreach";
 
 const api = {
   listOutreachDeliveries: jest.fn(),
@@ -11,6 +11,12 @@ const api = {
   listOutreachFollowups: jest.fn(),
   getOutreachLimits: jest.fn(),
   getOutreachDiagnostics: jest.fn(),
+  getOutreachBatch: jest.fn(),
+  previewOutreachBatch: jest.fn(),
+  listOutreachProviderOperations: jest.fn(),
+  listOutreachEngagementEvents: jest.fn(),
+  getOrganization: jest.fn(),
+  getCustomerTimeline: jest.fn(),
   createOutreachBatch: jest.fn(),
 };
 const runFreshAuthAction = jest.fn(async (action: () => Promise<void>) => {
@@ -35,6 +41,7 @@ jest.mock("@cocalc/frontend/components", () => ({
   ),
   Icon: ({ name }: { name: string }) => <span>{name}</span>,
   TimeAgo: ({ date }: { date: string }) => <span>{date}</span>,
+  Tooltip: ({ children }: any) => children,
 }));
 
 jest.mock("../receivables/account-selector", () => ({
@@ -55,10 +62,13 @@ jest.mock("../receivables/account-selector", () => ({
 }));
 
 jest.mock("../receivables/account-names", () => ({
-  AccountIdentity: ({ accountId }: { accountId: string }) => (
-    <span>{accountId}</span>
+  AccountIdentity: ({ accountId, names }: any) => (
+    <span>{names[accountId] ?? "Unknown account"}</span>
   ),
-  useAccountDisplayNames: () => ({}),
+  useAccountDisplayNames: () => ({
+    "account-1": "Morgan Admin",
+    "owner-account": "Morgan Admin",
+  }),
 }));
 
 jest.mock("./selector", () => ({
@@ -87,6 +97,17 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
             api.getOutreachLimits(...args),
           getOutreachDiagnostics: (...args: unknown[]) =>
             api.getOutreachDiagnostics(...args),
+          getOutreachBatch: (...args: unknown[]) =>
+            api.getOutreachBatch(...args),
+          previewOutreachBatch: (...args: unknown[]) =>
+            api.previewOutreachBatch(...args),
+          listOutreachProviderOperations: (...args: unknown[]) =>
+            api.listOutreachProviderOperations(...args),
+          listOutreachEngagementEvents: (...args: unknown[]) =>
+            api.listOutreachEngagementEvents(...args),
+          getOrganization: (...args: unknown[]) => api.getOrganization(...args),
+          getCustomerTimeline: (...args: unknown[]) =>
+            api.getCustomerTimeline(...args),
           createOutreachBatch: (...args: unknown[]) =>
             api.createOutreachBatch(...args),
         },
@@ -136,6 +157,162 @@ const diagnostics = {
   problems: [],
 };
 
+const delivery = {
+  id: "delivery-id",
+  batch_id: "batch-id",
+  organization_id: "organization-id",
+  person_id: "person-id",
+  person_email_id: "person-email-id",
+  opportunity_id: "opportunity-id",
+  task_id: "task-id",
+  kind: "adoption_pilot",
+  recipient_name: "Ada Prospect",
+  normalized_email: "ada@example.edu",
+  recipient_domain: "example.edu",
+  subject: "A reviewed adoption pilot",
+  body_plain_text: "Hello Ada",
+  body_markdown: "Hello Ada",
+  rendered_html: "<p>Hello Ada</p>",
+  footer: "CoCalc",
+  template_snapshot: {},
+  state: "notification_requested",
+  provider_external_id: "outreach-delivery-id",
+  zendesk_ticket_id: 20620,
+  opening_zendesk_comment_id: 1,
+  last_zendesk_comment_id: 1,
+  last_zendesk_status: "open",
+  zendesk_sync_metadata: {},
+  view_observation_count: 0,
+  follow_up_policy: "no_response",
+  follow_up_after_days: 7,
+  max_followups: 2,
+  final_review_after_days: 14,
+  notification_requested_at: "2026-08-20T10:00:00.000Z",
+  follow_up_due_at: "2026-08-27T10:00:00.000Z",
+  follow_up_attempt_count: 0,
+  follow_up_suggested_action: "review_and_follow_up",
+  next_attempt_at: "2026-08-20T10:00:00.000Z",
+  attempt_count: 1,
+  opt_out_token_digest: "digest",
+  created_by_account_id: "account-1",
+  updated_by_account_id: "account-1",
+  created_at: "2026-08-20T10:00:00.000Z",
+  updated_at: "2026-08-20T10:05:00.000Z",
+  version: 3,
+};
+
+const customer = {
+  organization: {
+    id: "organization-id",
+    customer_number: "CRM-TEST",
+    display_name: "Example University",
+    aliases: [],
+    organization_type: "university",
+    lifecycle_stage: "prospect",
+    status: "active",
+    created_by_account_id: "account-1",
+    updated_by_account_id: "account-1",
+    created_at: "2026-08-01T00:00:00.000Z",
+    updated_at: "2026-08-20T00:00:00.000Z",
+    version: 1,
+  },
+  domains: [],
+  people: [
+    {
+      id: "person-id",
+      display_name: "Ada Prospect",
+      status: "active",
+      created_by_account_id: "account-1",
+      updated_by_account_id: "account-1",
+      created_at: "2026-08-01T00:00:00.000Z",
+      updated_at: "2026-08-20T00:00:00.000Z",
+      version: 1,
+      emails: [],
+      accounts: [],
+      organizations: [],
+    },
+  ],
+  relationships: [],
+  opportunities: [
+    {
+      id: "opportunity-id",
+      organization_id: "organization-id",
+      name: "Fall adoption pilot",
+      kind: "adoption_pilot",
+      stage: "qualified",
+      owner_account_id: "owner-account",
+      expected_value: "2500",
+      currency: "usd",
+      expected_close_date: "2026-09-01",
+      source_zendesk_ticket_ids: [],
+      created_by_account_id: "account-1",
+      updated_by_account_id: "account-1",
+      created_at: "2026-08-01T00:00:00.000Z",
+      updated_at: "2026-08-20T00:00:00.000Z",
+      version: 1,
+    },
+  ],
+  tasks: [
+    {
+      id: "task-id",
+      organization_id: "organization-id",
+      person_id: "person-id",
+      opportunity_id: "opportunity-id",
+      type: "contact",
+      state: "open",
+      assignee_account_id: "owner-account",
+      due_at: "2026-08-27T10:00:00.000Z",
+      priority: "high",
+      subject: "Follow up with Ada",
+      created_by_account_id: "account-1",
+      updated_by_account_id: "account-1",
+      created_at: "2026-08-20T00:00:00.000Z",
+      updated_at: "2026-08-20T00:00:00.000Z",
+      version: 1,
+    },
+  ],
+  external_references: [],
+  activities: [],
+  commercial_orders: [],
+  site_licenses: [],
+  metrics: {},
+};
+
+const outreachActivity = {
+  id: "activity-id",
+  organization_id: "organization-id",
+  person_id: "person-id",
+  opportunity_id: "opportunity-id",
+  task_id: "task-id",
+  zendesk_ticket_id: 20620,
+  kind: "zendesk",
+  source: "crm-outreach",
+  source_id: "notification-requested:delivery-id",
+  summary: "Zendesk notification requested for Ada Prospect",
+  actor_account_id: "owner-account",
+  occurred_at: "2026-08-20T10:05:00.000Z",
+  metadata: { delivery_id: "delivery-id" },
+  created_at: "2026-08-20T10:05:00.000Z",
+};
+
+const batch = {
+  id: "batch-id",
+  outreach_number: "OUT-2026-TEST",
+  name: "Internal reviewed pilot",
+  purpose: "Test readable CRM context",
+  kind: "adoption_pilot",
+  state: "draft",
+  template_snapshot: {},
+  owner_account_id: "owner-account",
+  recipient_count: 1,
+  approved_recipient_count: 0,
+  created_by_account_id: "account-1",
+  updated_by_account_id: "account-1",
+  created_at: "2026-08-20T10:00:00.000Z",
+  updated_at: "2026-08-20T10:00:00.000Z",
+  version: 1,
+};
+
 describe("CRM outreach admin", () => {
   beforeAll(() => {
     const getComputedStyle = window.getComputedStyle;
@@ -173,6 +350,19 @@ describe("CRM outreach admin", () => {
     });
     api.getOutreachLimits.mockResolvedValue(limits);
     api.getOutreachDiagnostics.mockResolvedValue(diagnostics);
+    api.listOutreachProviderOperations.mockResolvedValue({
+      operations: [],
+      truncated: false,
+    });
+    api.listOutreachEngagementEvents.mockResolvedValue({
+      events: [],
+      truncated: false,
+    });
+    api.getOrganization.mockResolvedValue(customer);
+    api.getCustomerTimeline.mockResolvedValue({
+      activities: [],
+      truncated: false,
+    });
   });
 
   it("presents the shared queue, runbook, and visible delivery kill switch", async () => {
@@ -207,6 +397,96 @@ describe("CRM outreach admin", () => {
     expect(await screen.findByText("CRM outreach is read-only")).toBeVisible();
     expect(screen.getByRole("button", { name: /New outreach/ })).toBeDisabled();
     expect(screen.getByLabelText("Outreach queue summary")).toBeVisible();
+  });
+
+  it("resolves delivery links, follow-up ownership, and immutable activity", async () => {
+    api.listOutreachDeliveries.mockResolvedValue({
+      deliveries: [delivery],
+      truncated: false,
+    });
+    api.getCustomerTimeline.mockResolvedValue({
+      activities: [outreachActivity],
+      truncated: false,
+    });
+    render(<OutreachAdmin />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Review" }));
+
+    expect(await screen.findByText("Example University")).toBeVisible();
+    expect(screen.getByText("Fall adoption pilot · Qualified")).toBeVisible();
+    expect(screen.getAllByText("Follow up with Ada").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Morgan Admin").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText("Zendesk notification requested for Ada Prospect"),
+    ).toBeVisible();
+    expect(screen.queryByText("organization-id")).not.toBeInTheDocument();
+    expect(screen.queryByText("person-id")).not.toBeInTheDocument();
+    expect(screen.queryByText("opportunity-id")).not.toBeInTheDocument();
+    expect(screen.queryByText("task-id")).not.toBeInTheDocument();
+  });
+
+  it("shows Customer 360 suppressions and opens their shared workspace", async () => {
+    const onOpenOutreach = jest.fn();
+    api.listContactSuppressions.mockResolvedValue({
+      suppressions: [
+        {
+          id: "suppression-id",
+          scope: "email",
+          normalized_scope_value: "ada@example.edu",
+          organization_id: "organization-id",
+          reason: "manual",
+          source: "admin_ui",
+          active: true,
+          created_at: "2026-08-20T10:00:00.000Z",
+          version: 1,
+        },
+      ],
+      truncated: false,
+    });
+    render(
+      <CustomerOutreachCard
+        onOpenOutreach={onOpenOutreach}
+        organization="organization-id"
+      />,
+    );
+
+    expect(await screen.findByText("1 active suppression")).toBeVisible();
+    expect(screen.getByText(/Email · ada@example.edu/)).toBeVisible();
+    const manage = screen.getByRole("button", { name: /Manage suppressions/ });
+    manage.focus();
+    expect(manage).toHaveFocus();
+    fireEvent.click(manage);
+    expect(onOpenOutreach).toHaveBeenCalledWith(false, "suppressions");
+  });
+
+  it("renders batch recipient CRM context with human names", async () => {
+    api.listOutreachBatches.mockResolvedValue({
+      batches: [batch],
+      truncated: false,
+    });
+    api.getOutreachBatch.mockResolvedValue({
+      batch,
+      deliveries: [delivery],
+    });
+    api.previewOutreachBatch.mockResolvedValue({
+      batch,
+      deliveries: [{ delivery, blocking_errors: [], warnings: [] }],
+      provider_routing: {},
+      can_approve: true,
+      can_queue: false,
+      blocking_errors: [],
+      warnings: [],
+    });
+    render(<OutreachAdmin initialView="batches" />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Review exact messages" }),
+    );
+
+    expect(await screen.findByText("Example University")).toBeVisible();
+    expect(screen.getByText("Fall adoption pilot · Qualified")).toBeVisible();
+    expect(screen.getByText(/Follow-up: Follow up with Ada/)).toBeVisible();
+    expect(screen.queryByText("organization-id")).not.toBeInTheDocument();
   });
 
   it("previews an exact batch mutation before a fresh-authenticated commit", async () => {

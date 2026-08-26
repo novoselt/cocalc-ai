@@ -46,7 +46,11 @@ import {
   Tooltip,
 } from "@cocalc/frontend/components";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
-import type { CrmMutationResult } from "@cocalc/util/crm";
+import type {
+  CrmActivity,
+  CrmCustomer360,
+  CrmMutationResult,
+} from "@cocalc/util/crm";
 import {
   CRM_OUTREACH_DELIVERY_STATES,
   CRM_OUTREACH_FOLLOW_UP_POLICIES,
@@ -80,7 +84,7 @@ import "./outreach.css";
 
 const { Paragraph, Text, Title } = Typography;
 type MutationPreview = Extract<CrmMutationResult<any>, { preview: true }>;
-type QueueView = "deliveries" | "batches" | "templates" | "suppressions";
+export type QueueView = "deliveries" | "batches" | "templates" | "suppressions";
 
 type OutreachAction =
   | { kind: "create-batch" }
@@ -131,6 +135,67 @@ function statusColor(value: string): string {
 function usagePercent(value: number, maximum: number): number {
   if (!maximum) return 0;
   return Math.min(100, Math.round((value / maximum) * 100));
+}
+
+function activityMatchesDelivery(
+  activity: CrmActivity,
+  delivery: CrmOutreachDelivery,
+): boolean {
+  if (activity.source !== "crm-outreach") return false;
+  if (`${activity.metadata.delivery_id ?? ""}` === delivery.id) return true;
+  if (delivery.task_id && activity.task_id === delivery.task_id) return true;
+  return Boolean(
+    delivery.zendesk_ticket_id &&
+    activity.zendesk_ticket_id === delivery.zendesk_ticket_id,
+  );
+}
+
+function linkedDeliveryContext(
+  delivery: CrmOutreachDelivery,
+  customer?: CrmCustomer360,
+) {
+  return {
+    organization: customer?.organization,
+    person: customer?.people.find(({ id }) => id === delivery.person_id),
+    opportunity: customer?.opportunities.find(
+      ({ id }) => id === delivery.opportunity_id,
+    ),
+    task: customer?.tasks.find(({ id }) => id === delivery.task_id),
+  };
+}
+
+function LinkedDeliveryRecords({
+  customer,
+  delivery,
+}: {
+  customer?: CrmCustomer360;
+  delivery: CrmOutreachDelivery;
+}) {
+  const { opportunity, organization, person, task } = linkedDeliveryContext(
+    delivery,
+    customer,
+  );
+  return (
+    <Space aria-label="Linked CRM records" size={[6, 6]} wrap>
+      <a href={`/admin/customers/${delivery.organization_id}`}>
+        <Icon name="address-card" /> {organization?.display_name ?? "Customer"}
+      </a>
+      <Tag>
+        <Icon name="user" /> {person?.display_name ?? delivery.recipient_name}
+      </Tag>
+      {delivery.opportunity_id ? (
+        <Tag color="blue">
+          <Icon name="line-chart" /> {opportunity?.name ?? "Linked opportunity"}
+          {opportunity?.stage ? ` · ${humanize(opportunity.stage)}` : ""}
+        </Tag>
+      ) : null}
+      {delivery.task_id ? (
+        <Tag color="gold">
+          <Icon name="check-square" /> {task?.subject ?? "Linked follow-up"}
+        </Tag>
+      ) : null}
+    </Space>
+  );
 }
 
 function actionTitle(action?: OutreachAction): string {
@@ -931,14 +996,30 @@ function DeliveryDrawer({
   >([]);
   const [thread, setThread] = useState<AdminSupportShowResponse>();
   const [threadLoading, setThreadLoading] = useState(false);
+  const [customer, setCustomer] = useState<CrmCustomer360>();
+  const [activities, setActivities] = useState<CrmActivity[]>([]);
+  const [activityTruncated, setActivityTruncated] = useState(false);
+  const [contextLoading, setContextLoading] = useState(false);
   const [error, setError] = useState<unknown>("");
+  const linked = delivery
+    ? linkedDeliveryContext(delivery, customer)
+    : undefined;
+  const activityNames = useAccountDisplayNames([
+    linked?.task?.assignee_account_id,
+    ...activities.map(({ actor_account_id }) => actor_account_id),
+  ]);
 
   useEffect(() => {
     setOperations([]);
     setEngagement([]);
     setThread(undefined);
+    setCustomer(undefined);
+    setActivities([]);
+    setActivityTruncated(false);
+    setContextLoading(Boolean(delivery));
     setError("");
     if (!delivery) return;
+    let cancelled = false;
     void Promise.all([
       api.listOutreachProviderOperations({
         delivery: delivery.id,
@@ -952,10 +1033,44 @@ function DeliveryDrawer({
       }),
     ])
       .then(([nextOperations, nextEngagement]) => {
+        if (cancelled) return;
         setOperations(nextOperations.operations);
         setEngagement(nextEngagement.events);
       })
-      .catch(setError);
+      .catch((err) => {
+        if (!cancelled) setError(err);
+      });
+    void Promise.all([
+      api.getOrganization({
+        organization: delivery.organization_id,
+        reason: "Resolve CRM records linked to outreach delivery",
+        activity_limit: 1,
+      }),
+      api.getCustomerTimeline({
+        organization: delivery.organization_id,
+        reason: "Review immutable CRM outreach activity",
+        limit: 150,
+      }),
+    ])
+      .then(([nextCustomer, nextActivities]) => {
+        if (cancelled) return;
+        setCustomer(nextCustomer);
+        setActivities(
+          nextActivities.activities.filter((activity) =>
+            activityMatchesDelivery(activity, delivery),
+          ),
+        );
+        setActivityTruncated(nextActivities.truncated);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err);
+      })
+      .finally(() => {
+        if (!cancelled) setContextLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [delivery?.id]);
 
   async function loadThread() {
@@ -979,8 +1094,10 @@ function DeliveryDrawer({
   }
 
   if (!delivery) return null;
+  const task = linked?.task;
   return (
     <Drawer
+      className="crm-shell"
       onClose={onClose}
       open
       placement="right"
@@ -1004,18 +1121,11 @@ function DeliveryDrawer({
             {delivery.zendesk_ticket_id ?? "Not created"}
           </Descriptions.Item>
           <Descriptions.Item label="CRM links">
-            <Space wrap>
-              <a href={`/admin/customers/${delivery.organization_id}`}>
-                Organization
-              </a>
-              <Text copyable>{delivery.person_id}</Text>
-              {delivery.opportunity_id ? (
-                <Text copyable>{delivery.opportunity_id}</Text>
-              ) : null}
-              {delivery.task_id ? (
-                <Text copyable>{delivery.task_id}</Text>
-              ) : null}
-            </Space>
+            {contextLoading ? (
+              <Spin size="small" />
+            ) : (
+              <LinkedDeliveryRecords customer={customer} delivery={delivery} />
+            )}
           </Descriptions.Item>
           <Descriptions.Item label="Notification requested">
             {delivery.notification_requested_at ? (
@@ -1042,6 +1152,42 @@ function DeliveryDrawer({
             {humanize(delivery.follow_up_suggested_action)}
           </Descriptions.Item>
         </Descriptions>
+        <Card size="small" title="Shared follow-up">
+          {contextLoading ? (
+            <Spin description="Resolving linked follow-up" size="small" />
+          ) : task ? (
+            <Descriptions column={1} size="small">
+              <Descriptions.Item label="Task">{task.subject}</Descriptions.Item>
+              <Descriptions.Item label="Owner">
+                <AccountIdentity
+                  accountId={task.assignee_account_id}
+                  names={activityNames}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="Due">
+                <TimeAgo date={task.due_at} />
+              </Descriptions.Item>
+              <Descriptions.Item label="State">
+                <Tag color={statusColor(task.state)}>
+                  {humanize(task.state)}
+                </Tag>
+                <Tag>{humanize(task.priority)} priority</Tag>
+              </Descriptions.Item>
+            </Descriptions>
+          ) : delivery.task_id ? (
+            <Alert
+              description="The delivery still references a follow-up task, but that task was not returned in the current Customer 360 record."
+              showIcon
+              title="Linked follow-up is unavailable"
+              type="warning"
+            />
+          ) : (
+            <Empty
+              description="No shared follow-up task is linked"
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+            />
+          )}
+        </Card>
         <Card size="small" title="Exact approved opening message">
           <Paragraph strong>{delivery.subject}</Paragraph>
           <pre className="crm-outreach-message">{delivery.body_plain_text}</pre>
@@ -1052,6 +1198,65 @@ function DeliveryDrawer({
           title="View observed is context, not proof of reading"
           type="info"
         />
+        <Card
+          extra={<Tag>{Math.min(activities.length, 40)} recent</Tag>}
+          size="small"
+          title="Append-only outreach activity"
+        >
+          {contextLoading ? (
+            <Spin
+              description="Loading recent immutable activity"
+              size="small"
+            />
+          ) : activities.length ? (
+            <div className="crm-outreach-activity-rail">
+              {activities.slice(0, 40).map((activity) => (
+                <div className="crm-outreach-activity-item" key={activity.id}>
+                  <Flex align="start" gap={8} justify="space-between" wrap>
+                    <Text strong>{activity.summary}</Text>
+                    <Text type="secondary">
+                      <TimeAgo date={activity.occurred_at} />
+                    </Text>
+                  </Flex>
+                  <Text type="secondary">
+                    {humanize(activity.kind)}
+                    {activity.actor_account_id ? (
+                      <>
+                        {" · "}
+                        <AccountIdentity
+                          accountId={activity.actor_account_id}
+                          names={activityNames}
+                        />
+                      </>
+                    ) : null}
+                  </Text>
+                  {activity.details ? (
+                    <Paragraph
+                      className="crm-wrap-anywhere"
+                      style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}
+                    >
+                      {activity.details}
+                    </Paragraph>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <Empty
+              description="No immutable CRM activity is in the loaded window"
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+            />
+          )}
+          {activityTruncated || activities.length > 40 ? (
+            <Alert
+              description="This view intentionally shows only the newest matching records. Customer 360 retains the broader append-only history."
+              showIcon
+              style={{ marginTop: 12 }}
+              title="Older activity is outside this bounded view"
+              type="info"
+            />
+          ) : null}
+        </Card>
         <Card size="small" title="Provider attempts">
           {operations.length ? (
             <Flex vertical gap={8}>
@@ -1255,12 +1460,25 @@ function BatchDrawer({
   const api = webapp_client.conat_client.hub.adminCrm;
   const [detail, setDetail] = useState<CrmOutreachBatchDetail>();
   const [preview, setPreview] = useState<CrmOutreachPreview>();
+  const [customers, setCustomers] = useState<Record<string, CrmCustomer360>>(
+    {},
+  );
+  const [missingContextCount, setMissingContextCount] = useState(0);
   const [error, setError] = useState<unknown>("");
+  const names = useAccountDisplayNames([
+    batch?.owner_account_id,
+    ...Object.values(customers).flatMap(({ tasks }) =>
+      tasks.map(({ assignee_account_id }) => assignee_account_id),
+    ),
+  ]);
   useEffect(() => {
     setDetail(undefined);
     setPreview(undefined);
+    setCustomers({});
+    setMissingContextCount(0);
     setError("");
     if (!batch) return;
+    let cancelled = false;
     void Promise.all([
       api.getOutreachBatch({
         batch: batch.id,
@@ -1271,14 +1489,47 @@ function BatchDrawer({
         reason: "Review exact CRM outreach recipients",
       }),
     ])
-      .then(([nextDetail, nextPreview]) => {
+      .then(async ([nextDetail, nextPreview]) => {
+        const organizationIds = [
+          ...new Set(
+            nextDetail.deliveries.map(({ organization_id }) => organization_id),
+          ),
+        ];
+        const results = await Promise.allSettled(
+          organizationIds.map((organization) =>
+            api.getOrganization({
+              organization,
+              reason: "Resolve CRM records linked to outreach batch",
+              activity_limit: 1,
+            }),
+          ),
+        );
+        if (cancelled) return;
+        setMissingContextCount(
+          results.filter(({ status }) => status === "rejected").length,
+        );
+        setCustomers(
+          Object.fromEntries(
+            results.flatMap((result) =>
+              result.status === "fulfilled"
+                ? [[result.value.organization.id, result.value] as const]
+                : [],
+            ),
+          ),
+        );
         setDetail(nextDetail);
         setPreview(nextPreview);
       })
-      .catch(setError);
+      .catch((err) => {
+        if (!cancelled) setError(err);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [batch?.id]);
   return (
     <Drawer
+      className="crm-shell"
       onClose={onClose}
       open={!!batch}
       placement="right"
@@ -1294,6 +1545,14 @@ function BatchDrawer({
         <Spin description="Rendering exact outreach preview" />
       ) : (
         <Flex vertical gap={16}>
+          {missingContextCount ? (
+            <Alert
+              description={`${missingContextCount} customer record${missingContextCount === 1 ? " was" : "s were"} unavailable, so those recipient cards use reviewed delivery names instead of inventing linked CRM data.`}
+              showIcon
+              title="Some linked CRM context could not be resolved"
+              type="warning"
+            />
+          ) : null}
           <Descriptions bordered column={1} size="small">
             <Descriptions.Item label="State">
               <Tag color={statusColor(detail.batch.state)}>
@@ -1302,6 +1561,12 @@ function BatchDrawer({
             </Descriptions.Item>
             <Descriptions.Item label="Purpose">
               {detail.batch.purpose}
+            </Descriptions.Item>
+            <Descriptions.Item label="Owner">
+              <AccountIdentity
+                accountId={detail.batch.owner_account_id}
+                names={names}
+              />
             </Descriptions.Item>
             <Descriptions.Item label="Recipients">
               {detail.batch.recipient_count}
@@ -1384,26 +1649,47 @@ function BatchDrawer({
               </Button>
             ) : null}
           </Flex>
-          {preview.deliveries.map((item) => (
-            <Card
-              key={item.delivery.id}
-              size="small"
-              title={`${item.delivery.recipient_name} · ${item.delivery.normalized_email}`}
-            >
-              {item.blocking_errors.map((value) => (
-                <Alert key={value} showIcon title={value} type="error" />
-              ))}
-              {item.warnings.map((value) => (
-                <Alert key={value} showIcon title={value} type="warning" />
-              ))}
-              <Paragraph strong style={{ marginTop: 12 }}>
-                {item.delivery.subject}
-              </Paragraph>
-              <pre className="crm-outreach-message">
-                {item.delivery.body_plain_text}
-              </pre>
-            </Card>
-          ))}
+          {preview.deliveries.map((item) => {
+            const customer = customers[item.delivery.organization_id];
+            const task = linkedDeliveryContext(item.delivery, customer).task;
+            return (
+              <Card
+                key={item.delivery.id}
+                size="small"
+                title={`${item.delivery.recipient_name} · ${item.delivery.normalized_email}`}
+              >
+                <Flex vertical gap={10}>
+                  <LinkedDeliveryRecords
+                    customer={customer}
+                    delivery={item.delivery}
+                  />
+                  {task ? (
+                    <Text type="secondary">
+                      Follow-up: {task.subject} ·{" "}
+                      <AccountIdentity
+                        accountId={task.assignee_account_id}
+                        names={names}
+                      />{" "}
+                      · due <TimeAgo date={task.due_at} /> ·{" "}
+                      {humanize(task.state)}
+                    </Text>
+                  ) : null}
+                  {item.blocking_errors.map((value) => (
+                    <Alert key={value} showIcon title={value} type="error" />
+                  ))}
+                  {item.warnings.map((value) => (
+                    <Alert key={value} showIcon title={value} type="warning" />
+                  ))}
+                  <Paragraph strong style={{ margin: 0 }}>
+                    {item.delivery.subject}
+                  </Paragraph>
+                  <pre className="crm-outreach-message">
+                    {item.delivery.body_plain_text}
+                  </pre>
+                </Flex>
+              </Card>
+            );
+          })}
         </Flex>
       )}
     </Drawer>
@@ -1415,21 +1701,48 @@ export function CustomerOutreachCard({
   onOpenOutreach,
 }: {
   organization: string;
-  onOpenOutreach: (create?: boolean) => void;
+  onOpenOutreach: (create?: boolean, view?: QueueView) => void;
 }) {
   const [deliveries, setDeliveries] = useState<CrmOutreachDelivery[]>([]);
+  const [suppressions, setSuppressions] = useState<CrmContactSuppression[]>([]);
+  const [suppressionsTruncated, setSuppressionsTruncated] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<unknown>("");
   useEffect(() => {
     let cancelled = false;
-    void webapp_client.conat_client.hub.adminCrm
-      .listOutreachDeliveries({
+    setLoading(true);
+    setError("");
+    setSuppressionsTruncated(false);
+    void Promise.allSettled([
+      webapp_client.conat_client.hub.adminCrm.listOutreachDeliveries({
         organization,
         reason: "Review customer CRM outreach history",
         limit: 8,
+      }),
+      webapp_client.conat_client.hub.adminCrm.listContactSuppressions({
+        organization,
+        active: true,
+        reason: "Review customer CRM contact controls",
+        limit: 20,
+      }),
+    ])
+      .then(([deliveryResult, suppressionResult]) => {
+        if (cancelled) return;
+        if (deliveryResult.status === "fulfilled") {
+          setDeliveries(deliveryResult.value.deliveries);
+        }
+        if (suppressionResult.status === "fulfilled") {
+          setSuppressions(suppressionResult.value.suppressions);
+          setSuppressionsTruncated(suppressionResult.value.truncated);
+        }
+        const failure = [deliveryResult, suppressionResult].find(
+          (result) => result.status === "rejected",
+        );
+        if (failure?.status === "rejected") setError(failure.reason);
       })
-      .then((value) => {
-        if (!cancelled) setDeliveries(value.deliveries);
-      })
-      .catch(() => undefined);
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -1449,6 +1762,13 @@ export function CustomerOutreachCard({
             New outreach
           </Button>
           <Button
+            icon={<Icon name="ban" />}
+            onClick={() => onOpenOutreach(false, "suppressions")}
+            size="small"
+          >
+            Manage suppressions
+          </Button>
+          <Button
             onClick={() => onOpenOutreach(false)}
             size="small"
             type="primary"
@@ -1458,7 +1778,55 @@ export function CustomerOutreachCard({
         </Space>
       </Flex>
       <Divider />
-      {deliveries.length ? (
+      {error ? (
+        <ErrorDisplay error={error} onClose={() => setError("")} />
+      ) : null}
+      <Flex
+        align="start"
+        className="crm-outreach-contact-controls"
+        gap={10}
+        justify="space-between"
+        wrap
+      >
+        <div>
+          <Text strong>Contact controls</Text>
+          <br />
+          <Text type="secondary">
+            Shared across all administrators and outreach batches.
+          </Text>
+        </div>
+        <Tag color={suppressions.length ? "red" : "green"}>
+          {suppressions.length
+            ? `${suppressions.length}${suppressionsTruncated ? "+" : ""} active suppression${suppressions.length === 1 && !suppressionsTruncated ? "" : "s"}`
+            : "Eligible: no active suppressions"}
+        </Tag>
+      </Flex>
+      {suppressions.length ? (
+        <Flex gap={6} style={{ marginTop: 10 }} wrap>
+          {suppressions.slice(0, 4).map((suppression) => (
+            <Tag color="red" key={suppression.id}>
+              {humanize(suppression.scope)} ·{" "}
+              {suppression.normalized_scope_value}
+            </Tag>
+          ))}
+          {suppressions.length > 4 ? (
+            <Tag>+{suppressions.length - 4} more</Tag>
+          ) : null}
+        </Flex>
+      ) : null}
+      {suppressionsTruncated ? (
+        <Alert
+          description="Open the suppression workspace to review the complete filtered list."
+          showIcon
+          style={{ marginTop: 10 }}
+          title="Additional active suppressions exist"
+          type="warning"
+        />
+      ) : null}
+      <Divider />
+      {loading ? (
+        <Spin description="Loading outreach and contact controls" />
+      ) : deliveries.length ? (
         <Flex vertical gap={8}>
           {deliveries.map((delivery) => (
             <Flex
@@ -1495,13 +1863,15 @@ export function CustomerOutreachCard({
 
 export function OutreachAdmin({
   initialOrganization,
+  initialView,
   startNewKey,
 }: {
   initialOrganization?: string;
+  initialView?: QueueView;
   startNewKey?: number;
 }) {
   const api = webapp_client.conat_client.hub.adminCrm;
-  const [view, setView] = useState<QueueView>("deliveries");
+  const [view, setView] = useState<QueueView>(initialView ?? "deliveries");
   const [deliveries, setDeliveries] = useState<CrmOutreachDelivery[]>([]);
   const [batches, setBatches] = useState<CrmOutreachBatch[]>([]);
   const [templates, setTemplates] = useState<CrmOutreachTemplate[]>([]);
@@ -1606,6 +1976,10 @@ export function OutreachAdmin({
   useEffect(() => {
     if (initialOrganization) setOrganization(initialOrganization);
   }, [initialOrganization]);
+
+  useEffect(() => {
+    if (initialView) setView(initialView);
+  }, [initialView]);
 
   useEffect(() => {
     if (startNewKey && mutationsEnabled) setAction({ kind: "create-batch" });

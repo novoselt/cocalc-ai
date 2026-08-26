@@ -45,6 +45,38 @@
   padding: 12px;
 }
 
+.crm-outreach-contact-controls {
+  background: var(--crm-accent-soft);
+  border: 1px solid var(--crm-line);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.crm-outreach-activity-rail {
+  border-inline-start: 2px solid var(--crm-line);
+  display: grid;
+  gap: 12px;
+  margin-inline-start: 7px;
+  padding-inline-start: 18px;
+}
+
+.crm-outreach-activity-item {
+  min-width: 0;
+  position: relative;
+}
+
+.crm-outreach-activity-item::before {
+  background: var(--crm-accent);
+  border: 3px solid var(--crm-surface);
+  border-radius: 50%;
+  content: "";
+  height: 12px;
+  inset-inline-start: -25px;
+  position: absolute;
+  top: 4px;
+  width: 12px;
+}
+
 .crm-outreach-comment p:last-child {
   margin-bottom: 0;
 }

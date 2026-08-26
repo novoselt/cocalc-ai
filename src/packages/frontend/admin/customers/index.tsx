@@ -69,7 +69,11 @@ import { SiteLicenseSelector } from "../receivables/site-license-reference";
 import { crmMutationContext, filterCrmActivities } from "./helpers";
 import { CustomerSelector } from "./selector";
 import { TimelineFilter } from "./timeline-filter";
-import { CustomerOutreachCard, OutreachAdmin } from "./outreach";
+import {
+  CustomerOutreachCard,
+  OutreachAdmin,
+  type QueueView,
+} from "./outreach";
 import "./customers.css";
 
 export { CustomerSelector } from "./selector";
@@ -1359,7 +1363,7 @@ function CustomerDetail({
   customerId: string;
   onAction: (action: ActionState) => void;
   onBack: () => void;
-  onOpenOutreach: (create?: boolean) => void;
+  onOpenOutreach: (create?: boolean, view?: QueueView) => void;
 }) {
   const [customer, setCustomer] = useState<CrmCustomer360 | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1986,6 +1990,7 @@ export function CustomersAdmin({
     "relationships",
   );
   const [outreachOrganization, setOutreachOrganization] = useState<string>();
+  const [outreachView, setOutreachView] = useState<QueueView>("deliveries");
   const [outreachStartNewKey, setOutreachStartNewKey] = useState(0);
 
   useEffect(() => {
@@ -2048,6 +2053,7 @@ export function CustomersAdmin({
         {workspace === "outreach" ? (
           <OutreachAdmin
             initialOrganization={outreachOrganization}
+            initialView={outreachView}
             startNewKey={outreachStartNewKey}
           />
         ) : customerId ? (
@@ -2056,8 +2062,9 @@ export function CustomersAdmin({
             customerId={customerId}
             onAction={setAction}
             onBack={onBack}
-            onOpenOutreach={(create) => {
+            onOpenOutreach={(create, view) => {
               setOutreachOrganization(customerId);
+              setOutreachView(view ?? "deliveries");
               if (create) setOutreachStartNewKey((value) => value + 1);
               setWorkspace("outreach");
             }}
