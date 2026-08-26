@@ -3,9 +3,24 @@
  *  License: MS-RSL - see LICENSE.md for details
  */
 
-import { COMMERCIAL_ACTION_CAPABILITIES } from "./feature-flags";
+import {
+  COMMERCIAL_ACTION_CAPABILITIES,
+  COMMERCIAL_RECEIVABLES_FLAGS,
+} from "./feature-flags";
 
 describe("commercial receivables action capabilities", () => {
+  it("keeps Stripe quote rollout controls independent", () => {
+    expect(COMMERCIAL_RECEIVABLES_FLAGS.stripeQuotes).toBe(
+      "commercial_receivables_stripe_quotes_enabled",
+    );
+    expect(COMMERCIAL_RECEIVABLES_FLAGS.stripeQuoteFinalize).toBe(
+      "commercial_receivables_stripe_quote_finalize_enabled",
+    );
+    expect(COMMERCIAL_RECEIVABLES_FLAGS.stripeQuoteAccept).toBe(
+      "commercial_receivables_stripe_quote_accept_enabled",
+    );
+  });
+
   it("classifies every public seed action except the internal Stripe webhook", () => {
     expect(Object.keys(COMMERCIAL_ACTION_CAPABILITIES).sort()).toEqual(
       [
@@ -14,11 +29,14 @@ describe("commercial receivables action capabilities", () => {
         "assign",
         "backfill",
         "cancel",
+        "cancelStripeQuote",
         "create",
         "createInvoiceDraft",
+        "createStripeQuote",
         "diagnostics",
         "endFulfillment",
         "events",
+        "finalizeStripeQuote",
         "fulfillmentPreview",
         "get",
         "invoicePreview",
@@ -29,12 +47,15 @@ describe("commercial receivables action capabilities", () => {
         "provision",
         "reconcileInvoice",
         "reconcilePreview",
+        "reconcileStripeQuote",
         "recordManualPayment",
         "revise",
         "retryStripeEvent",
         "sendInvoice",
+        "stripeQuotePreview",
         "update",
         "voidInvoice",
+        "acceptStripeQuote",
       ].sort(),
     );
   });
@@ -45,5 +66,24 @@ describe("commercial receivables action capabilities", () => {
       "manualSettlement",
     );
     expect(COMMERCIAL_ACTION_CAPABILITIES.revise).toBe("mutate");
+  });
+
+  it("gates each Stripe quote mutation with least privilege", () => {
+    expect(COMMERCIAL_ACTION_CAPABILITIES.createStripeQuote).toBe(
+      "stripeQuotes",
+    );
+    expect(COMMERCIAL_ACTION_CAPABILITIES.finalizeStripeQuote).toBe(
+      "stripeQuoteFinalize",
+    );
+    expect(COMMERCIAL_ACTION_CAPABILITIES.cancelStripeQuote).toBe(
+      "stripeQuotes",
+    );
+    expect(COMMERCIAL_ACTION_CAPABILITIES.acceptStripeQuote).toBe(
+      "stripeQuoteAccept",
+    );
+    expect(COMMERCIAL_ACTION_CAPABILITIES.reconcileStripeQuote).toBe(
+      "reconciliation",
+    );
+    expect(COMMERCIAL_ACTION_CAPABILITIES.stripeQuotePreview).toBe("visible");
   });
 });
