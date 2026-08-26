@@ -7,6 +7,7 @@ import {
   canQueueOutreachBatch,
   missingRequiredMergeFields,
   outreachProviderConfigurationErrors,
+  requireOutreachOptOutSecret,
 } from "./store";
 
 describe("CRM outreach reviewed-content validation", () => {
@@ -51,5 +52,15 @@ describe("CRM outreach reviewed-content validation", () => {
         webhook_secret: "configured-but-never-returned",
       }),
     ).toEqual([]);
+  });
+
+  it("requires an opt-out secret before recipient content is created", () => {
+    expect(() => requireOutreachOptOutSecret()).toThrow(
+      "webhook/opt-out secret must be configured before adding outreach recipients",
+    );
+    expect(() => requireOutreachOptOutSecret("  ")).toThrow(
+      "webhook/opt-out secret must be configured before adding outreach recipients",
+    );
+    expect(requireOutreachOptOutSecret(" secret ")).toBe("secret");
   });
 });
