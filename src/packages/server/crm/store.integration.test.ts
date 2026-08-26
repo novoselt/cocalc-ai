@@ -428,6 +428,16 @@ describePglite("integrated CRM store", () => {
     ).toContain(organization.id);
     expect(
       (
+        await store.searchOrganizations({
+          account_id: actor,
+          query: organization.id,
+          linked_account_id: randomUUID(),
+          reason: "exclude a customer not linked to the requested account",
+        })
+      ).organizations,
+    ).toHaveLength(0);
+    expect(
+      (
         await store.listPeople({
           organization: organization.id,
           search: person.id,
