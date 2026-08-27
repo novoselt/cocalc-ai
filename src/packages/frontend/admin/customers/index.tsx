@@ -58,6 +58,7 @@ import {
   type CrmExternalReference,
   type CrmMutationResult,
   type CrmOrganizationSummary,
+  type CrmPerson,
 } from "@cocalc/util/crm";
 import { COLORS } from "@cocalc/util/theme";
 import { AccountSelector } from "../receivables/account-selector";
@@ -100,6 +101,7 @@ type ActionKind =
   | "edit-customer"
   | "add-domain"
   | "add-person"
+  | "edit-person"
   | "create-opportunity"
   | "create-task"
   | "add-note"
@@ -108,7 +110,7 @@ type ActionKind =
   | "merge"
   | "archive";
 
-type ActionState = { kind: ActionKind; title: string };
+type ActionState = { kind: ActionKind; title: string; person?: CrmPerson };
 
 type MutationPreview = Extract<CrmMutationResult<any>, { preview: true }>;
 
@@ -393,6 +395,17 @@ function CustomerActionModal({
       verify: false,
       next_action: COMMERCIAL_NEXT_ACTIONS[0],
       payment_terms_days: 21,
+      ...(action.kind === "edit-person" && action.person
+        ? {
+            display_name: action.person.display_name,
+            website: action.person.website,
+            linkedin_url: action.person.linkedin_url,
+            facebook_url: action.person.facebook_url,
+            x_url: action.person.x_url,
+            note: action.person.note,
+            timezone: action.person.timezone,
+          }
+        : {}),
     });
   }, [action, customer?.organization.id]);
 
@@ -460,6 +473,27 @@ function CustomerActionModal({
           department: values.department,
           email: values.email,
           cocalc_account_id: values.account_id,
+          website: values.website,
+          linkedin_url: values.linkedin_url,
+          facebook_url: values.facebook_url,
+          x_url: values.x_url,
+          note: values.note,
+          timezone: values.timezone,
+        });
+      case "edit-person":
+        if (!action.person) throw Error("a contact is required for editing");
+        return await api.updatePerson({
+          ...common,
+          person: action.person.id,
+          changes: {
+            display_name: values.display_name,
+            website: values.website || null,
+            linkedin_url: values.linkedin_url || null,
+            facebook_url: values.facebook_url || null,
+            x_url: values.x_url || null,
+            note: values.note || null,
+            timezone: values.timezone || null,
+          },
         });
       case "create-opportunity":
         return await api.createOpportunity({
@@ -705,6 +739,7 @@ function CustomerActionModal({
           </>
         );
       case "add-person":
+      case "edit-person":
         return (
           <>
             <Form.Item
@@ -714,33 +749,59 @@ function CustomerActionModal({
             >
               <Input autoComplete="name" />
             </Form.Item>
-            <Form.Item label="Email" name="email">
-              <Input type="email" autoComplete="email" />
-            </Form.Item>
-            <Form.Item label="CoCalc account" name="account_id">
-              <AccountSelector accountKind="customer" />
-            </Form.Item>
-            <Form.Item label="Customer roles" name="roles">
-              <Select
-                mode="multiple"
-                options={CRM_PERSON_ROLES.map((value) => ({
-                  value,
-                  label: humanize(value),
-                }))}
-              />
-            </Form.Item>
-            <Row gutter={12}>
-              <Col xs={24} sm={12}>
-                <Form.Item label="Title" name="title">
-                  <Input />
+            {action.kind === "add-person" ? (
+              <>
+                <Form.Item label="Email" name="email">
+                  <Input type="email" autoComplete="email" />
                 </Form.Item>
-              </Col>
-              <Col xs={24} sm={12}>
-                <Form.Item label="Department" name="department">
-                  <Input />
+                <Form.Item label="CoCalc account" name="account_id">
+                  <AccountSelector accountKind="customer" />
                 </Form.Item>
-              </Col>
-            </Row>
+                <Form.Item label="Customer roles" name="roles">
+                  <Select
+                    mode="multiple"
+                    options={CRM_PERSON_ROLES.map((value) => ({
+                      value,
+                      label: humanize(value),
+                    }))}
+                  />
+                </Form.Item>
+                <Row gutter={12}>
+                  <Col xs={24} sm={12}>
+                    <Form.Item label="Title" name="title">
+                      <Input />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} sm={12}>
+                    <Form.Item label="Department" name="department">
+                      <Input />
+                    </Form.Item>
+                  </Col>
+                </Row>
+              </>
+            ) : null}
+            <Form.Item label="Website" name="website">
+              <Input type="url" autoComplete="url" />
+            </Form.Item>
+            <Form.Item label="LinkedIn" name="linkedin_url">
+              <Input type="url" autoComplete="url" />
+            </Form.Item>
+            <Form.Item label="Facebook" name="facebook_url">
+              <Input type="url" autoComplete="url" />
+            </Form.Item>
+            <Form.Item label="X (formerly Twitter)" name="x_url">
+              <Input type="url" autoComplete="url" />
+            </Form.Item>
+            <Form.Item label="Timezone" name="timezone">
+              <Input placeholder="e.g. America/New_York" />
+            </Form.Item>
+            <Form.Item
+              label="Internal note"
+              name="note"
+              extra="Visible to CRM admins and agents. Never store credentials or payment details."
+            >
+              <Input.TextArea autoSize={{ minRows: 3, maxRows: 8 }} />
+            </Form.Item>
           </>
         );
       case "create-opportunity":
@@ -1561,6 +1622,19 @@ function CustomerDetail({
                   const relationship = customer.relationships.find(
                     (x) => x.person_id === person.id,
                   );
+                  const profileLinks = [
+                    { label: "Website", value: person.website },
+                    { label: "LinkedIn", value: person.linkedin_url },
+                    { label: "Facebook", value: person.facebook_url },
+                    { label: "X", value: person.x_url },
+                  ]
+                    .map(({ label, value }) => ({
+                      label,
+                      href: safeExternalHttpUrl(value),
+                    }))
+                    .filter((entry): entry is { label: string; href: string } =>
+                      Boolean(entry.href),
+                    );
                   return (
                     <Card key={person.id} size="small">
                       <Flex align="start" gap={12} justify="space-between" wrap>
@@ -1580,8 +1654,50 @@ function CustomerDetail({
                               <Tag key={role}>{humanize(role)}</Tag>
                             ))}
                           </Flex>
+                          {profileLinks.length ? (
+                            <Flex gap={10} style={{ marginTop: 8 }} wrap>
+                              {profileLinks.map(({ label, href }) => (
+                                <a
+                                  href={href}
+                                  key={label}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                >
+                                  {label} <Icon name="external-link" />
+                                </a>
+                              ))}
+                            </Flex>
+                          ) : null}
+                          {person.note ? (
+                            <div style={{ marginTop: 10 }}>
+                              <Text type="secondary">Internal note</Text>
+                              <Paragraph
+                                ellipsis={{ rows: 3, expandable: true }}
+                                style={{
+                                  margin: "2px 0 0",
+                                  maxWidth: 620,
+                                  whiteSpace: "pre-wrap",
+                                }}
+                              >
+                                {person.note}
+                              </Paragraph>
+                            </div>
+                          ) : null}
                         </div>
-                        <div>
+                        <Flex vertical align="end" gap={8}>
+                          <Button
+                            aria-label={`Edit ${person.display_name}`}
+                            onClick={() =>
+                              onAction({
+                                kind: "edit-person",
+                                title: `Edit ${person.display_name}`,
+                                person,
+                              })
+                            }
+                            size="small"
+                          >
+                            Edit
+                          </Button>
                           {person.emails.map((email) => (
                             <div key={email.id}>
                               <Text copyable={{ text: email.email_address }}>
@@ -1600,7 +1716,7 @@ function CustomerDetail({
                                 />
                               </div>
                             ))}
-                        </div>
+                        </Flex>
                       </Flex>
                     </Card>
                   );

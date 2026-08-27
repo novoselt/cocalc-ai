@@ -38,6 +38,7 @@ import type {
   CommercialQuotePreview,
   CommercialQuotePreviewRequest,
   CommercialQuoteVoidRequest,
+  CommercialStripeQuoteCreateRequest,
   CommercialStripeEventRetryRequest,
   CommercialStripeEventRetryResult,
 } from "@cocalc/conat/hub/api/commercial-orders";
@@ -234,10 +235,13 @@ function normalizeQuoteRow(row: any): CommercialQuote {
     ...metadata,
     subtotal: money(row.subtotal),
     total: money(row.total),
-    issued_at: iso(row.issued_at)!,
+    issued_at: iso(row.issued_at),
     valid_until: iso(row.valid_until)!,
     voided_at: iso(row.voided_at),
     snapshot: row.snapshot ?? {},
+    provider_snapshot: row.provider_snapshot ?? {},
+    provider_updated_at: iso(row.provider_updated_at),
+    last_reconciled_at: iso(row.last_reconciled_at),
     created_at: iso(row.created_at)!,
     updated_at: iso(row.updated_at)!,
   };
@@ -497,9 +501,12 @@ async function loadOrder(
         [orderId],
       ),
       client.query(
-        `SELECT id,commercial_order_id,quote_number,status,currency,subtotal,total,
+        `SELECT id,commercial_order_id,quote_number,status,provider,
+              provider_quote_id,provider_status,provider_invoice_id,
+              currency,subtotal,total,
               issued_at,valid_until,voided_at,document_filename,
               document_mime_type,document_sha256,document_size,snapshot,
+              provider_snapshot,provider_updated_at,last_reconciled_at,
               created_by_account_id,voided_by_account_id,idempotency_key,
               created_at,updated_at
          FROM commercial_quotes
@@ -969,6 +976,21 @@ function assertOrderNotTerminal(
   }
 }
 
+function assertNoActiveStripeQuote(
+  order: CommercialOrder,
+  operation: string,
+): void {
+  const quote = order.quotes.find(
+    ({ provider, status }) =>
+      provider === "stripe" && ["draft", "issued"].includes(status),
+  );
+  if (quote) {
+    throw Error(
+      `${operation} is blocked while Stripe quote ${quote.quote_number} is active; cancel it first`,
+    );
+  }
+}
+
 async function assertNoUnresolvedProviderOperations(
   client: Queryable,
   orderId: string,
@@ -1057,6 +1079,9 @@ async function applyCommercialOrderUpdate(
         opts.items != null ||
         opts.contacts != null ||
         Object.keys(changes).some((key) => INVOICE_LOCKED_COLUMNS.has(key));
+      if (approvedTermsChange) {
+        assertNoActiveStripeQuote(before, "commercial terms update");
+      }
       if (
         invoiceLockedChange &&
         before.invoices.some(
@@ -1201,7 +1226,7 @@ function quoteDetailsFromOrder(order: CommercialOrder): {
   };
 }
 
-function buildCommercialQuotePreview(
+export function buildCommercialQuotePreview(
   order: CommercialOrder,
   now = new Date(),
 ): CommercialQuotePreview {
@@ -1270,6 +1295,7 @@ export async function updateCommercialBillingDetails(
           "billing details are locked after an invoice is created; void it before correcting future invoice recipients",
         );
       }
+      assertNoActiveStripeQuote(before, "billing-details update");
       if (!Array.isArray(opts.billing_contacts)) {
         throw Error("billing_contacts is required");
       }
@@ -1336,7 +1362,10 @@ export async function updateCommercialBillingDetails(
   );
 }
 
-function quoteValidUntil(value: string | undefined, fallback: string): string {
+export function quoteValidUntil(
+  value: string | undefined,
+  fallback: string,
+): string {
   const date = new Date(value ?? fallback);
   if (!Number.isFinite(date.valueOf())) {
     throw Error("valid_until must be an ISO-8601 timestamp");
@@ -1405,11 +1434,11 @@ export async function issueCommercialQuote(
     );
     await client.query(
       `INSERT INTO commercial_quotes
-         (id,commercial_order_id,quote_number,status,currency,subtotal,total,
+         (id,commercial_order_id,quote_number,status,provider,currency,subtotal,total,
           issued_at,valid_until,document_filename,document_mime_type,
           document_sha256,document_size,document_data,snapshot,
           created_by_account_id,idempotency_key,created_at,updated_at)
-       VALUES ($1,$2,$3,'issued',$4,$5,$6,$7,$8,$9,'application/pdf',$10,$11,
+       VALUES ($1,$2,$3,'issued','local',$4,$5,$6,$7,$8,$9,'application/pdf',$10,$11,
                $12,$13,$14,$15,NOW(),NOW())`,
       [
         id,
@@ -1442,6 +1471,310 @@ export async function issueCommercialQuote(
   });
 }
 
+function commercialQuoteSnapshot(
+  order: CommercialOrder,
+  preview: CommercialQuotePreview,
+): Record<string, unknown> {
+  return {
+    order_version: order.version,
+    order_id: order.id,
+    order_number: order.order_number,
+    organization_name: order.organization_name,
+    billing_contacts: preview.billing_contacts,
+    billing_address: preview.billing_address ?? null,
+    items: preview.items,
+    currency: preview.currency,
+    subtotal: preview.subtotal,
+    total: preview.total,
+    service_starts_at: preview.service_starts_at ?? null,
+    service_ends_at: preview.service_ends_at ?? null,
+    payment_terms_days: Math.max(order.payment_terms_days ?? 21, 0),
+    po_number: preview.po_number ?? null,
+    customer_reference: preview.customer_reference ?? null,
+    quote_memo: preview.quote_memo ?? null,
+  };
+}
+
+export async function createCommercialStripeQuoteIntent(
+  opts: CommercialStripeQuoteCreateRequest,
+): Promise<{ order: CommercialOrder; quote: CommercialQuote }> {
+  const reason = requireReason(opts.reason);
+  if (!opts.account_id) throw Error("account_id is required");
+  const idempotencyKey = commercialIdempotencyKey(
+    "stripe-quote-create",
+    opts as any,
+  );
+  return await withTransaction(async (client) => {
+    const orderId = await resolveOrderId(client, opts.id);
+    const order = await loadOrder(client, orderId, true);
+    const existing = await client.query(
+      "SELECT * FROM commercial_quotes WHERE idempotency_key=$1",
+      [idempotencyKey],
+    );
+    if (existing.rows[0]) {
+      const quote = normalizeQuoteRow(existing.rows[0]);
+      if (
+        quote.commercial_order_id !== order.id ||
+        quote.provider !== "stripe" ||
+        quote.currency !== order.currency ||
+        moneyCompare(quote.subtotal, order.agreed_subtotal) !== 0 ||
+        moneyCompare(quote.total, order.agreed_total) !== 0
+      ) {
+        throw Error(
+          "quote idempotency key was already used for different quote input",
+        );
+      }
+      return { order, quote };
+    }
+    requireExpectedVersion(order.version, opts.expected_version);
+    assertOrderNotTerminal(order, "Stripe quote creation");
+    await assertNoUnresolvedProviderOperations(
+      client,
+      order.id,
+      "Stripe quote creation",
+    );
+    const preview = buildCommercialQuotePreview(order);
+    if (!preview.ready) {
+      throw Error(`quote is not ready: ${preview.blockers.join("; ")}`);
+    }
+    const active = order.quotes.find(
+      ({ provider, status }) =>
+        provider === "stripe" && ["draft", "issued"].includes(status),
+    );
+    if (active) {
+      throw Error(
+        `the order already has an active Stripe quote ${active.quote_number}`,
+      );
+    }
+    const validUntil = quoteValidUntil(
+      opts.valid_until,
+      preview.default_valid_until,
+    );
+    const count = await client.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM commercial_quotes WHERE commercial_order_id=$1",
+      [order.id],
+    );
+    const sequence = Number(count.rows[0]?.count ?? 0) + 1;
+    const quoteNumber = `Q-${order.order_number.replace(/^AR-/i, "")}-${`${sequence}`.padStart(2, "0")}`;
+    const quoteId = randomUUID();
+    const inserted = await client.query(
+      `INSERT INTO commercial_quotes
+         (id,commercial_order_id,quote_number,status,provider,currency,
+          subtotal,total,valid_until,snapshot,provider_snapshot,
+          created_by_account_id,idempotency_key,created_at,updated_at)
+       VALUES ($1,$2,$3,'draft','stripe',$4,$5,$6,$7,$8,'{}',$9,$10,NOW(),NOW())
+       RETURNING *`,
+      [
+        quoteId,
+        order.id,
+        quoteNumber,
+        order.currency,
+        order.agreed_subtotal,
+        order.agreed_total,
+        validUntil,
+        commercialQuoteSnapshot(order, preview),
+        opts.account_id,
+        idempotencyKey,
+      ],
+    );
+    await client.query(
+      "UPDATE commercial_orders SET updated_at=NOW(),version=version+1 WHERE id=$1",
+      [order.id],
+    );
+    const after = await loadOrder(client, order.id);
+    await insertEvent(client, {
+      commercial_order_id: order.id,
+      event_type: "stripe-quote-creation-started",
+      actor_account_id: opts.account_id,
+      source: opts.source ?? "cli",
+      reason,
+      idempotency_key: `${idempotencyKey}:intent`,
+      before: order as any,
+      after: after as any,
+      metadata: {
+        commercial_quote_id: quoteId,
+        quote_number: quoteNumber,
+        valid_until: validUntil,
+      },
+      identity_payload: {
+        commercial_order_id: order.id,
+        commercial_quote_id: quoteId,
+      },
+    });
+    return {
+      order: after,
+      quote: normalizeQuoteRow(inserted.rows[0]),
+    };
+  });
+}
+
+export async function getCommercialQuote(
+  orderId: string,
+  quoteId?: string,
+): Promise<CommercialQuote> {
+  const order = await getCommercialOrder(orderId);
+  const quote = quoteId
+    ? order.quotes.find(({ id }) => id === quoteId)
+    : order.quotes[0];
+  if (!quote) throw Error("commercial order has no quote");
+  return quote;
+}
+
+export interface CommercialQuoteProviderUpdate {
+  quote_id: string;
+  status: CommercialQuote["status"];
+  provider_quote_id: string;
+  provider_status: NonNullable<CommercialQuote["provider_status"]>;
+  provider_invoice_id?: string | null;
+  provider_snapshot: Record<string, unknown>;
+  issued_at?: string | null;
+  document_filename?: string | null;
+  document_sha256?: string | null;
+  document_data?: Buffer | null;
+  actor_account_id?: string | null;
+  event_type: string;
+  event_source: CommercialEventSource;
+  event_reason: string;
+  event_idempotency_key: string;
+  skip_if_unchanged?: boolean;
+}
+
+function assertQuoteProviderDocument(
+  opts: CommercialQuoteProviderUpdate,
+): void {
+  if (!["issued", "accepted"].includes(opts.status)) return;
+  const document = opts.document_data;
+  if (document == null) return;
+  if (!document?.length || document.length > 2_097_152) {
+    throw Error("Stripe quote PDF must be between 1 byte and 2 MiB");
+  }
+  if (!document.subarray(0, 5).equals(Buffer.from("%PDF-"))) {
+    throw Error("Stripe quote document is not a PDF");
+  }
+  const digest = createHash("sha256").update(document).digest("hex");
+  if (!opts.document_sha256 || digest !== opts.document_sha256) {
+    throw Error("Stripe quote PDF digest does not match its document");
+  }
+  if (!opts.document_filename?.trim() || !opts.issued_at) {
+    throw Error("an issued Stripe quote requires document metadata");
+  }
+}
+
+export async function updateCommercialQuoteProvider(
+  opts: CommercialQuoteProviderUpdate,
+): Promise<CommercialOrder> {
+  assertQuoteProviderDocument(opts);
+  return await withTransaction(async (client) => {
+    const quoteResult = await client.query(
+      "SELECT * FROM commercial_quotes WHERE id=$1 FOR UPDATE",
+      [opts.quote_id],
+    );
+    if (!quoteResult.rows[0]) throw Error("commercial quote not found");
+    const quote = normalizeQuoteRow(quoteResult.rows[0]);
+    if (quote.provider !== "stripe") {
+      throw Error("provider updates require a Stripe quote");
+    }
+    if (
+      ["issued", "accepted"].includes(opts.status) &&
+      !quoteResult.rows[0].document_data &&
+      !opts.document_data
+    ) {
+      throw Error("an issued Stripe quote requires its retained PDF");
+    }
+    if (
+      quote.provider_quote_id &&
+      quote.provider_quote_id !== opts.provider_quote_id
+    ) {
+      throw Error("Stripe quote identity conflicts with the local quote");
+    }
+    const before = await loadOrder(client, quote.commercial_order_id, true);
+    const identityPayload = {
+      quote_id: quote.id,
+      provider_quote_id: opts.provider_quote_id,
+      event_type: opts.event_type,
+    };
+    const replay = await replayOrderId(client, opts.event_idempotency_key, {
+      action: opts.event_type,
+      order_id: before.id,
+      payload: identityPayload,
+    });
+    if (replay) return await loadOrder(client, replay);
+    const unchanged =
+      quote.status === opts.status &&
+      quote.provider_quote_id === opts.provider_quote_id &&
+      quote.provider_status === opts.provider_status &&
+      (quote.provider_invoice_id ?? null) ===
+        (opts.provider_invoice_id ?? quote.provider_invoice_id ?? null) &&
+      stableJson(quote.provider_snapshot) ===
+        stableJson(opts.provider_snapshot) &&
+      (!opts.document_sha256 || quote.document_sha256 === opts.document_sha256);
+    if (opts.skip_if_unchanged && unchanged) {
+      await client.query(
+        "UPDATE commercial_quotes SET last_reconciled_at=NOW() WHERE id=$1",
+        [quote.id],
+      );
+      return before;
+    }
+    const voided = opts.status === "void";
+    await client.query(
+      `UPDATE commercial_quotes SET
+         status=$2,provider_quote_id=$3,provider_status=$4,
+         provider_invoice_id=COALESCE($5,provider_invoice_id),
+         provider_snapshot=$6,provider_updated_at=NOW(),last_reconciled_at=NOW(),
+         issued_at=COALESCE($7,issued_at),
+         document_filename=COALESCE($8,document_filename),
+         document_mime_type=CASE WHEN $9::bytea IS NULL THEN document_mime_type
+           ELSE 'application/pdf' END,
+         document_sha256=COALESCE($10,document_sha256),
+         document_size=CASE WHEN $9::bytea IS NULL THEN document_size
+           ELSE octet_length($9::bytea) END,
+         document_data=COALESCE($9,document_data),
+         voided_at=CASE WHEN $11 THEN COALESCE(voided_at,NOW()) ELSE voided_at END,
+         voided_by_account_id=CASE WHEN $11 THEN
+           COALESCE($12,voided_by_account_id,created_by_account_id)
+           ELSE voided_by_account_id END,
+         updated_at=NOW() WHERE id=$1`,
+      [
+        quote.id,
+        opts.status,
+        opts.provider_quote_id,
+        opts.provider_status,
+        opts.provider_invoice_id ?? null,
+        opts.provider_snapshot,
+        opts.issued_at ?? null,
+        opts.document_filename ?? null,
+        opts.document_data ?? null,
+        opts.document_sha256 ?? null,
+        voided,
+        opts.actor_account_id ?? null,
+      ],
+    );
+    await client.query(
+      "UPDATE commercial_orders SET updated_at=NOW(),version=version+1 WHERE id=$1",
+      [before.id],
+    );
+    const after = await loadOrder(client, before.id);
+    await insertEvent(client, {
+      commercial_order_id: before.id,
+      event_type: opts.event_type,
+      actor_account_id: opts.actor_account_id,
+      source: opts.event_source,
+      reason: opts.event_reason,
+      idempotency_key: opts.event_idempotency_key,
+      before: before as any,
+      after: after as any,
+      metadata: {
+        commercial_quote_id: quote.id,
+        provider_quote_id: opts.provider_quote_id,
+        provider_invoice_id: opts.provider_invoice_id ?? null,
+        provider_status: opts.provider_status,
+      },
+      identity_payload: identityPayload,
+    });
+    return after;
+  });
+}
+
 export async function voidCommercialQuote(
   opts: CommercialQuoteVoidRequest,
 ): Promise<CommercialOrder> {
@@ -1451,13 +1784,19 @@ export async function voidCommercialQuote(
       id: string;
       quote_number: string;
       status: string;
+      provider: CommercialQuote["provider"];
     }>(
-      `SELECT id,quote_number,status FROM commercial_quotes
+      `SELECT id,quote_number,status,provider FROM commercial_quotes
         WHERE id=$1 AND commercial_order_id=$2 FOR UPDATE`,
       [opts.commercial_quote_id, before.id],
     );
     const quote = rows[0];
     if (!quote) throw Error("commercial quote not found for this order");
+    if (quote.provider !== "local") {
+      throw Error(
+        "Stripe quotes must be canceled through the Stripe quote action",
+      );
+    }
     if (quote.status === "void")
       throw Error("commercial quote is already void");
     await client.query(
@@ -2485,6 +2824,221 @@ export async function updateCommercialInvoiceProvider(
   });
 }
 
+export interface CommercialQuoteAcceptanceUpdate {
+  operation_id: string;
+  quote_id: string;
+  invoice_id: string;
+  provider_quote_id: string;
+  provider_invoice_id: string;
+  provider_customer_id: string;
+  quote_provider_snapshot: Record<string, unknown>;
+  acceptance_source: "operator_confirmed" | "provider_reconciliation";
+  quote_issued_at?: string | null;
+  quote_document_filename?: string | null;
+  quote_document_sha256?: string | null;
+  quote_document_data?: Buffer | null;
+  invoice_provider_snapshot: Record<string, unknown>;
+  subtotal: string;
+  tax: string;
+  total: string;
+  amount_due: string;
+  due_at?: string | null;
+  hosted_invoice_url?: string | null;
+  invoice_pdf_url?: string | null;
+  actor_account_id?: string | null;
+  event_source: CommercialEventSource;
+  event_reason: string;
+  event_idempotency_key: string;
+}
+
+export async function completeCommercialQuoteAcceptance(
+  opts: CommercialQuoteAcceptanceUpdate,
+): Promise<CommercialOrder> {
+  return await withTransaction(async (client) => {
+    const operationResult = await client.query(
+      "SELECT * FROM commercial_provider_operations WHERE id=$1 FOR UPDATE",
+      [opts.operation_id],
+    );
+    if (!operationResult.rows[0]) {
+      throw Error("commercial provider operation not found");
+    }
+    const operation = normalizeProviderOperation(operationResult.rows[0]);
+    if (
+      operation.operation !== "quote_accept" ||
+      operation.commercial_quote_id !== opts.quote_id ||
+      operation.commercial_invoice_id !== opts.invoice_id
+    ) {
+      throw Error("provider operation does not match the quote acceptance");
+    }
+    const quoteResult = await client.query(
+      "SELECT * FROM commercial_quotes WHERE id=$1 FOR UPDATE",
+      [opts.quote_id],
+    );
+    const invoiceResult = await client.query(
+      "SELECT * FROM commercial_invoices WHERE id=$1 FOR UPDATE",
+      [opts.invoice_id],
+    );
+    if (!quoteResult.rows[0] || !invoiceResult.rows[0]) {
+      throw Error("quote acceptance local identities are incomplete");
+    }
+    const quote = normalizeQuoteRow(quoteResult.rows[0]);
+    const invoice = normalizeInvoiceRow(invoiceResult.rows[0]);
+    if (
+      quote.commercial_order_id !== operation.commercial_order_id ||
+      invoice.commercial_order_id !== operation.commercial_order_id
+    ) {
+      throw Error("quote acceptance identities belong to different orders");
+    }
+    if (
+      quote.provider !== "stripe" ||
+      (quote.provider_quote_id &&
+        quote.provider_quote_id !== opts.provider_quote_id)
+    ) {
+      throw Error("Stripe quote identity conflicts with the local quote");
+    }
+    if (
+      invoice.provider !== "stripe" ||
+      (invoice.provider_invoice_id &&
+        invoice.provider_invoice_id !== opts.provider_invoice_id)
+    ) {
+      throw Error("Stripe invoice identity conflicts with the local invoice");
+    }
+    const quoteDocument =
+      quoteResult.rows[0].document_data ?? opts.quote_document_data;
+    const quoteDocumentSha256 =
+      quote.document_sha256 ?? opts.quote_document_sha256;
+    if (!quoteDocument || !quoteDocumentSha256) {
+      throw Error(
+        "a Stripe quote must have its finalized PDF before acceptance",
+      );
+    }
+    if (
+      createHash("sha256").update(quoteDocument).digest("hex") !==
+      quoteDocumentSha256
+    ) {
+      throw Error("Stripe quote PDF failed its integrity check");
+    }
+    const before = await loadOrder(client, operation.commercial_order_id, true);
+    if (operation.status === "succeeded") return before;
+    if (!["remote_started", "indeterminate"].includes(operation.status)) {
+      throw Error(
+        `quote acceptance operation is ${operation.status}, expected remote_started or indeterminate`,
+      );
+    }
+    if (!["issued", "accepted"].includes(quote.status)) {
+      throw Error(`cannot accept a ${quote.status} quote`);
+    }
+    if (!["creating", "draft"].includes(invoice.status)) {
+      throw Error(
+        `cannot adopt a Stripe invoice into a ${invoice.status} invoice`,
+      );
+    }
+    if (
+      moneyCompare(opts.subtotal, quote.subtotal) !== 0 ||
+      moneyCompare(opts.total, quote.total) !== 0 ||
+      moneyCompare(opts.tax, 0) !== 0 ||
+      moneyCompare(opts.amount_due, quote.total) !== 0
+    ) {
+      throw Error("Stripe's accepted quote invoice does not match local terms");
+    }
+    const identityPayload = {
+      quote_id: quote.id,
+      invoice_id: invoice.id,
+      provider_quote_id: opts.provider_quote_id,
+      provider_invoice_id: opts.provider_invoice_id,
+    };
+    const replay = await replayOrderId(client, opts.event_idempotency_key, {
+      action: "stripe-quote-accepted",
+      order_id: before.id,
+      payload: identityPayload,
+    });
+    if (replay) return await loadOrder(client, replay);
+    await client.query(
+      `UPDATE commercial_quotes SET status='accepted',provider_quote_id=$2,
+         provider_status='accepted',provider_invoice_id=$3,
+         provider_snapshot=$4,provider_updated_at=NOW(),last_reconciled_at=NOW(),
+         issued_at=COALESCE(issued_at,$5),
+         document_filename=COALESCE(document_filename,$6),
+         document_mime_type=COALESCE(document_mime_type,'application/pdf'),
+         document_sha256=COALESCE(document_sha256,$7),
+         document_size=COALESCE(document_size,octet_length($8::bytea)),
+         document_data=COALESCE(document_data,$8::bytea),
+         updated_at=NOW() WHERE id=$1`,
+      [
+        quote.id,
+        opts.provider_quote_id,
+        opts.provider_invoice_id,
+        opts.quote_provider_snapshot,
+        opts.quote_issued_at ?? null,
+        opts.quote_document_filename ?? null,
+        opts.quote_document_sha256 ?? null,
+        opts.quote_document_data ?? null,
+      ],
+    );
+    await client.query(
+      `UPDATE commercial_invoices SET status='draft',provider_customer_id=$2,
+         provider_invoice_id=$3,subtotal=$4,tax=$5,total=$6,amount_due=$7,
+         amount_paid=0,due_at=$8,hosted_invoice_url=$9,invoice_pdf_url=$10,
+         provider_snapshot=$11,last_reconciled_at=NOW(),last_reconcile_error=NULL,
+         reconcile_attempt_count=reconcile_attempt_count+1,updated_at=NOW()
+       WHERE id=$1`,
+      [
+        invoice.id,
+        opts.provider_customer_id,
+        opts.provider_invoice_id,
+        opts.subtotal,
+        opts.tax,
+        opts.total,
+        opts.amount_due,
+        opts.due_at ?? null,
+        opts.hosted_invoice_url ?? null,
+        opts.invoice_pdf_url ?? null,
+        opts.invoice_provider_snapshot,
+      ],
+    );
+    await client.query(
+      `UPDATE commercial_orders SET collection_state='draft_invoice',
+         stripe_customer_id=$2,next_action='Send invoice',updated_at=NOW(),
+         version=version+1 WHERE id=$1`,
+      [before.id, opts.provider_customer_id],
+    );
+    await client.query(
+      `UPDATE commercial_provider_operations SET status='succeeded',
+         result=$2,completed_at=NOW(),last_error=NULL,updated_at=NOW()
+       WHERE id=$1`,
+      [
+        operation.id,
+        {
+          commercial_quote_id: quote.id,
+          provider_quote_id: opts.provider_quote_id,
+          commercial_invoice_id: invoice.id,
+          provider_invoice_id: opts.provider_invoice_id,
+        },
+      ],
+    );
+    const after = await loadOrder(client, before.id);
+    await insertEvent(client, {
+      commercial_order_id: before.id,
+      event_type: "stripe-quote-accepted",
+      actor_account_id: opts.actor_account_id,
+      source: opts.event_source,
+      reason: opts.event_reason,
+      idempotency_key: opts.event_idempotency_key,
+      before: before as any,
+      after: after as any,
+      metadata: {
+        commercial_quote_id: quote.id,
+        provider_quote_id: opts.provider_quote_id,
+        commercial_invoice_id: invoice.id,
+        provider_invoice_id: opts.provider_invoice_id,
+        acceptance_source: opts.acceptance_source,
+      },
+      identity_payload: identityPayload,
+    });
+    return after;
+  });
+}
+
 export async function getCommercialInvoice(
   orderId: string,
   invoiceId?: string,
@@ -2500,6 +3054,7 @@ export async function getCommercialInvoice(
 export interface CommercialProviderOperation {
   id: string;
   commercial_order_id: string;
+  commercial_quote_id?: string | null;
   commercial_invoice_id?: string | null;
   operation: string;
   status:
@@ -2547,6 +3102,7 @@ export async function getCommercialProviderOperationByIdempotencyKey(
 
 export async function reserveCommercialProviderOperation(opts: {
   order_id: string;
+  quote_id?: string;
   invoice_id?: string;
   operation: string;
   expected_version: number;
@@ -2566,6 +3122,8 @@ export async function reserveCommercialProviderOperation(opts: {
       const operation = normalizeProviderOperation(existing.rows[0]);
       if (
         operation.commercial_order_id !== order.id ||
+        operation.commercial_quote_id !== (opts.quote_id ?? null) ||
+        operation.commercial_invoice_id !== (opts.invoice_id ?? null) ||
         operation.operation !== opts.operation ||
         stableJson(operation.request) !== stableJson(opts.request ?? {})
       ) {
@@ -2578,14 +3136,15 @@ export async function reserveCommercialProviderOperation(opts: {
     requireExpectedVersion(order.version, opts.expected_version);
     const { rows } = await client.query(
       `INSERT INTO commercial_provider_operations
-        (id,commercial_order_id,commercial_invoice_id,operation,status,
+        (id,commercial_order_id,commercial_quote_id,commercial_invoice_id,operation,status,
          idempotency_key,expected_version,request,result,attempt_count,
          created_at,updated_at)
-       VALUES ($1,$2,$3,$4,'reserved',$5,$6,$7,'{}',0,NOW(),NOW())
+       VALUES ($1,$2,$3,$4,$5,'reserved',$6,$7,$8,'{}',0,NOW(),NOW())
        RETURNING *`,
       [
         randomUUID(),
         order.id,
+        opts.quote_id ?? null,
         opts.invoice_id ?? null,
         opts.operation,
         opts.idempotency_key,
@@ -2655,18 +3214,38 @@ export async function getStaleCommercialInvoiceIds(
   return rows.map(({ id }) => id);
 }
 
+export async function getStaleCommercialQuoteIds(
+  opts: {
+    stale_minutes?: number;
+    limit?: number;
+  } = {},
+): Promise<string[]> {
+  assertSeedAuthority();
+  const { rows } = await getPool().query<{ id: string }>(
+    `SELECT id FROM commercial_quotes
+      WHERE provider='stripe' AND status IN ('draft','issued')
+        AND (last_reconciled_at IS NULL OR
+          last_reconciled_at < NOW()-($1||' minutes')::interval)
+      ORDER BY COALESCE(last_reconciled_at,provider_updated_at,created_at) LIMIT $2`,
+    [Math.max(opts.stale_minutes ?? 15, 1), Math.min(opts.limit ?? 100, 500)],
+  );
+  return rows.map(({ id }) => id);
+}
+
 export async function getCommercialOrderDiagnostics(): Promise<CommercialOrderDiagnostics> {
   assertSeedAuthority();
   const [
     countsResult,
     amountsResult,
     staleIds,
+    staleQuoteIds,
     inconsistent,
     orphanLicenses,
     failedStripeEvents,
     indeterminateOperations,
     missingDueDates,
     reconciliation,
+    quoteReconciliation,
   ] = await Promise.all([
     getPool().query<{ key: string; count: string }>(`
       SELECT 'open_orders' AS key,count(*)::text AS count FROM commercial_orders
@@ -2696,6 +3275,7 @@ export async function getCommercialOrderDiagnostics(): Promise<CommercialOrderDi
        FROM commercial_orders WHERE fulfillment_state='provisioned'
         AND collection_state NOT IN ('paid','waived')`),
     getStaleCommercialInvoiceIds({ limit: 500 }),
+    getStaleCommercialQuoteIds({ limit: 500 }),
     getPool().query<{ id: string }>(`
       SELECT id FROM commercial_orders WHERE
        (workflow_state='complete' AND NOT
@@ -2718,7 +3298,9 @@ export async function getCommercialOrderDiagnostics(): Promise<CommercialOrderDi
       event_type: string;
       status: string;
       commercial_order_id?: string | null;
+      commercial_quote_id?: string | null;
       commercial_invoice_id?: string | null;
+      provider_quote_id?: string | null;
       provider_invoice_id?: string | null;
       attempt_count: number;
       next_attempt_at: Date | string;
@@ -2727,7 +3309,8 @@ export async function getCommercialOrderDiagnostics(): Promise<CommercialOrderDi
       updated_at: Date | string;
     }>(`
       SELECT event_id,event_type,status,commercial_order_id,
-        commercial_invoice_id,provider_invoice_id,attempt_count,
+        commercial_quote_id,commercial_invoice_id,provider_quote_id,
+        provider_invoice_id,attempt_count,
         next_attempt_at,last_error,created_at,updated_at
        FROM commercial_stripe_events
        WHERE status IN ('failed','dead_letter')
@@ -2735,6 +3318,7 @@ export async function getCommercialOrderDiagnostics(): Promise<CommercialOrderDi
     getPool().query<{
       id: string;
       commercial_order_id: string;
+      commercial_quote_id?: string | null;
       commercial_invoice_id?: string | null;
       operation: string;
       status: string;
@@ -2745,7 +3329,8 @@ export async function getCommercialOrderDiagnostics(): Promise<CommercialOrderDi
       created_at: Date | string;
       updated_at: Date | string;
     }>(`
-      SELECT id,commercial_order_id,commercial_invoice_id,operation,status,
+      SELECT id,commercial_order_id,commercial_quote_id,commercial_invoice_id,
+        operation,status,
         attempt_count,last_error,remote_started_at,completed_at,created_at,updated_at
        FROM commercial_provider_operations
        WHERE status='indeterminate' ORDER BY updated_at DESC LIMIT 501`),
@@ -2778,6 +3363,27 @@ export async function getCommercialOrderDiagnostics(): Promise<CommercialOrderDi
             WHERE provider='stripe' AND status IN ('creating','draft','open')
           ),0)::text AS oldest_reconciliation_lag_seconds
       FROM commercial_invoices`),
+    getPool().query<{
+      provider_local_mismatch_count: string;
+      oldest_reconciliation_lag_seconds: string;
+    }>(`
+      SELECT
+        count(*) FILTER (
+          WHERE provider='stripe' AND provider_snapshot ? 'status' AND (
+            provider_snapshot->>'id' <> provider_quote_id OR
+            provider_snapshot->>'status' <> provider_status OR
+            lower(COALESCE(provider_snapshot->>'currency','')) <> currency OR
+            ((provider_snapshot->>'amount_subtotal') ~ '^[0-9]+$'
+              AND (provider_snapshot->>'amount_subtotal')::numeric / 100 <> subtotal) OR
+            ((provider_snapshot->>'amount_total') ~ '^[0-9]+$'
+              AND (provider_snapshot->>'amount_total')::numeric / 100 <> total)
+          )
+        )::text AS provider_local_mismatch_count,
+        COALESCE(max(EXTRACT(EPOCH FROM
+          (NOW()-COALESCE(last_reconciled_at,provider_updated_at,created_at)))) FILTER (
+            WHERE provider='stripe' AND status IN ('draft','issued')
+          ),0)::text AS oldest_reconciliation_lag_seconds
+      FROM commercial_quotes`),
   ]);
   return {
     generated_at: new Date().toISOString(),
@@ -2788,15 +3394,19 @@ export async function getCommercialOrderDiagnostics(): Promise<CommercialOrderDi
       amountsResult.rows.map(({ key, amount }) => [key, money(amount)]),
     ),
     reconciliation: {
-      provider_local_mismatch_count: Number(
-        reconciliation.rows[0]?.provider_local_mismatch_count ?? 0,
-      ),
+      provider_local_mismatch_count:
+        Number(reconciliation.rows[0]?.provider_local_mismatch_count ?? 0) +
+        Number(quoteReconciliation.rows[0]?.provider_local_mismatch_count ?? 0),
       oldest_reconciliation_lag_seconds: Math.max(
         0,
         Number(reconciliation.rows[0]?.oldest_reconciliation_lag_seconds ?? 0),
+        Number(
+          quoteReconciliation.rows[0]?.oldest_reconciliation_lag_seconds ?? 0,
+        ),
       ),
     },
     stale_invoice_ids: staleIds,
+    stale_quote_ids: staleQuoteIds,
     inconsistent_order_ids: inconsistent.rows.slice(0, 500).map(({ id }) => id),
     review_queues: {
       truncated: {

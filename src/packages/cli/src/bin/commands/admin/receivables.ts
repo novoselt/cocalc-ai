@@ -24,6 +24,9 @@ import type {
   CommercialOrderUpdateRequest,
   CommercialProvisionRequest,
   CommercialQuoteIssueRequest,
+  CommercialStripeQuoteAcceptRequest,
+  CommercialStripeQuoteCreateRequest,
+  CommercialStripeQuoteMutationRequest,
   CommercialQuoteVoidRequest,
 } from "@cocalc/conat/hub/api/commercial-orders";
 import {
@@ -1156,6 +1159,168 @@ function registerQuoteCommands(
       );
     });
 
+  const stripe = quote
+    .command("stripe")
+    .description("manage Stripe-native commercial quote lifecycles");
+
+  stripe
+    .command("preview <order>")
+    .description("preview authoritative Stripe quote inputs and readiness")
+    .option(
+      "--valid-until <iso>",
+      "quote expiration timestamp; defaults to 30 days",
+    )
+    .option("--reason <text>", "audit reason for this admin read")
+    .action(async (orderRef: string, opts: any, command: Command) => {
+      await deps.withContext(
+        command,
+        "admin receivables quote stripe preview",
+        async (ctx) =>
+          await ctx.hub.commercialOrders.stripeQuotePreview({
+            id: normalizeOrderReference(orderRef),
+            ...(opts.validUntil
+              ? {
+                  valid_until: normalizeIso(opts.validUntil, "--valid-until"),
+                }
+              : {}),
+            reason: readReason(opts.reason, READ_REASONS.quotePreview),
+          }),
+      );
+    });
+
+  mutationOptions(
+    stripe
+      .command("create <order>")
+      .description("preview or create a Stripe quote draft")
+      .option(
+        "--valid-until <iso>",
+        "quote expiration timestamp; defaults to 30 days",
+      ),
+    "create the Stripe quote draft",
+  ).action(async (orderRef: string, opts: any, command: Command) => {
+    await deps.withContext(
+      command,
+      "admin receivables quote stripe create",
+      async (ctx) => {
+        const reason = requireReason(opts.reason);
+        const order = await ctx.hub.commercialOrders.get({
+          id: normalizeOrderReference(orderRef),
+          reason,
+        });
+        const validUntil = opts.validUntil
+          ? normalizeIso(opts.validUntil, "--valid-until")
+          : undefined;
+        const request = {
+          id: order.id,
+          ...commonMutationRequest("quote-stripe-create", order, opts, {
+            ...(validUntil ? { valid_until: validUntil } : {}),
+          }),
+        } as CommercialStripeQuoteCreateRequest;
+        if (!opts.commit) {
+          return preview(
+            "quote-stripe-create",
+            order,
+            request as unknown as JsonObject,
+            {
+              stripe_quote_preview:
+                await ctx.hub.commercialOrders.stripeQuotePreview({
+                  id: order.id,
+                  ...(validUntil ? { valid_until: validUntil } : {}),
+                  reason,
+                }),
+            },
+          );
+        }
+        return await ctx.hub.commercialOrders.createStripeQuote(request);
+      },
+    );
+  });
+
+  for (const operation of ["finalize", "cancel", "reconcile"] as const) {
+    const apiMethod = {
+      finalize: "finalizeStripeQuote",
+      cancel: "cancelStripeQuote",
+      reconcile: "reconcileStripeQuote",
+    }[operation] as
+      | "finalizeStripeQuote"
+      | "cancelStripeQuote"
+      | "reconcileStripeQuote";
+    mutationOptions(
+      stripe
+        .command(`${operation} <order>`)
+        .description(`preview or ${operation} a Stripe commercial quote`)
+        .requiredOption("--quote-id <uuid>", "internal commercial quote id"),
+      `${operation} the Stripe commercial quote`,
+    ).action(async (orderRef: string, opts: any, command: Command) => {
+      await deps.withContext(
+        command,
+        `admin receivables quote stripe ${operation}`,
+        async (ctx) => {
+          const reason = requireReason(opts.reason);
+          const order = await ctx.hub.commercialOrders.get({
+            id: normalizeOrderReference(orderRef),
+            reason,
+          });
+          const request = {
+            id: order.id,
+            ...commonMutationRequest(`quote-stripe-${operation}`, order, opts, {
+              commercial_quote_id: `${opts.quoteId ?? ""}`.trim(),
+            }),
+          } as CommercialStripeQuoteMutationRequest;
+          if (!opts.commit) {
+            return preview(
+              `quote-stripe-${operation}`,
+              order,
+              request as unknown as JsonObject,
+            );
+          }
+          return await ctx.hub.commercialOrders[apiMethod](request);
+        },
+      );
+    });
+  }
+
+  mutationOptions(
+    stripe
+      .command("accept <order>")
+      .description(
+        "preview or accept a Stripe quote and create its unsent invoice draft",
+      )
+      .requiredOption("--quote-id <uuid>", "internal commercial quote id")
+      .requiredOption(
+        "--customer-acceptance-confirmed",
+        "confirm that customer acceptance was explicitly authorized",
+      ),
+    "accept the Stripe commercial quote",
+  ).action(async (orderRef: string, opts: any, command: Command) => {
+    await deps.withContext(
+      command,
+      "admin receivables quote stripe accept",
+      async (ctx) => {
+        const reason = requireReason(opts.reason);
+        const order = await ctx.hub.commercialOrders.get({
+          id: normalizeOrderReference(orderRef),
+          reason,
+        });
+        const request = {
+          id: order.id,
+          ...commonMutationRequest("quote-stripe-accept", order, opts, {
+            commercial_quote_id: `${opts.quoteId ?? ""}`.trim(),
+            customer_acceptance_confirmed: true,
+          }),
+        } as CommercialStripeQuoteAcceptRequest;
+        if (!opts.commit) {
+          return preview(
+            "quote-stripe-accept",
+            order,
+            request as unknown as JsonObject,
+          );
+        }
+        return await ctx.hub.commercialOrders.acceptStripeQuote(request);
+      },
+    );
+  });
+
   mutationOptions(
     quote
       .command("issue <order>")
@@ -1770,6 +1935,8 @@ Examples:
   cocalc admin receivables show AR-2026-000123 --json
   cocalc admin receivables quote preview AR-2026-000123
   cocalc admin receivables quote issue AR-2026-000123 --reason "formal quote"
+  cocalc admin receivables quote stripe preview AR-2026-000123
+  cocalc admin receivables quote stripe create AR-2026-000123 --reason "draft Stripe quote"
   cocalc admin receivables document upload AR-2026-000123 --file PO.pdf \
     --reference PO-123 --reason "attach received purchase order"
   cocalc admin receivables invoice preview AR-2026-000123

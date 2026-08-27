@@ -13,8 +13,10 @@ import {
   getCommercialInvoice,
   getCommercialOrder,
   getStaleCommercialInvoiceIds,
+  getStaleCommercialQuoteIds,
 } from "./store";
 import { reconcileStripeCommercialInvoice } from "./invoices/stripe";
+import { reconcileStripeCommercialQuoteById } from "./quotes/stripe";
 import {
   recordCommercialReconciliation,
   recordCommercialWebhookLatency,
@@ -29,7 +31,9 @@ export interface CommercialStripeEventEnvelope {
   event_type: string;
   livemode: boolean;
   commercial_order_id?: string;
+  commercial_quote_id?: string;
   commercial_invoice_id?: string;
+  provider_quote_id?: string;
   provider_invoice_id?: string;
   created?: number;
 }
@@ -57,17 +61,20 @@ export async function enqueueCommercialStripeEvent(
   }
   await getPool().query(
     `INSERT INTO commercial_stripe_events
-      (event_id,event_type,livemode,commercial_order_id,commercial_invoice_id,
-       provider_invoice_id,status,payload,attempt_count,next_attempt_at,
+      (event_id,event_type,livemode,commercial_order_id,commercial_quote_id,
+       commercial_invoice_id,provider_quote_id,provider_invoice_id,
+       status,payload,attempt_count,next_attempt_at,
        created_at,updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,'pending',$7,0,NOW(),NOW(),NOW())
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,0,NOW(),NOW(),NOW())
      ON CONFLICT (event_id) DO NOTHING`,
     [
       event.event_id,
       event.event_type,
       event.livemode,
       event.commercial_order_id ?? null,
+      event.commercial_quote_id ?? null,
       event.commercial_invoice_id ?? null,
+      event.provider_quote_id ?? null,
       event.provider_invoice_id ?? null,
       { created: event.created },
     ],
@@ -154,10 +161,12 @@ async function finishEvent(
 }
 
 type ReconcileStripeInvoice = typeof reconcileStripeCommercialInvoice;
+type ReconcileStripeQuote = typeof reconcileStripeCommercialQuoteById;
 
 async function processClaimedEvent(
   event: any,
-  reconcile: ReconcileStripeInvoice,
+  reconcileInvoice: ReconcileStripeInvoice,
+  reconcileQuote: ReconcileStripeQuote,
 ): Promise<void> {
   if (!event.commercial_order_id) {
     await finishEvent(event, "ignored");
@@ -165,14 +174,24 @@ async function processClaimedEvent(
     return;
   }
   try {
-    await reconcile({
-      id: event.commercial_order_id,
-      commercial_invoice_id: event.commercial_invoice_id ?? undefined,
-      reason: `Stripe webhook ${event.event_type}`,
-      source: "stripe-webhook",
-      event_source: "stripe-webhook",
-      event_idempotency_key: `stripe-event:${event.event_id}`,
-    });
+    if (event.commercial_quote_id) {
+      await reconcileQuote({
+        order_id: event.commercial_order_id,
+        commercial_quote_id: event.commercial_quote_id,
+        reason: `Stripe webhook ${event.event_type}`,
+        source: "stripe-webhook",
+        event_idempotency_key: `stripe-event:${event.event_id}`,
+      });
+    } else {
+      await reconcileInvoice({
+        id: event.commercial_order_id,
+        commercial_invoice_id: event.commercial_invoice_id ?? undefined,
+        reason: `Stripe webhook ${event.event_type}`,
+        source: "stripe-webhook",
+        event_source: "stripe-webhook",
+        event_idempotency_key: `stripe-event:${event.event_id}`,
+      });
+    }
     await finishEvent(event, "processed");
     const latencyMs =
       typeof event.payload?.created === "number"
@@ -186,6 +205,7 @@ async function processClaimedEvent(
         stripe_event_id: event.event_id,
         event_type: event.event_type,
         commercial_order_id: event.commercial_order_id,
+        commercial_quote_id: event.commercial_quote_id,
         commercial_invoice_id: event.commercial_invoice_id,
         latency_ms: latencyMs,
       },
@@ -199,8 +219,9 @@ async function processClaimedEvent(
 
 export async function processCommercialStripeEventQueue(
   limit = 100,
-  reconcile: ReconcileStripeInvoice = reconcileStripeCommercialInvoice,
+  reconcileInvoice: ReconcileStripeInvoice = reconcileStripeCommercialInvoice,
   log: Pick<typeof logger, "warn"> = logger,
+  reconcileQuote: ReconcileStripeQuote = reconcileStripeCommercialQuoteById,
 ): Promise<{ processed: number; failed: number }> {
   assertSeed();
   let processed = 0;
@@ -209,7 +230,7 @@ export async function processCommercialStripeEventQueue(
     const event = await claimEvent();
     if (!event) break;
     try {
-      await processClaimedEvent(event, reconcile);
+      await processClaimedEvent(event, reconcileInvoice, reconcileQuote);
       processed += 1;
     } catch (err) {
       failed += 1;
@@ -221,6 +242,45 @@ export async function processCommercialStripeEventQueue(
     }
   }
   return { processed, failed };
+}
+
+export async function reconcileStaleCommercialQuotes(
+  opts: {
+    stale_minutes?: number;
+    limit?: number;
+  } = {},
+): Promise<{ reconciled: number; failed: number }> {
+  assertSeed();
+  const ids = await getStaleCommercialQuoteIds(opts);
+  let reconciled = 0;
+  let failed = 0;
+  for (const quoteId of ids) {
+    try {
+      const { rows } = await getPool().query<{ commercial_order_id: string }>(
+        "SELECT commercial_order_id FROM commercial_quotes WHERE id=$1",
+        [quoteId],
+      );
+      if (!rows[0]) throw Error("commercial quote not found");
+      const bucket = Math.floor(Date.now() / (15 * 60_000));
+      await reconcileStripeCommercialQuoteById({
+        order_id: rows[0].commercial_order_id,
+        commercial_quote_id: quoteId,
+        reason: "Scheduled Stripe quote reconciliation",
+        source: "reconciler",
+        event_idempotency_key: `commercial-quote-reconcile:${quoteId}:${bucket}`,
+      });
+      reconciled += 1;
+      recordCommercialReconciliation("scheduled", "success");
+    } catch (err) {
+      failed += 1;
+      recordCommercialReconciliation("scheduled", "failed");
+      logger.warn("stale commercial quote reconciliation failed", {
+        commercial_quote_id: quoteId,
+        error: `${err}`,
+      });
+    }
+  }
+  return { reconciled, failed };
 }
 
 export async function reconcileStaleCommercialInvoices(

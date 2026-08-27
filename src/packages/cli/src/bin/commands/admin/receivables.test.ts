@@ -480,6 +480,219 @@ test("receivables quote issue previews inputs and stored PDFs download", async (
   assert.equal(download.output().quote_number, quote.quote_number);
 });
 
+test("Stripe quote preview and create are dry-run first", async () => {
+  const validUntil = "2026-10-01T00:00:00.000Z";
+  const stripePreview = {
+    order_id: order().id,
+    order_number: order().order_number,
+    organization_name: order().organization_name,
+    billing_contacts: [],
+    items: [],
+    currency: "usd",
+    subtotal: "3900",
+    total: "3900",
+    default_valid_until: validUntil,
+    ready: true,
+    blockers: [],
+    stripe_mode: "test",
+    stripe_customer_id: "cus_test",
+    collection_method: "send_invoice",
+    payment_terms_days: 30,
+    description: "Example University commercial order",
+    header: "CoCalc quote",
+    footer: "Thank you",
+    metadata: { commercial_order_id: order().id },
+    products: [],
+  };
+  const previewRequests: any[] = [];
+  const createRequests: any[] = [];
+  const api = {
+    get: async () => order(),
+    stripeQuotePreview: async (request: any) => {
+      previewRequests.push(request);
+      return stripePreview;
+    },
+    createStripeQuote: async (request: any) => {
+      createRequests.push(request);
+      return order({ version: 8 });
+    },
+  };
+
+  const directPreview = setup(api);
+  await directPreview.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "quote",
+    "stripe",
+    "preview",
+    "AR-2026-000123",
+    "--valid-until",
+    validUntil,
+  ]);
+  assert.deepEqual(directPreview.output(), stripePreview);
+  assert.equal(previewRequests[0].valid_until, validUntil);
+  assert.equal(previewRequests[0].reason, "Review commercial quote preview");
+
+  const dryRun = setup(api);
+  await dryRun.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "quote",
+    "stripe",
+    "create",
+    "AR-2026-000123",
+    "--valid-until",
+    validUntil,
+    "--reason",
+    "create reviewed Stripe quote",
+  ]);
+  assert.equal(createRequests.length, 0);
+  assert.equal(dryRun.output().operation, "quote-stripe-create");
+  assert.equal(dryRun.output().request.expected_version, 7);
+  assert.equal(dryRun.output().request.valid_until, validUntil);
+  assert.deepEqual(dryRun.output().stripe_quote_preview, stripePreview);
+  assert.match(
+    dryRun.output().request.idempotency_key,
+    /^receivables-quote-stripe-create-/,
+  );
+
+  const unreviewedCommit = setup(api);
+  await assert.rejects(
+    unreviewedCommit.program.parseAsync([
+      "node",
+      "test",
+      "admin",
+      "receivables",
+      "quote",
+      "stripe",
+      "create",
+      "AR-2026-000123",
+      "--reason",
+      "create reviewed Stripe quote",
+      "--commit",
+    ]),
+    /--expected-version or --expected-updated-at is required/,
+  );
+  assert.equal(createRequests.length, 0);
+
+  const commit = setup(api);
+  await commit.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "quote",
+    "stripe",
+    "create",
+    "AR-2026-000123",
+    "--valid-until",
+    validUntil,
+    "--reason",
+    "create reviewed Stripe quote",
+    "--expected-version",
+    "7",
+    "--idempotency-key",
+    "example-university-stripe-quote-2026",
+    "--commit",
+  ]);
+  assert.equal(createRequests.length, 1);
+  assert.equal(createRequests[0].expected_version, 7);
+  assert.equal(
+    createRequests[0].idempotency_key,
+    "example-university-stripe-quote-2026",
+  );
+  assert.equal(createRequests[0].source, "cli");
+});
+
+test("Stripe quote lifecycle mutations preview before committed writes", async () => {
+  const quoteId = "44444444-4444-4444-8444-444444444444";
+  const calls: Array<{ operation: string; request: any }> = [];
+  const api = {
+    get: async () => order(),
+    finalizeStripeQuote: async (request: any) => {
+      calls.push({ operation: "finalize", request });
+      return order({ version: 8 });
+    },
+    acceptStripeQuote: async (request: any) => {
+      calls.push({ operation: "accept", request });
+      return order({ version: 8 });
+    },
+    cancelStripeQuote: async (request: any) => {
+      calls.push({ operation: "cancel", request });
+      return order({ version: 8 });
+    },
+    reconcileStripeQuote: async (request: any) => {
+      calls.push({ operation: "reconcile", request });
+      return order({ version: 8 });
+    },
+  };
+
+  for (const operation of ["finalize", "accept", "cancel", "reconcile"]) {
+    const acceptance =
+      operation === "accept" ? ["--customer-acceptance-confirmed"] : [];
+    const dryRun = setup(api);
+    await dryRun.program.parseAsync([
+      "node",
+      "test",
+      "admin",
+      "receivables",
+      "quote",
+      "stripe",
+      operation,
+      "AR-2026-000123",
+      "--quote-id",
+      quoteId,
+      "--reason",
+      `${operation} reviewed Stripe quote`,
+      ...acceptance,
+    ]);
+    assert.equal(calls.length, 0);
+    assert.equal(dryRun.output().operation, `quote-stripe-${operation}`);
+    assert.equal(dryRun.output().request.commercial_quote_id, quoteId);
+    assert.equal(dryRun.output().request.expected_version, 7);
+    assert.match(
+      dryRun.output().request.idempotency_key,
+      new RegExp(`^receivables-quote-stripe-${operation}-`),
+    );
+    if (operation === "accept") {
+      assert.equal(dryRun.output().request.customer_acceptance_confirmed, true);
+    }
+
+    const commit = setup(api);
+    await commit.program.parseAsync([
+      "node",
+      "test",
+      "admin",
+      "receivables",
+      "quote",
+      "stripe",
+      operation,
+      "AR-2026-000123",
+      "--quote-id",
+      quoteId,
+      "--reason",
+      `${operation} reviewed Stripe quote`,
+      "--expected-version",
+      "7",
+      ...acceptance,
+      "--commit",
+    ]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].operation, operation);
+    assert.equal(calls[0].request.commercial_quote_id, quoteId);
+    assert.equal(calls[0].request.expected_version, 7);
+    assert.equal(calls[0].request.source, "cli");
+    if (operation === "accept") {
+      assert.equal(calls[0].request.customer_acceptance_confirmed, true);
+    }
+    calls.length = 0;
+  }
+});
+
 test("committed approval requires reviewed optimistic concurrency", async () => {
   let approveCalls = 0;
   const api = {

@@ -156,11 +156,11 @@ export const ADMIN_ENTRIES: DocsEntry[] = [
       "/public/docs/cocalc-cli-862b8d4e.webp",
       "A commercial receivables queue with invoicing, collection, and fulfillment state",
     ),
-    lastReviewed: "2026-08-25",
+    lastReviewed: "2026-08-26",
     noActionReason:
       "Admin operations runbook; use the documented cocalc admin receivables commands or Admin -> Accounts Receivable.",
     searchKeywords:
-      "accounts receivable commercial orders AR quotes PDF invoices Stripe payments manual settlement site license fulfillment procurement purchase order PO billing contacts collections reconciliation Zendesk adoption pilot",
+      "accounts receivable commercial orders AR quotes Stripe Quotes PDF invoices Invoicing Plus customer acceptance payments manual settlement site license fulfillment procurement purchase order PO billing contacts collections reconciliation Zendesk adoption pilot",
     slug: "admin/accounts-receivable",
     status: "ready",
     summary:

@@ -304,6 +304,23 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "creates a recoverable external Stripe invoice draft",
   },
+  "commercialOrders.createStripeQuote": {
+    decision: "fresh-auth-required",
+    reason: "creates a recoverable customer-facing Stripe quote draft",
+  },
+  "commercialOrders.finalizeStripeQuote": {
+    decision: "fresh-auth-required",
+    reason: "finalizes a customer-facing Stripe quote",
+  },
+  "commercialOrders.acceptStripeQuote": {
+    decision: "fresh-auth-required",
+    reason:
+      "accepts a customer-facing Stripe quote and creates its external invoice",
+  },
+  "commercialOrders.cancelStripeQuote": {
+    decision: "fresh-auth-required",
+    reason: "cancels a customer-facing Stripe quote",
+  },
   "commercialOrders.linkExistingInvoice": {
     decision: "fresh-auth-required",
     reason:
@@ -336,6 +353,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   "commercialOrders.reconcileInvoice": {
     decision: "fresh-auth-required",
     reason: "reconciles external payment facts into commercial state",
+  },
+  "commercialOrders.reconcileStripeQuote": {
+    decision: "fresh-auth-required",
+    reason: "reconciles external Stripe quote facts into commercial state",
   },
   "commercialOrders.reconcilePreview": {
     decision: "fresh-auth-not-required",

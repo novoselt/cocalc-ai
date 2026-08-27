@@ -14,6 +14,7 @@ import { updateCommercialQueueMetrics } from "./observability";
 import { getCommercialOrderDiagnostics } from "./store";
 import {
   processCommercialStripeEventQueue,
+  reconcileStaleCommercialQuotes,
   reconcileStaleCommercialInvoices,
 } from "./reconcile";
 
@@ -102,9 +103,12 @@ async function run(): Promise<void> {
     const reconciliation = reconciliationEnabled
       ? await reconcileStaleCommercialInvoices({ limit: 100 })
       : { reconciled: 0, failed: 0, disabled: true };
+    const quoteReconciliation = reconciliationEnabled
+      ? await reconcileStaleCommercialQuotes({ limit: 100 })
+      : { reconciled: 0, failed: 0, disabled: true };
     const diagnostics = await getCommercialOrderDiagnostics();
     updateCommercialQueueMetrics(diagnostics);
-    result = { webhook, reconciliation, diagnostics };
+    result = { webhook, reconciliation, quoteReconciliation, diagnostics };
     await centralLog({
       event: "commercial_receivables_maintenance",
       value: result,

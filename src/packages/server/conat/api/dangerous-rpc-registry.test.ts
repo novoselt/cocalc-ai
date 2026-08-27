@@ -180,6 +180,20 @@ function frontendFreshAuthProofOmissions(): string[] {
 }
 
 describe("dangerous hub RPC fresh-auth registry", () => {
+  it("requires fresh auth for every Stripe quote mutation", () => {
+    for (const name of [
+      "commercialOrders.createStripeQuote",
+      "commercialOrders.finalizeStripeQuote",
+      "commercialOrders.acceptStripeQuote",
+      "commercialOrders.cancelStripeQuote",
+      "commercialOrders.reconcileStripeQuote",
+    ]) {
+      expect(DANGEROUS_RPC_DECISIONS[name]).toMatchObject({
+        decision: "fresh-auth-required",
+      });
+    }
+  });
+
   it("classifies every risky-looking public hub RPC export", () => {
     const riskyNames = hubRpcNames({ riskyOnly: true });
     const missing = riskyNames.filter((name) => !DANGEROUS_RPC_DECISIONS[name]);

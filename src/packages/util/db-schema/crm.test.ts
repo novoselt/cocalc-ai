@@ -59,6 +59,18 @@ describe("normalized CRM database schema", () => {
       pg_default: "'{}'::jsonb",
       not_null: true,
     });
+    for (const field of [
+      "website",
+      "linkedin_url",
+      "facebook_url",
+      "x_url",
+      "note",
+    ]) {
+      expect(SCHEMA.crm_people.fields[field]).toMatchObject({
+        type: "string",
+      });
+      expect(SCHEMA.crm_people.fields[field].not_null).not.toBe(true);
+    }
   });
 
   it("does not expose normalized CRM records through user_query", () => {

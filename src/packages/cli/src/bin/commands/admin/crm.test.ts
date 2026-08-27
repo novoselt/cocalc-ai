@@ -249,6 +249,75 @@ test("people link manages reviewed email relationships without raw SQL", async (
   assert.equal(captured.commit, false);
 });
 
+test("people create exposes reviewed profile links and an internal note", async () => {
+  let captured: any;
+  const { program } = setup({
+    createPerson: async (opts: any) => {
+      captured = opts;
+      return { preview: true, expected_version: 0 };
+    },
+  });
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "people",
+    "create",
+    "--name",
+    "Ada Example",
+    "--website",
+    "https://ada.example.edu",
+    "--linkedin",
+    "https://linkedin.com/in/ada-example",
+    "--facebook",
+    "https://facebook.com/ada.example",
+    "--x",
+    "https://x.com/ada_example",
+    "--note",
+    "Primary procurement contact",
+    "--reason",
+    "reviewed public contact details",
+  ]);
+  assert.equal(captured.website, "https://ada.example.edu");
+  assert.equal(captured.linkedin_url, "https://linkedin.com/in/ada-example");
+  assert.equal(captured.facebook_url, "https://facebook.com/ada.example");
+  assert.equal(captured.x_url, "https://x.com/ada_example");
+  assert.equal(captured.note, "Primary procurement contact");
+  assert.equal(captured.commit, false);
+});
+
+test("people update accepts profile fields without requiring a JSON file", async () => {
+  let captured: any;
+  const { program } = setup({
+    updatePerson: async (opts: any) => {
+      captured = opts;
+      return { preview: true, expected_version: 3 };
+    },
+  });
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "people",
+    "update",
+    "ada@example.edu",
+    "--website",
+    "https://ada.example.edu",
+    "--note",
+    "Coordinates pilot onboarding",
+    "--reason",
+    "reviewed current contact context",
+  ]);
+  assert.equal(captured.person, "ada@example.edu");
+  assert.deepEqual(captured.changes, {
+    website: "https://ada.example.edu",
+    note: "Coordinates pilot onboarding",
+  });
+  assert.equal(captured.commit, false);
+});
+
 test("order handoff preserves canonical receivables actions", async () => {
   let captured: any;
   const { program } = setup({

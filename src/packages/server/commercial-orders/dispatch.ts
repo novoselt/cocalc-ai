@@ -41,6 +41,14 @@ import {
   sendStripeCommercialInvoice,
   voidStripeCommercialInvoice,
 } from "./invoices/stripe";
+import {
+  acceptStripeCommercialQuote,
+  cancelStripeCommercialQuote,
+  commercialStripeQuotePreview,
+  createStripeCommercialQuote,
+  finalizeStripeCommercialQuote,
+  reconcileStripeCommercialQuote,
+} from "./quotes/stripe";
 import { enqueueCommercialStripeEvent } from "./reconcile";
 import {
   commercialFulfillmentPreview,
@@ -117,6 +125,18 @@ export async function dispatchCommercialSeedRequest(
       return await voidCommercialQuote(opts);
     case "quoteDocument":
       return await getCommercialQuoteDocument(opts);
+    case "stripeQuotePreview":
+      return await commercialStripeQuotePreview(opts);
+    case "createStripeQuote":
+      return await createStripeCommercialQuote(opts);
+    case "finalizeStripeQuote":
+      return await finalizeStripeCommercialQuote(opts);
+    case "acceptStripeQuote":
+      return await acceptStripeCommercialQuote(opts);
+    case "cancelStripeQuote":
+      return await cancelStripeCommercialQuote(opts);
+    case "reconcileStripeQuote":
+      return await reconcileStripeCommercialQuote(opts);
     case "uploadDocument":
       return await uploadCommercialOrderDocument(opts);
     case "voidDocument":
