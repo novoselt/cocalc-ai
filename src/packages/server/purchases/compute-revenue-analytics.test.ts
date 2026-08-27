@@ -238,4 +238,56 @@ describe("compute revenue analytics", () => {
     );
     expect(hostUsage).toHaveLength(2);
   });
+
+  it("includes legacy dedicated-host sessions in usage backfills", async () => {
+    const accountId = uuid();
+    const hostId = uuid();
+    await client.query(
+      "INSERT INTO accounts (account_id,email_address) VALUES ($1,$2)",
+      [accountId, `${accountId}@example.com`],
+    );
+    await client.query(
+      `INSERT INTO purchases
+        (time,account_id,cost,cost_per_hour,period_start,period_end,
+         service,description,tag)
+       VALUES ($1,$2,$3,$4,$1,$5,'dedicated-host',$6,$7)`,
+      [
+        "2026-06-01T06:00:00Z",
+        accountId,
+        "0.24",
+        "0.02",
+        "2026-06-01T18:00:00Z",
+        {
+          type: "dedicated-host",
+          host_id: hostId,
+          host_name: "Legacy research host",
+          provider: "gcp",
+          funding_lane: "prepaid",
+          hourly_cost_usd: "0.02",
+        },
+        `dedicated-host:${hostId}`,
+      ],
+    );
+
+    await rebuildComputeRevenueDays({
+      start: "2026-06-01",
+      end: "2026-06-02",
+      client,
+    });
+    const { rows } = await client.query(
+      `SELECT product,provider,running_unit_seconds::int,
+              distinct_running_units
+         FROM compute_usage_daily
+        WHERE bay_id=$1 AND day='2026-06-01'::date`,
+      [getConfiguredBayId()],
+    );
+    expect(rows).toEqual([
+      {
+        product: "dedicated-host",
+        provider: "gcp",
+        running_unit_seconds: 43_200,
+        distinct_running_units: 1,
+      },
+    ]);
+  });
 });

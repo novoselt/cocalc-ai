@@ -139,6 +139,20 @@ function productForPurchase(
     : "dedicated-host";
 }
 
+function isRunningMachinePurchase(description: DedicatedHostPurchase): boolean {
+  // Purchases recorded before state-aware billing were running project hosts.
+  // Newer stopped resources and VM storage/egress always carry explicit fields.
+  const billingState =
+    description.billing_state ??
+    description.pricing_snapshot?.billing_state ??
+    "running";
+  const resourceKind = description.resource_kind ?? "project-host";
+  return (
+    billingState === "running" &&
+    (resourceKind === "project-host" || resourceKind === "compute-vm")
+  );
+}
+
 function componentForPricingKey(
   key: DedicatedHostPricingComponent["key"],
 ): ComputeRevenueCostComponent {
@@ -417,11 +431,7 @@ export async function rebuildComputeRevenueDays({
           });
         }
       }
-      const resourceKind = purchase.description.resource_kind;
-      if (
-        purchase.description.billing_state !== "running" ||
-        (resourceKind !== "project-host" && resourceKind !== "compute-vm")
-      ) {
+      if (!isRunningMachinePurchase(purchase.description)) {
         continue;
       }
       for (
