@@ -102,7 +102,7 @@ export interface CrmOrganizationSearchRequest extends CrmPageRequest {
   query?: string;
   domain?: string;
   email?: string;
-  account_id?: string;
+  linked_account_id?: string;
   zendesk_ticket_id?: number;
   commercial_order?: string;
   site_license_id?: string;

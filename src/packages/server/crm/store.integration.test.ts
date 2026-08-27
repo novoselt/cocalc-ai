@@ -452,14 +452,40 @@ describePglite("integrated CRM store", () => {
     expect(
       supportContext.candidates[0].evidence.map(({ kind }) => kind).sort(),
     ).toEqual(["cocalc_account", "verified_email", "zendesk_ticket"]);
+    for (const query of [
+      organization.id,
+      organization.customer_number,
+      organization.display_name,
+    ]) {
+      expect(
+        (
+          await store.searchOrganizations({
+            account_id: actor,
+            query,
+            reason: "hydrate an existing customer selector",
+          })
+        ).organizations.map(({ id }) => id),
+      ).toContain(organization.id);
+    }
     expect(
       (
         await store.searchOrganizations({
-          query: organization.id,
-          reason: "hydrate an existing customer selector",
+          account_id: actor,
+          linked_account_id: linkedAccount,
+          reason: "find a customer by linked CoCalc account",
         })
       ).organizations.map(({ id }) => id),
     ).toContain(organization.id);
+    expect(
+      (
+        await store.searchOrganizations({
+          account_id: actor,
+          query: organization.id,
+          linked_account_id: randomUUID(),
+          reason: "exclude a customer not linked to the requested account",
+        })
+      ).organizations,
+    ).toHaveLength(0);
     expect(
       (
         await store.listPeople({

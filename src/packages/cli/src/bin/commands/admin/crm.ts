@@ -398,7 +398,7 @@ function registerOrganizations(crm: Command, deps: CrmCommandDeps): void {
           query: opts.query,
           domain: opts.domain,
           email: opts.email,
-          account_id: opts.account
+          linked_account_id: opts.account
             ? await resolveAccount(ctx, opts.account, deps)
             : undefined,
           zendesk_ticket_id: positiveInteger(

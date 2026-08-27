@@ -52,6 +52,7 @@ import {
   getCustomerMetrics,
   listOrganizations,
   mutateExternalReference,
+  searchOrganizations,
 } from "./crm";
 
 const BASE = {
@@ -98,6 +99,24 @@ describe("CRM public Conat API", () => {
       payload: {
         reason: BASE.reason,
         limit: 25,
+        source: "admin-ui",
+      },
+    });
+  });
+
+  it("keeps the authenticated actor separate from linked-account search", async () => {
+    await searchOrganizations({
+      ...BASE,
+      query: "Example University",
+      linked_account_id: "customer-account-1",
+    });
+    expect(mockDispatchCrmSeedRequest).toHaveBeenCalledWith({
+      action: "searchOrganizations",
+      actor_account_id: "admin-1",
+      payload: {
+        reason: BASE.reason,
+        query: "Example University",
+        linked_account_id: "customer-account-1",
         source: "admin-ui",
       },
     });

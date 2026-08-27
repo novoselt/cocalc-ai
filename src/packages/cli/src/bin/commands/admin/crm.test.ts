@@ -150,12 +150,18 @@ test("CRM search forwards external identifiers and bounded pagination", async ()
     "search",
     "--domain",
     "example.edu",
+    "--account",
+    "owner@example.edu",
     "--zendesk-ticket",
     "20599",
     "--limit",
     "25",
   ]);
   assert.equal(captured.domain, "example.edu");
+  assert.equal(
+    captured.linked_account_id,
+    "22222222-2222-4222-8222-222222222222",
+  );
   assert.equal(captured.zendesk_ticket_id, 20599);
   assert.equal(captured.limit, 25);
   assert.equal(captured.reason, "Search CRM customers");
