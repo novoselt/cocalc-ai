@@ -433,6 +433,70 @@ export default function Canvas({
       left: number;
     };
   }>({ scale: 1, rect: { left: 0, top: 0, width: 0, height: 0 } });
+
+  const penPreviewFrameRef = useRef<number | null>(null);
+
+  // Redraw the entire preview path from scratch.  Drawing it incrementally
+  // would be cheaper, but with a translucent pen (the highlighter) the
+  // overlapping ends of the segments composite on top of each other, so the
+  // stroke looks fully opaque while drawing, then suddenly turns translucent
+  // when it is finished and rendered as an element.  See drawCurve.
+  const drawPenPreview = () => {
+    penPreviewFrameRef.current = null;
+    const previewPath = penPreviewPath.current;
+    const canvas = penCanvasRef.current;
+    if (previewPath == null || canvas == null) return;
+    const ctx = canvas.getContext("2d");
+    if (ctx == null) return;
+    const { scale, rect } = penCanvasParamsRef.current;
+    // Size the canvas here rather than relying on a react render, since the
+    // params above are a ref.  Note that the css size has to be set
+    // explicitly: without it the canvas is laid out at its *bitmap* size,
+    // which is wrong as soon as the display has more than one device pixel
+    // per css pixel.
+    const width = Math.round(scale * penDPIFactor * rect.width);
+    const height = Math.round(scale * penDPIFactor * rect.height);
+    if (canvas.width != width) {
+      canvas.width = width;
+    }
+    if (canvas.height != height) {
+      canvas.height = height;
+    }
+    canvas.style.setProperty("width", `${rect.width}px`);
+    canvas.style.setProperty("height", `${rect.height}px`);
+    // scale * penDPIFactor is how many canvas pixels there are per css pixel,
+    // so with this transform we can draw in css pixels relative to the canvas.
+    const s = scale * penDPIFactor;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    clearCanvas({ ctx });
+    ctx.setTransform(s, 0, 0, s, 0, 0);
+    const path: Point[] = previewPath.map(({ x, y }) => ({
+      x: x - rect.left,
+      y: y - rect.top,
+    }));
+    const { color, radius, opacity, nib } = getToolElement("pen").data ?? {};
+    drawCurve({
+      ctx,
+      path,
+      color,
+      radius: scaleRef.current * (radius ?? 1),
+      opacity,
+      nib,
+    });
+    canvas.style.setProperty("visibility", "visible");
+  };
+
+  const schedulePenPreview = () => {
+    if (penPreviewFrameRef.current != null) return;
+    penPreviewFrameRef.current = requestAnimationFrame(drawPenPreview);
+  };
+
+  const cancelPenPreview = () => {
+    if (penPreviewFrameRef.current != null) {
+      cancelAnimationFrame(penPreviewFrameRef.current);
+      penPreviewFrameRef.current = null;
+    }
+  };
   const resize = useResizeObserver({ ref: canvasRef });
   useEffect(() => {
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -1138,6 +1202,7 @@ export default function Canvas({
         return;
       } else if (selectedTool == "pen") {
         penPreviewPath.current = null;
+        cancelPenPreview();
         const canvas = penCanvasRef.current;
         if (canvas != null) {
           // we wait slightly before hiding/clearing it, so
@@ -1301,44 +1366,21 @@ export default function Canvas({
       if (point == null) return;
       mousePath.current.push(point);
 
-      // Rest of this code is just for drawing a preview of the path:
-      if (penPreviewPath.current != null) {
-        penPreviewPath.current.push({ x: e.clientX, y: e.clientY });
-      } else {
+      // The rest is just the preview of the path.  We only record a new
+      // point when the pointer actually moved by at least a pixel, since
+      // high frequency pointing devices emit far more events than that,
+      // and every point costs us on each repaint below.
+      if (penPreviewPath.current == null) return;
+      const last = penPreviewPath.current[penPreviewPath.current.length - 1];
+      if (
+        last != null &&
+        Math.abs(last.x - e.clientX) < 1 &&
+        Math.abs(last.y - e.clientY) < 1
+      ) {
         return;
       }
-      const canvas = penCanvasRef.current;
-      if (canvas == null) return;
-      const ctx = canvas.getContext("2d");
-      if (ctx == null) return;
-
-      if (penPreviewPath.current.length <= 2) {
-        // initialize
-        canvas.style.setProperty("visibility", "visible");
-        clearCanvas({ ctx });
-        ctx.restore();
-        ctx.save();
-        ctx.scale(penDPIFactor, penDPIFactor);
-      }
-      // Actually draw it:
-      const path: Point[] = [];
-      const { rect } = penCanvasParamsRef.current;
-      for (const point of penPreviewPath.current.slice(
-        penPreviewPath.current.length - 2,
-      )) {
-        path.push({
-          x: (point.x - rect.left) / penDPIFactor,
-          y: (point.y - rect.top) / penDPIFactor,
-        });
-      }
-      const { color, radius, opacity } = getToolElement("pen").data ?? {};
-      drawCurve({
-        ctx,
-        path,
-        color,
-        radius: (scaleRef.current * (radius ?? 1)) / penDPIFactor,
-        opacity,
-      });
+      penPreviewPath.current.push({ x: e.clientX, y: e.clientY });
+      schedulePenPreview();
       return;
     }
   };

@@ -32,6 +32,9 @@ export type ElementType =
 
 export type Point = { x: number; y: number };
 
+// shape of the pen tip: a circle, or the upright rectangle of a highlighter
+export type PenNib = "round" | "chisel";
+
 export interface Rect {
   x: number;
   y: number;
@@ -47,6 +50,7 @@ export interface Data {
   fontSize?: number;
   from?: string; // id of from node
   icon?: IconName; // icon
+  nib?: PenNib; // shape of the pen tip -- see elements/pen.tsx
   opacity?: number;
   path?: number[]; // right now is encoded as [x,y,x2,y2,x3,y3] to be simpler to JSON.
   previewTo?: Point; // edge: instead of node, position of mouse -- used for preview edge.
