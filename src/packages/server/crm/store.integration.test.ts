@@ -539,6 +539,17 @@ describePglite("integrated CRM store", () => {
       service_ends_at: "2027-06-30T23:59:59.000Z",
       source_zendesk_ticket_ids: [20529],
     });
+    const pilotCustomers = await store.listOrganizations({
+      account_id: actor,
+      opportunity_kinds: ["adoption_pilot"],
+      reason: "review customers with open pilot opportunities",
+    });
+    expect(
+      pilotCustomers.organizations.find(({ id }) => id === organization.id),
+    ).toMatchObject({
+      open_opportunity_count: 1,
+      open_opportunity_kinds: ["adoption_pilot"],
+    });
     const taskPreview = await store.createTask({
       account_id: actor,
       organization: organization.id,

@@ -65,6 +65,7 @@ import type {
   CrmExternalReference,
   CrmMutationResult,
   CrmOpportunity,
+  CrmOpportunityKind,
   CrmOpportunityStage,
   CrmOrganization,
   CrmOrganizationDomain,
@@ -790,8 +791,11 @@ async function summaryForOrganization(
         ORDER BY p.display_name LIMIT 10`,
         [organization.id],
       ),
-      db.query<{ count: string }>(
-        "SELECT count(*)::text AS count FROM crm_opportunities WHERE organization_id=$1 AND stage NOT IN ('won','lost')",
+      db.query<{ count: string; kinds: CrmOpportunityKind[] }>(
+        `SELECT count(*)::text AS count,
+                COALESCE(array_agg(DISTINCT kind ORDER BY kind), ARRAY[]::text[]) AS kinds
+           FROM crm_opportunities
+          WHERE organization_id=$1 AND stage NOT IN ('won','lost')`,
         [organization.id],
       ),
       db.query(
@@ -814,6 +818,7 @@ async function summaryForOrganization(
     verified_domains: domains.rows.map((x) => x.normalized_domain),
     primary_contacts: contacts.rows,
     open_opportunity_count: Number(opportunityCount.rows[0]?.count ?? 0),
+    open_opportunity_kinds: opportunityCount.rows[0]?.kinds ?? [],
     next_task: nextTask.rows[0] ? taskRow(nextTask.rows[0]) : null,
     latest_activity_at: iso(latest.rows[0]?.occurred_at),
     outstanding_receivables: `${outstanding.rows[0]?.amount ?? "0"}`,

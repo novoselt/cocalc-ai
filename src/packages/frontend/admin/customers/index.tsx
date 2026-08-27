@@ -75,6 +75,14 @@ import {
 import { CustomerSelector } from "./selector";
 import { TimelineFilter } from "./timeline-filter";
 import {
+  customerMatchesView,
+  emptyViewDescription,
+  type CustomerView,
+  VIEW_OPTIONS,
+  viewDescription,
+  viewRequest,
+} from "./views";
+import {
   CustomerOutreachCard,
   OutreachAdmin,
   type QueueView,
@@ -84,17 +92,6 @@ import "./customers.css";
 export { CustomerSelector } from "./selector";
 
 const { Paragraph, Text, Title } = Typography;
-
-type CustomerView =
-  | "active"
-  | "prospects"
-  | "pilots"
-  | "customers"
-  | "renewals"
-  | "expansions"
-  | "overdue"
-  | "unassigned"
-  | "all";
 
 type ActionKind =
   | "create-customer"
@@ -113,18 +110,6 @@ type ActionKind =
 type ActionState = { kind: ActionKind; title: string; person?: CrmPerson };
 
 type MutationPreview = Extract<CrmMutationResult<any>, { preview: true }>;
-
-const VIEW_OPTIONS: Array<{ label: string; value: CustomerView }> = [
-  { label: "Active relationships", value: "active" },
-  { label: "Prospects", value: "prospects" },
-  { label: "Adoption pilots", value: "pilots" },
-  { label: "Customers", value: "customers" },
-  { label: "Renewals", value: "renewals" },
-  { label: "Expansions", value: "expansions" },
-  { label: "Overdue follow-up", value: "overdue" },
-  { label: "Unassigned", value: "unassigned" },
-  { label: "All records", value: "all" },
-];
 
 function humanize(value: string): string {
   return value
@@ -182,57 +167,6 @@ function ZendeskReference({ reference }: { reference: CrmExternalReference }) {
   );
 }
 
-function viewRequest(view: CustomerView): Record<string, unknown> {
-  switch (view) {
-    case "prospects":
-      return { lifecycle_stages: ["prospect"] };
-    case "pilots":
-      return { lifecycle_stages: ["pilot"] };
-    case "customers":
-      return { lifecycle_stages: ["customer"] };
-    case "renewals":
-      return { lifecycle_stages: ["renewal"] };
-    case "expansions":
-      return { opportunity_kinds: ["expansion"] };
-    case "overdue":
-      return { has_overdue_tasks: true };
-    case "unassigned":
-      return { unassigned: true };
-    case "all":
-      return {};
-    default:
-      return { statuses: ["active"] };
-  }
-}
-
-function customerMatchesView(
-  customer: CrmOrganizationSummary,
-  view: CustomerView,
-): boolean {
-  switch (view) {
-    case "prospects":
-      return customer.lifecycle_stage === "prospect";
-    case "pilots":
-      return customer.lifecycle_stage === "pilot";
-    case "customers":
-      return customer.lifecycle_stage === "customer";
-    case "renewals":
-      return customer.lifecycle_stage === "renewal";
-    case "expansions":
-      return customer.open_opportunity_count > 0;
-    case "overdue":
-      return !!(
-        customer.next_task && new Date(customer.next_task.due_at) < new Date()
-      );
-    case "unassigned":
-      return !customer.relationship_owner_account_id;
-    case "all":
-      return true;
-    default:
-      return customer.status === "active";
-  }
-}
-
 function LifecycleTag({ stage }: { stage: string }) {
   const colors: Record<string, string> = {
     prospect: "gold",
@@ -288,8 +222,17 @@ function CustomerCard({
             />
           </Descriptions.Item>
           <Descriptions.Item label="Pipeline">
-            {customer.open_opportunity_count} open opportunit
-            {customer.open_opportunity_count === 1 ? "y" : "ies"}
+            <Flex gap={4} wrap>
+              <span>
+                {customer.open_opportunity_count} open opportunit
+                {customer.open_opportunity_count === 1 ? "y" : "ies"}
+              </span>
+              {customer.open_opportunity_kinds.map((kind) => (
+                <Tag bordered={false} color="blue" key={kind}>
+                  {humanize(kind)}
+                </Tag>
+              ))}
+            </Flex>
           </Descriptions.Item>
           <Descriptions.Item label="Receivables">
             {money(customer.outstanding_receivables)} outstanding
@@ -1298,12 +1241,16 @@ function CustomerQueue({
               <Text strong>Views</Text>
             </label>
             <Select
+              aria-describedby="crm-view-description"
               id="crm-view"
               onChange={setView}
               options={VIEW_OPTIONS}
               style={{ width: "100%" }}
               value={view}
             />
+            <Text id="crm-view-description" type="secondary">
+              {viewDescription(view)}
+            </Text>
           </div>
           <div style={{ flex: "1 1 280px" }}>
             <label htmlFor="crm-search">
@@ -1343,7 +1290,7 @@ function CustomerQueue({
         </div>
       ) : (
         <div className="crm-empty-panel">
-          <Empty description="No customers match this view" />
+          <Empty description={emptyViewDescription(view, !!search)} />
         </div>
       )}
 
