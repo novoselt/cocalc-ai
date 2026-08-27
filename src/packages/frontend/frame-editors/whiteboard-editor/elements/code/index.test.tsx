@@ -30,7 +30,7 @@ jest.mock("../edit-focus", () => ({
 jest.mock("./control", () => () => null);
 jest.mock("./input", () => () => <div data-testid="code-input" />);
 jest.mock("./input-prompt", () => () => null);
-jest.mock("./output", () => () => null);
+jest.mock("./output", () => () => <div data-testid="code-output" />);
 jest.mock("./style", () => ({
   __esModule: true,
   default: () => ({}),
@@ -139,5 +139,49 @@ describe("Code", () => {
 
     expect(screen.getByTestId("mode")).toBeInTheDocument();
     expect(screen.queryByTestId("code-input")).not.toBeInTheDocument();
+  });
+
+  it("mounts output while running before durable output exists", () => {
+    getMode.mockResolvedValue("python");
+    useFrameContext.mockReturnValue({
+      actions: {
+        in_undo_mode: jest.fn(() => false),
+        setElement: jest.fn(),
+      },
+      project_id: "project-1",
+      path: "/board.slides",
+    });
+
+    const { rerender } = render(
+      <Code
+        element={
+          {
+            id: "e1",
+            data: { runState: "busy" },
+            h: 100,
+          } as any
+        }
+        canvasScale={1}
+        focused={false}
+      />,
+    );
+
+    expect(screen.getByTestId("code-output")).toBeInTheDocument();
+
+    rerender(
+      <Code
+        element={
+          {
+            id: "e1",
+            data: { runState: "done" },
+            h: 100,
+          } as any
+        }
+        canvasScale={1}
+        focused={false}
+      />,
+    );
+
+    expect(screen.queryByTestId("code-output")).not.toBeInTheDocument();
   });
 });

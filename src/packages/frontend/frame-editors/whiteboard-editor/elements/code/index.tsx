@@ -30,6 +30,10 @@ import getStyle from "./style";
 
 const MIN_HEIGHT = 78;
 
+function isRunning(runState?: string): boolean {
+  return runState === "start" || runState === "run" || runState === "busy";
+}
+
 interface Props {
   element: Element;
   focused?: boolean;
@@ -215,9 +219,11 @@ export default function Code({
       <div ref={divRef} style={{ display: "flow-root" }}>
         {!hideInput && <InputPrompt element={element} />}
         {renderInput()}
-        {!hideOutput && element.data?.output && (
-          <Output element={element} onClick={() => setEditFocus(true)} />
-        )}
+        {!hideOutput &&
+          (element.data?.output != null ||
+            isRunning(element.data?.runState)) && (
+            <Output element={element} onClick={() => setEditFocus(true)} />
+          )}
         {focused && !readOnly && <ControlBar element={element} />}
       </div>
     </div>
