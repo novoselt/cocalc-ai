@@ -56,6 +56,7 @@ export interface MembershipAnalyticsSeries {
   variant?: string;
   priority: number;
   order: number;
+  countApplicable?: boolean;
   current: MembershipAnalyticsPoint[];
   comparison: MembershipAnalyticsPoint[];
 }
@@ -65,6 +66,7 @@ export interface MembershipAnalyticsSummaryRow {
   label: string;
   total?: boolean;
   channel?: MembershipAllocationChannel;
+  countApplicable?: boolean;
   activeMemberships: number;
   comparisonActiveMemberships: number;
   purchasedCapacity: number;

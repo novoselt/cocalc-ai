@@ -10,11 +10,58 @@ import { createElement } from "react";
 import {
   COMPUTE_UNIT_METRIC_DESCRIPTIONS,
   COMPUTE_UNIT_METRIC_OPTIONS,
+  formatRevenueAnalyticsTableMoney,
   membershipBreakdownOptions,
   revenueBreakdownOptions,
+  siteLicenseAnalyticsTableRowExplanation,
 } from "./revenue-analytics-dashboard";
 
 describe("membership analytics breakdown choices", () => {
+  it("distinguishes exact zero revenue from rounded nonzero revenue", () => {
+    expect(formatRevenueAnalyticsTableMoney(0)).toBe("-");
+    expect(formatRevenueAnalyticsTableMoney(14)).toBe("$0");
+    expect(formatRevenueAnalyticsTableMoney(100)).toBe("$1");
+  });
+
+  it("explains site-license tier and aggregate rows without positional wording", () => {
+    expect(
+      siteLicenseAnalyticsTableRowExplanation(
+        {
+          key: "site-pro",
+          label: "Pro · Site license",
+          channel: "site",
+          activeMemberships: 2,
+          comparisonActiveMemberships: 1,
+          purchasedCapacity: 0,
+          comparisonPurchasedCapacity: 0,
+          revenueCents: 0,
+          comparisonRevenueCents: 0,
+        },
+        "tier-channel",
+      ),
+    ).toBe(
+      "Site license memberships are shown by tier. Revenue is shown separately for the license as a whole.",
+    );
+    expect(
+      siteLicenseAnalyticsTableRowExplanation(
+        {
+          key: "site-license-revenue",
+          label: "Site license",
+          countApplicable: false,
+          activeMemberships: 0,
+          comparisonActiveMemberships: 0,
+          purchasedCapacity: 0,
+          comparisonPurchasedCapacity: 0,
+          revenueCents: 1250,
+          comparisonRevenueCents: 1000,
+        },
+        "tier-channel",
+      ),
+    ).toBe(
+      "Site license revenue is shown for the license as a whole. Membership counts are included in the tier breakdown.",
+    );
+  });
+
   it("offers subscription details only for the personal channel", () => {
     expect(
       membershipBreakdownOptions(["personal"]).map(({ value }) => value),

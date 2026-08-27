@@ -16,6 +16,7 @@ import {
   type ComputeRevenueDailyRow,
   type ComputeRevenueProduct,
   type ComputeUsageDailyRow,
+  type SiteLicenseRevenueDailyRow,
 } from "@cocalc/conat/hub/api/purchases";
 import { Icon } from "@cocalc/frontend/components/icon";
 
@@ -143,7 +144,7 @@ function downloadText({
 
 export interface RevenueAnalyticsDailyExport {
   format: "cocalc-revenue-analytics-daily";
-  version: 1;
+  version: 2;
   exported_at: string;
   range: { start_day: string; end_day: string };
   membership_channels: MembershipAllocationChannel[];
@@ -156,12 +157,16 @@ export interface RevenueAnalyticsDailyExport {
   compute_usage_rows: Array<
     Omit<ComputeUsageDailyRow, "day"> & { day: string }
   >;
+  site_license_revenue_rows: Array<
+    Omit<SiteLicenseRevenueDailyRow, "day"> & { day: string }
+  >;
 }
 
 export function buildRevenueAnalyticsDailyExport({
   membershipRows,
   computeRevenueRows,
   computeUsageRows,
+  siteLicenseRevenueRows,
   membershipChannels,
   computeProducts,
   tiers,
@@ -172,6 +177,7 @@ export function buildRevenueAnalyticsDailyExport({
   membershipRows: MembershipAllocationDailyRow[];
   computeRevenueRows: ComputeRevenueDailyRow[];
   computeUsageRows: ComputeUsageDailyRow[];
+  siteLicenseRevenueRows: SiteLicenseRevenueDailyRow[];
   membershipChannels: MembershipAllocationChannel[];
   computeProducts: ComputeRevenueProduct[];
   tiers: MembershipAllocationDailyExportTier[];
@@ -187,7 +193,7 @@ export function buildRevenueAnalyticsDailyExport({
   };
   return {
     format: "cocalc-revenue-analytics-daily",
-    version: 1,
+    version: 2,
     exported_at: exportedAt.toISOString(),
     range: { start_day: startDay, end_day: endDay },
     membership_channels: [...membershipChannels],
@@ -201,6 +207,9 @@ export function buildRevenueAnalyticsDailyExport({
       .map((row) => ({ ...row, day: dayKey(row.day) })),
     compute_usage_rows: computeUsageRows
       .filter(({ day, product }) => productSet.has(product) && inRange(day))
+      .map((row) => ({ ...row, day: dayKey(row.day) })),
+    site_license_revenue_rows: siteLicenseRevenueRows
+      .filter(({ day }) => inRange(day))
       .map((row) => ({ ...row, day: dayKey(row.day) })),
   };
 }
@@ -222,6 +231,9 @@ export function revenueAnalyticsDailyExportCsv(
   }
   for (const row of payload.compute_usage_rows) {
     rows.push({ record_type: "compute-usage", ...row });
+  }
+  for (const row of payload.site_license_revenue_rows) {
+    rows.push({ record_type: "site-license-revenue", ...row });
   }
   return csvStringify(rows, {
     header: true,

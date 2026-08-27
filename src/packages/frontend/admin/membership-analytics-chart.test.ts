@@ -263,4 +263,48 @@ describe("membership analytics chart", () => {
       ],
     });
   });
+
+  it("omits revenue-only series from membership hover values", () => {
+    const current = [
+      {
+        displayDay: "2026-08-24",
+        actualDay: "2026-08-24",
+        activeMemberships: 0,
+        purchasedCapacity: 0,
+        revenueCents: 1250,
+      },
+    ];
+    const visuals = buildMembershipAnalyticsSeriesVisuals({
+      series: [
+        {
+          ...series("Site license", "", undefined),
+          tierId: undefined,
+          countApplicable: false,
+          current,
+        },
+      ],
+      tiers: [],
+      breakdown: "tier",
+    });
+
+    expect(
+      buildMembershipAnalyticsHoverModel({
+        day: "2026-08-24",
+        visuals,
+        metric: "memberships",
+        includeComparison: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      buildMembershipAnalyticsHoverModel({
+        day: "2026-08-24",
+        visuals,
+        metric: "revenue",
+        includeComparison: false,
+      }),
+    ).toMatchObject({
+      currentTotal: 12.5,
+      rows: [{ label: "Site license", current: 12.5 }],
+    });
+  });
 });
