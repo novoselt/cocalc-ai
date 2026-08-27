@@ -656,6 +656,31 @@ export const AD_HOC_POSTGRES_TABLE_OWNERSHIP = {
     },
   ),
 
+  ...adHocEntries(
+    ["site_license_revenue_period_audit_log", "site_license_revenue_periods"],
+    {
+      ownership: "seed-global",
+      authority: "seed",
+      portability: "stable",
+      source: "site-license revenue schema bootstrap",
+      migrate_to_schema: true,
+      notes:
+        "Cluster-global site-license revenue source and audit records. Site-license APIs route reads and audited writes to the seed bay.",
+    },
+  ),
+
+  ...adHocEntries(["site_license_revenue_daily_allocations"], {
+    ownership: "projection",
+    authority: "seed",
+    portability: "rebuildable",
+    source: "site-license revenue schema bootstrap",
+    migrate_to_schema: true,
+    notes:
+      "Seed-authoritative daily site-license revenue projection derived from site-license revenue periods.",
+    rebuild:
+      "Replace each period's daily allocations from the corresponding site_license_revenue_periods row.",
+  }),
+
   ...adHocEntries(["legacy_migration_raw_records"], {
     ownership: "seed-global",
     authority: "seed",
