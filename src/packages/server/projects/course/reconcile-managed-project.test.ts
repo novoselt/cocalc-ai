@@ -302,6 +302,113 @@ describe("course managed project reconciliation", () => {
     expect(users[OWNER]).toEqual({ group: "owner" });
   });
 
+  it("preserves an accepted student when a stale roster omits account_id", async () => {
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("SELECT users, course")) {
+        return {
+          rows: [
+            matchingState({
+              course: {
+                datastore: false,
+                path: "classes/main.course",
+                project_id: COURSE,
+                type: "student",
+                account_id: STUDENT,
+              },
+            }),
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const { reconcileCourseManagedProjectLocal } =
+      await import("./reconcile-managed-project");
+
+    await reconcileCourseManagedProjectLocal(
+      request({
+        desired_account_ids: [],
+        course: {
+          type: "student",
+          project_id: COURSE,
+          path: "classes/main.course",
+          datastore: false,
+        },
+      }),
+    );
+
+    expect(
+      queryMock.mock.calls.some(([sql]) => sql.includes("UPDATE projects")),
+    ).toBe(false);
+    expect(inviteCollaboratorMock).not.toHaveBeenCalled();
+  });
+
+  it("defers collaborator cleanup while active student identity is unresolved", async () => {
+    const { reconcileCourseManagedProjectLocal } =
+      await import("./reconcile-managed-project");
+
+    await reconcileCourseManagedProjectLocal(
+      request({
+        desired_account_ids: [],
+        course: {
+          type: "student",
+          project_id: COURSE,
+          path: "classes/main.course",
+          datastore: false,
+        },
+      }),
+    );
+
+    const update = queryMock.mock.calls.find(([sql]) =>
+      sql.includes("UPDATE projects"),
+    );
+    const users = JSON.parse(update[1][1]);
+    expect(users[EXTRA]).toEqual({ group: "collaborator" });
+  });
+
+  it("rejects assigning a course manager as a student", async () => {
+    const { reconcileCourseManagedProjectLocal } =
+      await import("./reconcile-managed-project");
+
+    await expect(
+      reconcileCourseManagedProjectLocal(
+        request({
+          desired_account_ids: [MANAGER],
+          course: {
+            type: "student",
+            project_id: COURSE,
+            path: "classes/main.course",
+            datastore: false,
+            account_id: MANAGER,
+          },
+        }),
+      ),
+    ).rejects.toThrow("course manager cannot also be assigned as a student");
+  });
+
+  it("removes student access when the roster explicitly deletes the student", async () => {
+    const { reconcileCourseManagedProjectLocal } =
+      await import("./reconcile-managed-project");
+
+    await reconcileCourseManagedProjectLocal(
+      request({
+        desired_account_ids: [],
+        student_deleted: true,
+        course: {
+          type: "student",
+          project_id: COURSE,
+          path: "classes/main.course",
+          datastore: false,
+        },
+      }),
+    );
+
+    const update = queryMock.mock.calls.find(([sql]) =>
+      sql.includes("UPDATE projects"),
+    );
+    const users = JSON.parse(update[1][1]);
+    expect(users[EXTRA]).toBeUndefined();
+  });
+
   it("identifies exact matches without entering the mutation path", async () => {
     const { courseManagedProjectNeedsReconcile } =
       await import("./reconcile-managed-project");

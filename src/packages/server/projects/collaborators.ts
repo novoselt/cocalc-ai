@@ -22,7 +22,10 @@ import {
   assertLocalProjectCollaborator,
   getLocalProjectAccessStatus,
 } from "@cocalc/server/conat/project-local-access";
-import { assertProjectCollaboratorAccessAllowRemote } from "@cocalc/server/conat/project-remote-access";
+import {
+  assertProjectCollaboratorAccessAllowRemote,
+  resolveProjectReferenceAllowRemote,
+} from "@cocalc/server/conat/project-remote-access";
 import type {
   AddCollaborator,
   CourseStudentInviteAccountRepairInput,
@@ -1795,6 +1798,32 @@ async function claimReservedCourseSeatForAcceptedInviteBestEffort({
         student_project_id,
         err: `${err}`,
       },
+    );
+  }
+}
+
+async function assertCourseStudentInviteRecipientIsNotManager({
+  account_id,
+  invite,
+}: {
+  account_id: string;
+  invite: Awaited<ReturnType<typeof getPendingEmailCollabInviteForToken>>;
+}): Promise<void> {
+  if (invite.scope !== COURSE_EMAIL_INVITE_SCOPE) {
+    return;
+  }
+  const course_project_id = `${invite.context?.course_project_id ?? ""}`.trim();
+  if (!is_valid_uuid_string(course_project_id)) {
+    throw new Error("course invite has an invalid course project");
+  }
+  const courseProject = await resolveProjectReferenceAllowRemote({
+    account_id,
+    project_id: course_project_id,
+    warmRoute: false,
+  });
+  if (courseProject != null) {
+    throw new Error(
+      "Course managers cannot accept student invitations. Use a separate student account.",
     );
   }
 }
@@ -3768,6 +3797,10 @@ export async function redeemEmailProjectInvite({
       "You created this project invitation. Sign out and open the link using the CoCalc account you want to add.",
     );
   }
+  await assertCourseStudentInviteRecipientIsNotManager({
+    account_id,
+    invite,
+  });
   await assertInviteSenderCanStillGrantAccess({ pool, invite });
   const role = normalizeInviteRole(invite.invite_role);
   const { rows: collabRows } = await pool.query<{

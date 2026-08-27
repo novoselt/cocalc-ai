@@ -2340,6 +2340,7 @@ export interface ProjectReconcileCourseManagedProjectRequest {
   allow_collabs: boolean;
   desired_account_ids: string[];
   student_id?: string;
+  student_deleted?: boolean;
   student_email_address?: string;
   send_email_invite?: boolean;
   invite?: {
