@@ -7,7 +7,14 @@ then the border will be too wide.  We'll probably have to redo
 things to fix that later.
 */
 
-import { ReactNode, useMemo, useRef, useState } from "react";
+import {
+  ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Draggable from "react-draggable";
 import { getAngle, getPosition, MAX_ELEMENTS } from "./math";
 import { Tooltip } from "@cocalc/frontend/components";
@@ -25,6 +32,8 @@ import { isHidden } from "./tools/hide-button";
 import Cursors from "./cursors";
 import { ELEMENTS } from "./elements/desc";
 import { useWheel } from "@use-gesture/react";
+import { computeSnap, getPageRect } from "./snap";
+import type { SnapLine } from "./snap";
 
 import {
   SELECTED_BORDER_COLOR,
@@ -57,6 +66,9 @@ interface Props {
   readOnly?: boolean;
   cursors?: { [account_id: string]: any[] };
   multi?: boolean;
+  setSnapLines?: (lines: SnapLine[]) => void;
+  snapEnabled?: boolean;
+  gridEnabled?: boolean;
 }
 
 export default function Focused({
@@ -69,6 +81,9 @@ export default function Focused({
   readOnly,
   cursors,
   multi,
+  setSnapLines,
+  snapEnabled,
+  gridEnabled,
 }: Props) {
   const frame = useFrameContext();
   const editFocus = frame.desc.get("editFocus");
@@ -88,6 +103,76 @@ export default function Focused({
   const locked = isLocked(selectedElements);
   const hidden = isHidden(selectedElements);
   const nodeRef = useRef<any>({});
+  const snapRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+  const [snapOffset, setSnapOffset] = useState({ dx: 0, dy: 0 });
+  const shiftKeyRef = useRef<boolean>(false);
+
+  const updateSnapOffset = useCallback((offset: { dx: number; dy: number }) => {
+    snapRef.current = offset;
+    setSnapOffset((current) =>
+      current.dx === offset.dx && current.dy === offset.dy ? current : offset,
+    );
+  }, []);
+
+  // Clear snap lines if this component unmounts mid-drag
+  useEffect(() => {
+    return () => {
+      setSnapLines?.([]);
+    };
+  }, [setSnapLines]);
+
+  const computeSnapForDrag = useCallback(
+    (data: { x: number; y: number }) => {
+      if (!snapEnabled || shiftKeyRef.current) {
+        updateSnapOffset({ dx: 0, dy: 0 });
+        setSnapLines?.([]);
+        return;
+      }
+
+      // Build the rect of the element(s) being moved at their current drag position.
+      // For a multi-selection `element` is the synthetic "selection" rect built
+      // in canvas.tsx, whose w/h are deliberately `xMax - xMin + 1` so the
+      // selection border has somewhere to draw. Snapping against those inflated
+      // bounds would leave right/bottom alignment a unit short and centre
+      // alignment half a unit off, so drop that padding again here.
+      const pos = getPosition(element);
+      const isSelectionRect = element.type === "selection";
+      const movingRect = {
+        x: pos.x + data.x,
+        y: pos.y + data.y,
+        w: isSelectionRect ? Math.max(pos.w - 1, 0) : pos.w,
+        h: isSelectionRect ? Math.max(pos.h - 1, 0) : pos.h,
+      };
+
+      // Get other elements (not being moved)
+      const movingIds = new Set(selectedElements.map((e) => e.id));
+      const otherElements = allElements.filter(
+        (e) => !movingIds.has(e.id) && e.type !== "selection",
+      );
+
+      const pageRect = getPageRect(allElements);
+      const result = computeSnap({
+        movingRect,
+        otherElements,
+        pageRect,
+        canvasScale,
+        gridEnabled,
+      });
+
+      updateSnapOffset({ dx: result.dx, dy: result.dy });
+      setSnapLines?.(result.lines);
+    },
+    [
+      element,
+      selectedElements,
+      allElements,
+      snapEnabled,
+      gridEnabled,
+      setSnapLines,
+      canvasScale,
+      updateSnapOffset,
+    ],
+  );
 
   // Make it so the selected element can handle it's own mouse wheel events.
   const divRef = useRef<any>(null);
@@ -314,12 +399,27 @@ export default function Focused({
         cancel={".nodrag"}
         position={{ x: 0, y: 0 }}
         scale={canvasScale}
-        onStart={() => {
+        onStart={(e) => {
           setDragging(true);
+          updateSnapOffset({ dx: 0, dy: 0 });
+          shiftKeyRef.current = !!(e as MouseEvent).shiftKey;
         }}
-        onStop={(_, data) => {
+        onDrag={(e, data) => {
+          shiftKeyRef.current = !!(e as MouseEvent).shiftKey;
+          computeSnapForDrag(data);
+        }}
+        onStop={(e, data) => {
+          shiftKeyRef.current = !!(e as MouseEvent).shiftKey;
+          // Compute snap one final time for the stop position
+          computeSnapForDrag(data);
+          const snap = snapRef.current;
           setDragging(false);
-          frame.actions.moveElements(selectedElements, data);
+          updateSnapOffset({ dx: 0, dy: 0 });
+          setSnapLines?.([]);
+          frame.actions.moveElements(selectedElements, {
+            x: data.x + snap.dx,
+            y: data.y + snap.dy,
+          });
         }}
       >
         <div
@@ -327,6 +427,8 @@ export default function Focused({
           style={{
             cursor: locked ? undefined : "grab",
             position: "relative",
+            left: snapOffset.dx,
+            top: snapOffset.dy,
             ...(rotating
               ? {
                   border: `${SELECTED_BORDER_WIDTH / canvasScale}px ${

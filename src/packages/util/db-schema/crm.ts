@@ -327,6 +327,26 @@ Table({
       type: "string",
       desc: "Person display name.",
     }),
+    website: {
+      type: "string",
+      desc: "Reviewed personal or professional website URL.",
+    },
+    linkedin_url: {
+      type: "string",
+      desc: "Reviewed LinkedIn profile URL.",
+    },
+    facebook_url: {
+      type: "string",
+      desc: "Reviewed Facebook profile URL.",
+    },
+    x_url: {
+      type: "string",
+      desc: "Reviewed X (formerly Twitter) profile URL.",
+    },
+    note: {
+      type: "string",
+      desc: "Bounded internal note about this person; never store secrets.",
+    },
     timezone: { type: "string", desc: "IANA timezone." },
     status: requiredWithDefault(
       { type: "string", desc: "Active, merged, or archived." },

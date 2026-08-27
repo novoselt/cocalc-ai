@@ -202,9 +202,7 @@ describe("commercial quote card", () => {
     );
 
     expect(screen.getByRole("radio", { name: "Local PDF" })).toBeChecked();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Generate quote" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Generate quote" }));
     const dialog = await screen.findByRole("dialog", {
       name: "Review and issue quote",
     });
@@ -265,7 +263,12 @@ describe("commercial quote card", () => {
     const onOrderChanged = jest.fn();
     render(
       <CommercialQuotesCard
-        order={{ ...order, quotes: [quote] }}
+        order={{
+          ...order,
+          approved_at: "2026-08-25T10:00:00.000Z",
+          approved_by_account_id: "22222222-2222-4222-8222-222222222222",
+          quotes: [quote],
+        }}
         onOrderChanged={onOrderChanged}
       />,
     );
@@ -318,6 +321,25 @@ describe("commercial quote card", () => {
       }),
     );
     expect(onOrderChanged).toHaveBeenCalled();
+  });
+
+  it("does not offer quote acceptance before order approval", () => {
+    const quote = stripeQuote();
+    render(
+      <CommercialQuotesCard
+        order={{ ...order, quotes: [quote] }}
+        onOrderChanged={jest.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: `Accept ${quote.quote_number}` }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Approve the commercial order before accepting this quote.",
+      ),
+    ).toBeVisible();
   });
 
   it("finalizes a Stripe draft through fresh authentication", async () => {

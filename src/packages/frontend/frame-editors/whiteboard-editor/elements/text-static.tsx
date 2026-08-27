@@ -54,6 +54,11 @@ export function getFullStyle(
   return {
     opacity: isEmpty ? 0.5 : undefined, // similar to what antd input does: https://stackoverflow.com/questions/56095371/how-can-i-change-the-placeholder-color-in-ant-designs-select-component; they use 0.4 which is really too light.
     ...getStyle(element),
+    // border-box so PADDING sits inside the element's width rather than
+    // widening it: as content-box this div rendered 2*PADDING wider than the
+    // element, pushing text past the right edge in the rendered view while
+    // the editor inset it -- a 2*PADDING jump between the two modes.
+    boxSizing: "border-box",
     padding: `${PADDING}px`,
     height: "auto",
     whiteSpace: "pre-wrap",

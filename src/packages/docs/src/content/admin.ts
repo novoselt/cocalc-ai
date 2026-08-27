@@ -620,7 +620,13 @@ cocalc admin crm domains add CRM-2026-000123 example.edu \
   --kind primary --reason "domain supplied by procurement"
 cocalc admin crm people create --name "Ada Example" \
   --organization CRM-2026-000123 --roles billing,procurement \
-  --email ada@example.edu --reason "billing contact supplied by customer"
+  --email ada@example.edu --linkedin https://www.linkedin.com/in/ada-example \
+  --website https://example.edu/~ada \
+  --note "Primary procurement contact for the pilot" \
+  --reason "billing contact supplied by customer"
+cocalc admin crm people update ada@example.edu \
+  --x https://x.com/adaexample --timezone America/New_York \
+  --reason "reviewed public contact details"
 cocalc admin crm links add CRM-2026-000123 \
   --provider zendesk --kind ticket --external-id 20599 --verify \
   --reason "reviewed institutional inquiry"
@@ -649,6 +655,12 @@ External references store stable identifiers, a redacted label, and bounded
 metadata only. Current Zendesk details are fetched on demand through the
 support API. Accepted order snapshots and issued invoices are never rewritten
 when a CRM contact or organization changes.
+
+Person records may include a reviewed website, LinkedIn, Facebook, and X
+profile plus one bounded internal note. These fields are visible to CRM admins
+and agents. Keep the note concise and never store credentials, payment details,
+private keys, or other secrets in it; use customer timeline notes for dated
+relationship events instead.
 
 ## Duplicate handling and backfill
 
@@ -1060,7 +1072,9 @@ links; it does not change data.
 The customer page is organized around the team's normal workflow:
 
 - **People** records decision makers, instructors, billing contacts, and other
-  reviewed contacts. A contact may also link to a verified CoCalc account.
+  reviewed contacts. A contact may also link to a verified CoCalc account and
+  include a reviewed website, LinkedIn, Facebook, or X profile. Use **Edit** on
+  a contact card to maintain these fields.
 - **Pipeline** records a constrained opportunity such as an adoption pilot,
   renewal, or expansion. When terms are accepted, hand the won opportunity to
   Accounts Receivable instead of copying payment details into CRM.
@@ -1072,9 +1086,11 @@ The customer page is organized around the team's normal workflow:
 - **Timeline** is an append-only operational history. Use its filter to find
   events by summary, details, source, type, date, or ticket/order identifier.
 
-Use **Add note** for durable internal context that is not itself a task. Never
-store card data, banking credentials, passwords, private keys, or unrestricted
-provider payloads in CRM.
+The optional internal note on a person is for concise, stable context about
+that contact. Use **Add note** for dated relationship events and other durable
+customer context that is not itself a task. Never store card data, banking
+credentials, passwords, private keys, or unrestricted provider payloads in
+CRM.
 
 ## Review and confirm changes
 

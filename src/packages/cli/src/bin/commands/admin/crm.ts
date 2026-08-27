@@ -398,7 +398,7 @@ function registerOrganizations(crm: Command, deps: CrmCommandDeps): void {
           query: opts.query,
           domain: opts.domain,
           email: opts.email,
-          account_id: opts.account
+          linked_account_id: opts.account
             ? await resolveAccount(ctx, opts.account, deps)
             : undefined,
           zendesk_ticket_id: positiveInteger(
@@ -684,6 +684,11 @@ function registerPeople(crm: Command, deps: CrmCommandDeps): void {
       .option("--department <department>", "department")
       .option("--email <email>", "email address")
       .option("--account <account>", "CoCalc account or email")
+      .option("--website <url>", "personal or professional website")
+      .option("--linkedin <url>", "LinkedIn profile URL")
+      .option("--facebook <url>", "Facebook profile URL")
+      .option("--x <url>", "X (formerly Twitter) profile URL")
+      .option("--note <text>", "bounded internal note; never store secrets")
       .option("--timezone <zone>", "IANA timezone"),
   ).action(async (opts: any, cmd: Command) =>
     deps.withContext(
@@ -701,6 +706,11 @@ function registerPeople(crm: Command, deps: CrmCommandDeps): void {
             cocalc_account_id: opts.account
               ? await resolveAccount(ctx, opts.account, deps)
               : undefined,
+            website: opts.website,
+            linkedin_url: opts.linkedin,
+            facebook_url: opts.facebook,
+            x_url: opts.x,
+            note: opts.note,
             timezone: opts.timezone,
           }),
         ),
@@ -709,20 +719,38 @@ function registerPeople(crm: Command, deps: CrmCommandDeps): void {
   addMutationOptions(
     people
       .command("update <person>")
-      .description("preview or update a contact from a JSON file")
-      .requiredOption("--file <path>", "JSON object containing changes"),
+      .description("preview or update a contact")
+      .option("--file <path>", "JSON object containing changes")
+      .option("--name <name>", "display name")
+      .option("--website <url>", "personal or professional website")
+      .option("--linkedin <url>", "LinkedIn profile URL")
+      .option("--facebook <url>", "Facebook profile URL")
+      .option("--x <url>", "X (formerly Twitter) profile URL")
+      .option("--note <text>", "bounded internal note; never store secrets")
+      .option("--timezone <zone>", "IANA timezone")
+      .option("--status <state>", "active, merged, or archived"),
   ).action(async (person: string, opts: any, cmd: Command) =>
-    deps.withContext(
-      cmd,
-      "admin crm people update",
-      async (ctx) =>
-        await ctx.hub.adminCrm.updatePerson(
-          mutationRequest("person.update", opts, {
-            person,
-            changes: await readJson(opts.file),
-          }),
-        ),
-    ),
+    deps.withContext(cmd, "admin crm people update", async (ctx) => {
+      const changes = opts.file ? await readJson(opts.file) : {};
+      for (const [option, field] of [
+        ["name", "display_name"],
+        ["website", "website"],
+        ["linkedin", "linkedin_url"],
+        ["facebook", "facebook_url"],
+        ["x", "x_url"],
+        ["note", "note"],
+        ["timezone", "timezone"],
+        ["status", "status"],
+      ] as const) {
+        if (opts[option] !== undefined) changes[field] = opts[option];
+      }
+      if (!Object.keys(changes).length) {
+        throw Error("specify --file or at least one contact field to update");
+      }
+      return await ctx.hub.adminCrm.updatePerson(
+        mutationRequest("person.update", opts, { person, changes }),
+      );
+    }),
   );
   for (const action of ["link", "unlink"] as const) {
     addMutationOptions(

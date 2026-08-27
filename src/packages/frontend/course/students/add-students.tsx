@@ -173,7 +173,8 @@ export default function AddStudents({ name, students, close }: Props) {
           <Text type="secondary">
             One email per line is best. Names are optional, e.g.{" "}
             <Text code>Jane Doe &lt;jane@school.edu&gt;</Text>. This does not
-            search for CoCalc accounts.
+            expose CoCalc accounts; submitted addresses are checked only to
+            prevent course managers from also being enrolled as students.
           </Text>
           {renderFeedback()}
           <Card

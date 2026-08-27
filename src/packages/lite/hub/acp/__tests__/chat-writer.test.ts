@@ -122,6 +122,7 @@ type RecordedSet = {
   acp_account_id?: string;
   acp_thread_id?: string;
   acp_started_at_ms?: number;
+  acp_guidance_delivered_at_ms?: number;
   acp_log_store?: string;
   acp_log_key?: string;
   acp_log_subject?: string;
@@ -4055,6 +4056,65 @@ describe("repairInterruptedAcpTurn", () => {
 });
 
 describe("queued ACP user message projection", () => {
+  it("records when queued guidance is actually delivered", async () => {
+    const { syncdb } = makeFakeSyncDB();
+    (chatServer.acquireChatSyncDB as any).mockResolvedValue(syncdb);
+    syncdb.set({
+      event: "chat",
+      date: "2026-03-19T20:19:00.000Z",
+      sender_id: "user",
+      message_id: "user-guidance-1",
+      thread_id: "thread-1",
+      parent_message_id: "assistant-running",
+      acp_state: "queued",
+      history: [{ content: "change direction" }],
+    });
+
+    await expect(
+      acpTestInternals.persistAcpGuidanceDeliveryProjection({
+        client: makeFakeClient() as any,
+        request: {
+          project_id: "p",
+          account_id: "account-1",
+          prompt: "change direction",
+          chat: {
+            project_id: "p",
+            path: "chat",
+            sender_id: "codex-agent",
+            message_date: "2026-03-19T20:19:01.000Z",
+            message_id: "assistant-next",
+            thread_id: "thread-1",
+            parent_message_id: "user-guidance-1",
+          },
+        },
+        deliveredAtMs: 12_345,
+      }),
+    ).resolves.toBe(true);
+
+    expect(
+      syncdb.get_one({ event: "chat", message_id: "user-guidance-1" }),
+    ).toMatchObject({
+      acp_send_mode: "immediate",
+      acp_state: "sent",
+      acp_guidance_delivered_at_ms: 12_345,
+    });
+
+    await acpTestInternals.persistQueuedUserMessageProjection({
+      client: makeFakeClient() as any,
+      project_id: "p",
+      path: "chat",
+      thread_id: "thread-1",
+      user_message_id: "user-guidance-1",
+      queued: false,
+    });
+    expect(
+      syncdb.get_one({ event: "chat", message_id: "user-guidance-1" }),
+    ).toMatchObject({
+      acp_state: "sent",
+      acp_guidance_delivered_at_ms: 12_345,
+    });
+  });
+
   it("persists per-message queued state for every queued followup", async () => {
     const { syncdb } = makeFakeSyncDB();
     (chatServer.acquireChatSyncDB as any).mockResolvedValue(syncdb);

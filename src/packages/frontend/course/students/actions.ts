@@ -14,7 +14,12 @@ import {
   displayNameFromAccount,
   normalizeDisplayName,
 } from "@cocalc/util/accounts/display-name";
-import { defaults, required, uuid } from "@cocalc/util/misc";
+import {
+  defaults,
+  lower_email_address,
+  required,
+  uuid,
+} from "@cocalc/util/misc";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 import { CourseActions } from "../actions";
 import { CourseStore, StudentRecord } from "../store";
@@ -22,6 +27,13 @@ import type { SyncDBRecordStudent } from "../types";
 import { Map as iMap } from "immutable";
 
 const STUDENT_STATUS_UPDATE_MS = 60 * 1000;
+const MANAGER_EMAIL_CHECK_BATCH_SIZE = 40;
+
+type NewStudent = {
+  account_id?: string;
+  email_address?: string;
+  display_name?: string;
+};
 
 export class StudentsActions {
   private course_actions: CourseActions;
@@ -46,14 +58,9 @@ export class StudentsActions {
     return store;
   }
 
-  public async add_students(
-    students: {
-      account_id?: string;
-      email_address?: string;
-      display_name?: string;
-    }[],
-  ): Promise<void> {
+  public async add_students(students: NewStudent[]): Promise<void> {
     await this.course_actions.syncdb.wait_until_ready();
+    await this.assertStudentsAreNotCourseManagers(students);
 
     // students = array of objects that may have an account_id or email_address field set
     // New student_id's will be constructed randomly for each student
@@ -104,6 +111,80 @@ export class StudentsActions {
       await this.course_actions.student_projects.configure_all_projects();
     }
   }
+
+  private assertStudentsAreNotCourseManagers = async (
+    students: NewStudent[],
+  ): Promise<void> => {
+    const store = this.get_store();
+    const courseProjectId = store.get("course_project_id");
+    const projectUsers = this.course_actions.redux
+      .getStore("projects")
+      ?.get_users(courseProjectId);
+    if (projectUsers == null) {
+      throw new Error(
+        "Course collaborators are still loading. Wait a moment and try again.",
+      );
+    }
+    const managerAccountIds = new Set<string>();
+    projectUsers.forEach((info, accountId) => {
+      const group = info?.get?.("group") ?? info?.group;
+      if (group === "owner" || group === "collaborator") {
+        managerAccountIds.add(accountId);
+      }
+    });
+
+    const currentAccountId = webapp_client.account_id;
+    const currentEmail = lower_email_address(
+      this.course_actions.redux.getStore("account")?.get_email_address?.() ??
+        "",
+    );
+    for (const student of students) {
+      if (student.account_id && managerAccountIds.has(student.account_id)) {
+        throw courseManagerStudentError({
+          currentEmail,
+          isCurrentManager: student.account_id === currentAccountId,
+        });
+      }
+      const email = lower_email_address(student.email_address ?? "");
+      if (
+        email &&
+        currentEmail &&
+        email === currentEmail &&
+        currentAccountId &&
+        managerAccountIds.has(currentAccountId)
+      ) {
+        throw courseManagerStudentError({
+          currentEmail,
+          isCurrentManager: true,
+        });
+      }
+    }
+
+    const emails = [
+      ...new Set(
+        students
+          .map(({ email_address }) => lower_email_address(email_address ?? ""))
+          .filter(Boolean),
+      ),
+    ];
+    for (let i = 0; i < emails.length; i += MANAGER_EMAIL_CHECK_BATCH_SIZE) {
+      const batch = emails.slice(i, i + MANAGER_EMAIL_CHECK_BATCH_SIZE);
+      const matches = await webapp_client.users_client.user_search({
+        query: batch.join(","),
+        limit: batch.length,
+        only_email: true,
+      });
+      const manager = matches.find(({ account_id }) =>
+        managerAccountIds.has(account_id),
+      );
+      if (manager) {
+        throw courseManagerStudentError({
+          currentEmail,
+          isCurrentManager: manager.account_id === currentAccountId,
+        });
+      }
+    }
+  };
 
   public async delete_student(
     student_id: string,
@@ -473,4 +554,25 @@ export class StudentsActions {
     assignmentFilter = assignmentFilter.set(student_id, filter);
     this.course_actions.setState({ assignmentFilter });
   };
+}
+
+function courseManagerStudentError({
+  currentEmail,
+  isCurrentManager,
+}: {
+  currentEmail: string;
+  isCurrentManager: boolean;
+}): Error {
+  if (isCurrentManager && currentEmail) {
+    const [local, domain] = currentEmail.split("@");
+    const example = local && domain ? `${local}+1@${domain}` : undefined;
+    return new Error(
+      `You cannot add your course-manager account as a student. To test the student experience, create a separate CoCalc account${
+        example ? `, for example ${example}` : ""
+      }.`,
+    );
+  }
+  return new Error(
+    "This account is already a course manager and cannot also be a student. Use a separate student account.",
+  );
 }

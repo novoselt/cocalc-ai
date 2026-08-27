@@ -647,11 +647,55 @@ describePglite("commercial order store", () => {
       provider_status: "draft",
     });
     await expect(
-      store.voidCommercialQuote({
+      store.updateCommercialBillingDetails({
         account_id: actor,
         id: draft.id,
-        commercial_quote_id: intent.quote.id,
         expected_version: draft.version,
+        reason: "attempt billing correction with active quote",
+        billing_contacts: [
+          {
+            role: "billing",
+            name_snapshot: "Replacement Billing",
+            email_snapshot: "replacement@example.edu",
+          },
+        ],
+      }),
+    ).rejects.toThrow("cancel it first");
+
+    const approved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: draft.id,
+      expected_version: draft.version,
+      reason: "approve active Stripe quote fixture",
+    });
+    await expect(
+      store.reviseCommercialOrder({
+        account_id: actor,
+        id: approved.id,
+        expected_version: approved.version,
+        reason: "attempt revision with active Stripe quote",
+        changes: {
+          agreed_subtotal: "4100",
+          agreed_total: "4100",
+        },
+        items: [
+          {
+            description: "Revised adoption pilot",
+            quantity: "1",
+            unit_amount: "4100",
+            subtotal: "4100",
+            product_kind: "site_license",
+          },
+        ],
+      }),
+    ).rejects.toThrow("cancel it first");
+
+    await expect(
+      store.voidCommercialQuote({
+        account_id: actor,
+        id: approved.id,
+        commercial_quote_id: intent.quote.id,
+        expected_version: approved.version,
         reason: "attempt local void on provider quote",
       }),
     ).rejects.toThrow("Stripe quotes must be canceled");

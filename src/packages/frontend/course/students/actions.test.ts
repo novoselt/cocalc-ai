@@ -3,6 +3,20 @@
  *  License: MS-RSL - see LICENSE.md for details
  */
 
+let currentAccountId = "11111111-1111-4111-8111-111111111111";
+let userSearchMock: jest.Mock;
+
+jest.mock("@cocalc/frontend/webapp-client", () => ({
+  webapp_client: {
+    get account_id() {
+      return currentAccountId;
+    },
+    users_client: {
+      user_search: (...args: any[]) => userSearchMock(...args),
+    },
+  },
+}));
+
 import { StudentsActions } from "./actions";
 
 function deferred<T = void>() {
@@ -16,12 +30,40 @@ function deferred<T = void>() {
 describe("StudentsActions.add_students", () => {
   beforeEach(() => {
     jest.useFakeTimers();
+    currentAccountId = "11111111-1111-4111-8111-111111111111";
+    userSearchMock = jest.fn(async () => []);
   });
 
   afterEach(() => {
     jest.clearAllTimers();
     jest.useRealTimers();
   });
+
+  function reduxWithCourseManagers({
+    email = "teacher@example.com",
+    managers = {},
+  }: {
+    email?: string;
+    managers?: Record<string, { group: string }>;
+  } = {}) {
+    return {
+      getStore: (name: string) => {
+        if (name === "account") {
+          return { get_email_address: () => email };
+        }
+        if (name === "projects") {
+          return {
+            get_users: () => ({
+              forEach: (fn) =>
+                Object.entries(managers).forEach(([accountId, info]) =>
+                  fn(info, accountId),
+                ),
+            }),
+          };
+        }
+      },
+    };
+  }
 
   it("waits for complete project creation before the final configuration pass", async () => {
     const creationStarted = deferred();
@@ -34,6 +76,8 @@ describe("StudentsActions.add_students", () => {
     });
     const configureAllProjects = jest.fn(async () => undefined);
     const store = {
+      get: (key: string) =>
+        key === "course_project_id" ? "course-project" : undefined,
       get_copy_parallel: () => 1,
       get_student: () => ({}),
       getIn: () => projectId,
@@ -46,6 +90,7 @@ describe("StudentsActions.add_students", () => {
       set: jest.fn(),
       set_activity: () => 1,
       set_error: jest.fn(),
+      redux: reduxWithCourseManagers(),
       student_projects: {
         configure_all_projects: configureAllProjects,
         create_student_project: createStudentProject,
@@ -82,6 +127,8 @@ describe("StudentsActions.add_students", () => {
       wait_until_ready: jest.fn(() => ready.promise),
     };
     const store = {
+      get: (key: string) =>
+        key === "course_project_id" ? "course-project" : undefined,
       get_copy_parallel: () => 1,
       get_student: () => ({}),
       getIn: () => "11111111-1111-4111-8111-111111111111",
@@ -94,6 +141,7 @@ describe("StudentsActions.add_students", () => {
       set: jest.fn(),
       set_activity: () => 1,
       set_error: jest.fn(),
+      redux: reduxWithCourseManagers(),
       student_projects: {
         configure_all_projects: jest.fn(async () => undefined),
         create_student_project: jest.fn(async () => undefined),
@@ -116,6 +164,70 @@ describe("StudentsActions.add_students", () => {
 
     expect(courseActions.set).toHaveBeenCalledTimes(1);
     expect(courseActions.commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects the current manager email before writing the course document", async () => {
+    const store = {
+      get: (key: string) =>
+        key === "course_project_id" ? "course-project" : undefined,
+    };
+    const courseActions = {
+      commit: jest.fn(),
+      get_store: () => store,
+      redux: reduxWithCourseManagers({
+        managers: { [currentAccountId]: { group: "owner" } },
+      }),
+      set: jest.fn(),
+      syncdb: { wait_until_ready: jest.fn(async () => undefined) },
+    };
+    const actions = new StudentsActions(courseActions as any);
+
+    await expect(
+      actions.add_students([{ email_address: "teacher@example.com" }]),
+    ).rejects.toThrow(
+      "create a separate CoCalc account, for example teacher+1@example.com",
+    );
+    expect(courseActions.set).not.toHaveBeenCalled();
+    expect(courseActions.commit).not.toHaveBeenCalled();
+    expect(userSearchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an email that resolves to another course manager", async () => {
+    const managerAccountId = "22222222-2222-4222-8222-222222222222";
+    userSearchMock.mockResolvedValue([
+      {
+        account_id: managerAccountId,
+        email_address: "ta@example.com",
+      },
+    ]);
+    const store = {
+      get: (key: string) =>
+        key === "course_project_id" ? "course-project" : undefined,
+    };
+    const courseActions = {
+      commit: jest.fn(),
+      get_store: () => store,
+      redux: reduxWithCourseManagers({
+        managers: {
+          [currentAccountId]: { group: "owner" },
+          [managerAccountId]: { group: "collaborator" },
+        },
+      }),
+      set: jest.fn(),
+      syncdb: { wait_until_ready: jest.fn(async () => undefined) },
+    };
+    const actions = new StudentsActions(courseActions as any);
+
+    await expect(
+      actions.add_students([{ email_address: "ta@example.com" }]),
+    ).rejects.toThrow("already a course manager");
+    expect(courseActions.set).not.toHaveBeenCalled();
+    expect(courseActions.commit).not.toHaveBeenCalled();
+    expect(userSearchMock).toHaveBeenCalledWith({
+      query: "ta@example.com",
+      limit: 1,
+      only_email: true,
+    });
   });
 
   it("stops status polling after the course document closes", async () => {

@@ -60,9 +60,13 @@ export function AddPage({ pageId }: { pageId: string }) {
   return (
     <Tooltip title="Insert new page" placement="right" mouseEnterDelay={1}>
       <Button
+        aria-label="Insert new page"
         type="text"
         size="small"
-        onClick={() => addPage(actions, pageId)}
+        onClick={(event) => {
+          event.stopPropagation();
+          addPage(actions, pageId);
+        }}
         icon={<Icon name="plus-circle" style={{ color: COLORS.FILE_ICON }} />}
       />
     </Tooltip>

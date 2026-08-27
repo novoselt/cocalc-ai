@@ -56,6 +56,15 @@ const PAYMENT_METHOD_TYPES = ["card", "us_bank_account"] as const;
 
 type StripeConnection = Awaited<ReturnType<typeof getConn>>;
 
+type ReviewedQuoteProduct = {
+  commercial_order_item_id: string;
+  provider_product_id: string;
+  description: string;
+  quantity: number;
+  unit_amount: number;
+  subtotal: number;
+};
+
 const PRODUCT_NAMES: Record<string, string> = {
   site_license: "CoCalc Site License",
   professional_service: "CoCalc Professional Services",
@@ -277,6 +286,14 @@ function assertProductMode(stripe: StripeConnection, product: any): void {
   }
 }
 
+function assertProductDescription(product: any, description: string): void {
+  if (`${product?.name ?? ""}` !== description) {
+    throw Error(
+      "the Stripe product name must exactly match the reviewed line-item description",
+    );
+  }
+}
+
 async function resolveProduct(opts: {
   stripe: StripeConnection;
   item: CommercialOrderItem;
@@ -286,14 +303,20 @@ async function resolveProduct(opts: {
   if (explicit) {
     const product = await opts.stripe.products.retrieve(explicit);
     assertProductMode(opts.stripe, product);
+    assertProductDescription(product, opts.item.description);
     return explicit;
   }
-  const name = PRODUCT_NAMES[opts.item.product_kind];
-  if (!name) throw Error(itemProductBlocker(opts.item));
+  if (!PRODUCT_NAMES[opts.item.product_kind]) {
+    throw Error(itemProductBlocker(opts.item));
+  }
+  const descriptionHash = createHash("sha256")
+    .update(opts.item.description)
+    .digest("hex");
   const query = [
     `metadata['flow']:'${FLOW}'`,
-    `metadata['purpose']:'commercial_quote_product'`,
+    `metadata['purpose']:'commercial_quote_line_product'`,
     `metadata['product_kind']:'${opts.item.product_kind}'`,
+    `metadata['line_description_sha256']:'${descriptionHash}'`,
     `metadata['cocalc_site']:'${opts.site}'`,
   ].join(" AND ");
   const result = await opts.stripe.products.search({ query, limit: 10 } as any);
@@ -305,23 +328,27 @@ async function resolveProduct(opts: {
   }
   if (products[0]) {
     assertProductMode(opts.stripe, products[0]);
+    assertProductDescription(products[0], opts.item.description);
     return products[0].id;
   }
   const product = await opts.stripe.products.create(
     {
-      name,
+      // Stripe Quote line descriptions are derived from the Product name.
+      name: opts.item.description,
       metadata: {
         flow: FLOW,
-        purpose: "commercial_quote_product",
+        purpose: "commercial_quote_line_product",
         product_kind: opts.item.product_kind,
+        line_description_sha256: descriptionHash,
         cocalc_site: opts.site,
       },
     },
     {
-      idempotencyKey: `cocalc:${opts.site}:commercial-quote-product:${opts.item.product_kind}:v1`,
+      idempotencyKey: `cocalc:${opts.site}:commercial-quote-line-product:${opts.item.product_kind}:${descriptionHash}:v1`,
     },
   );
   assertProductMode(opts.stripe, product);
+  assertProductDescription(product, opts.item.description);
   return product.id;
 }
 
@@ -336,12 +363,7 @@ function quoteInvoiceId(quote: any): string | undefined {
 function quoteProviderSnapshot(
   quote: any,
   lines: any[] = [],
-  products: Array<{
-    commercial_order_item_id: string;
-    provider_product_id: string;
-    quantity: number;
-    unit_amount: number;
-  }> = [],
+  products: ReviewedQuoteProduct[] = [],
   reviewedText?: ReviewedQuoteText,
 ): Record<string, unknown> {
   return {
@@ -356,6 +378,7 @@ function quoteProviderSnapshot(
     amount_subtotal: quote?.amount_subtotal,
     amount_total: quote?.amount_total,
     collection_method: quote?.collection_method,
+    invoice_settings: quote?.invoice_settings,
     expires_at: quote?.expires_at,
     created: quote?.created,
     description: quote?.description,
@@ -368,6 +391,7 @@ function quoteProviderSnapshot(
     lines: lines.slice(0, 100).map((line) => ({
       id: line?.id,
       product: stripeId(line?.price?.product),
+      description: line?.description,
       quantity: line?.quantity,
       unit_amount: line?.price?.unit_amount,
       amount_subtotal: line?.amount_subtotal,
@@ -392,11 +416,22 @@ async function listQuoteLines(
 
 function lineSignature(value: {
   product: string;
+  description: string;
   quantity: number;
   unit_amount: number;
   subtotal: number;
 }): string {
-  return `${value.product}\0${value.quantity}\0${value.unit_amount}\0${value.subtotal}`;
+  return `${value.product}\0${value.description}\0${value.quantity}\0${value.unit_amount}\0${value.subtotal}`;
+}
+
+function reviewedPaymentTermsDays(
+  order: CommercialOrder,
+  quote: CommercialQuote,
+): number {
+  const value = quote.snapshot.payment_terms_days;
+  return Number.isSafeInteger(value)
+    ? Number(value)
+    : Math.max(order.payment_terms_days ?? 21, 0);
 }
 
 async function assertQuoteMatchesOrder(opts: {
@@ -405,12 +440,7 @@ async function assertQuoteMatchesOrder(opts: {
   localQuote: CommercialQuote;
   order: CommercialOrder;
   customerId: string;
-  products: Array<{
-    commercial_order_item_id: string;
-    provider_product_id: string;
-    quantity: number;
-    unit_amount: number;
-  }>;
+  products: ReviewedQuoteProduct[];
 }): Promise<any[]> {
   assertStripeMode(opts.stripe, opts.quote);
   const site = await currentStripeSite();
@@ -442,6 +472,20 @@ async function assertQuoteMatchesOrder(opts: {
       "Stripe quote delivery or customer does not match reviewed terms",
     );
   }
+  const expectedExpiresAt = Math.floor(
+    new Date(opts.localQuote.valid_until).getTime() / 1000,
+  );
+  if (Number(opts.quote?.expires_at) !== expectedExpiresAt) {
+    throw Error("Stripe quote expiration does not match reviewed terms");
+  }
+  if (
+    Number(opts.quote?.invoice_settings?.days_until_due) !==
+    reviewedPaymentTermsDays(opts.order, opts.localQuote)
+  ) {
+    throw Error(
+      "Stripe quote payment-term settings do not match reviewed terms",
+    );
+  }
   const expectedText = reviewedQuoteText(opts.order, opts.localQuote);
   if (
     `${opts.quote?.description ?? ""}` !== expectedText.description ||
@@ -453,22 +497,19 @@ async function assertQuoteMatchesOrder(opts: {
   const lines = await listQuoteLines(opts.stripe, opts.quote.id);
   const expected = new Map<string, number>();
   for (const product of opts.products) {
-    const item = opts.order.items.find(
-      ({ id }) => id === product.commercial_order_item_id,
-    );
-    if (!item)
-      throw Error("Stripe quote product references an unknown line item");
     const signature = lineSignature({
       product: product.provider_product_id,
+      description: product.description,
       quantity: product.quantity,
       unit_amount: product.unit_amount,
-      subtotal: decimalToStripe(item.subtotal),
+      subtotal: product.subtotal,
     });
     expected.set(signature, (expected.get(signature) ?? 0) + 1);
   }
   for (const line of lines) {
     const signature = lineSignature({
       product: stripeId(line?.price?.product) ?? "",
+      description: `${line?.description ?? ""}`,
       quantity: Number(line?.quantity),
       unit_amount: Number(line?.price?.unit_amount),
       subtotal: Number(line?.amount_subtotal),
@@ -512,20 +553,8 @@ async function resolveProducts(opts: {
   stripe: StripeConnection;
   order: CommercialOrder;
   site: string;
-}): Promise<
-  Array<{
-    commercial_order_item_id: string;
-    provider_product_id: string;
-    quantity: number;
-    unit_amount: number;
-  }>
-> {
-  const products: Array<{
-    commercial_order_item_id: string;
-    provider_product_id: string;
-    quantity: number;
-    unit_amount: number;
-  }> = [];
+}): Promise<ReviewedQuoteProduct[]> {
+  const products: ReviewedQuoteProduct[] = [];
   for (const item of opts.order.items) {
     products.push({
       commercial_order_item_id: item.id,
@@ -534,8 +563,10 @@ async function resolveProducts(opts: {
         item,
         site: opts.site,
       }),
+      description: item.description,
       quantity: Number(item.quantity),
       unit_amount: decimalToStripe(item.unit_amount),
+      subtotal: decimalToStripe(item.subtotal),
     });
   }
   return products;
@@ -708,23 +739,47 @@ async function productsFromSnapshot(
   stripe: StripeConnection,
   quote: CommercialQuote,
   order: CommercialOrder,
-): Promise<
-  Array<{
-    commercial_order_item_id: string;
-    provider_product_id: string;
-    quantity: number;
-    unit_amount: number;
-  }>
-> {
+): Promise<ReviewedQuoteProduct[]> {
   if (Array.isArray(quote.provider_snapshot.products)) {
-    const products = quote.provider_snapshot.products.filter(
-      (product: any) =>
-        typeof product?.commercial_order_item_id === "string" &&
-        typeof product?.provider_product_id === "string" &&
-        Number.isSafeInteger(product?.quantity) &&
-        Number.isSafeInteger(product?.unit_amount),
+    const snapshotItems = Array.isArray(quote.snapshot.items)
+      ? quote.snapshot.items
+      : order.items;
+    const items = new Map<string, any>(
+      snapshotItems
+        .filter((item: any) => typeof item?.id === "string")
+        .map((item: any) => [item.id, item]),
     );
-    if (products.length === order.items.length) return products;
+    const products: ReviewedQuoteProduct[] = [];
+    for (const product of quote.provider_snapshot.products as any[]) {
+      if (
+        typeof product?.commercial_order_item_id !== "string" ||
+        typeof product?.provider_product_id !== "string" ||
+        !Number.isSafeInteger(product?.quantity) ||
+        !Number.isSafeInteger(product?.unit_amount)
+      ) {
+        continue;
+      }
+      const item = items.get(product.commercial_order_item_id);
+      const description =
+        typeof product.description === "string"
+          ? product.description
+          : item?.description;
+      const subtotal = Number.isSafeInteger(product.subtotal)
+        ? Number(product.subtotal)
+        : item?.subtotal != null
+          ? decimalToStripe(`${item.subtotal}`)
+          : undefined;
+      if (typeof description !== "string" || subtotal == null) continue;
+      products.push({
+        commercial_order_item_id: product.commercial_order_item_id,
+        provider_product_id: product.provider_product_id,
+        description,
+        quantity: product.quantity,
+        unit_amount: product.unit_amount,
+        subtotal,
+      });
+    }
+    if (products.length === snapshotItems.length) return products;
   }
   return await resolveProducts({
     stripe,
@@ -1114,6 +1169,11 @@ async function acceptOrAdoptStripeQuote(opts: {
   reason: string;
   allowRemoteAccept: boolean;
 }): Promise<CommercialOrder> {
+  if (!opts.order.approved_at || !opts.order.approved_by_account_id) {
+    throw Error(
+      "the commercial order must be approved before quote acceptance",
+    );
+  }
   if (!opts.quote.provider_quote_id) {
     throw Error("Stripe quote draft has not been created");
   }
@@ -1280,6 +1340,11 @@ export async function acceptStripeCommercialQuote(
     throw Error("confirmed customer acceptance is required");
   }
   const order = await getCommercialOrder(opts.id);
+  if (!order.approved_at || !order.approved_by_account_id) {
+    throw Error(
+      "the commercial order must be approved before quote acceptance",
+    );
+  }
   const quote = await getCommercialQuote(order.id, opts.commercial_quote_id);
   if (quote.provider !== "stripe") throw Error("quote is not Stripe-backed");
   return await acceptOrAdoptStripeQuote({

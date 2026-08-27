@@ -457,11 +457,14 @@ export function CommercialQuotesCard({
                   quote.status === "draft" &&
                   quote.provider_status === "draft" &&
                   Boolean(quote.provider_quote_id);
-                const canAccept =
+                const canRequestAcceptance =
                   provider === "stripe" &&
                   quote.status === "issued" &&
                   quote.provider_status === "open" &&
                   hasDocument;
+                const canAccept =
+                  canRequestAcceptance &&
+                  Boolean(order.approved_at && order.approved_by_account_id);
                 const canCancel =
                   provider === "stripe" &&
                   ["draft", "issued"].includes(quote.status) &&
@@ -523,6 +526,12 @@ export function CommercialQuotesCard({
                         {quote.provider_invoice_id ? (
                           <Text type="secondary" copyable>
                             Draft invoice: {quote.provider_invoice_id}
+                          </Text>
+                        ) : null}
+                        {canRequestAcceptance && !canAccept ? (
+                          <Text type="secondary">
+                            Approve the commercial order before accepting this
+                            quote.
                           </Text>
                         ) : null}
                       </Flex>

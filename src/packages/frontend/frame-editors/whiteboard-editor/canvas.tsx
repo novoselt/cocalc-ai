@@ -93,7 +93,6 @@ import {
   fontSizeToZoom,
   getPageSpan,
   getPosition,
-  fitRectToRect,
   getOverlappingElements,
   getTransforms,
   Transforms,
@@ -121,6 +120,8 @@ import useIsMountedRef from "@cocalc/frontend/app-framework/is-mounted-hook";
 import { extendToIncludeEdges } from "./actions";
 
 import Cursors from "./cursors";
+import SnapGuides from "./snap-guides";
+import type { SnapLine } from "./snap";
 
 // TODO: could penDPIFactor change if you move a window from one monitor to another
 const penDPIFactor = window.devicePixelRatio;
@@ -178,6 +179,12 @@ export default function Canvas({
   const RenderElt =
     readOnly || !isBoard ? RenderReadOnlyElement : RenderElement;
 
+  const [snapLines, setSnapLines] = useState<SnapLine[]>([]);
+  const snapEnabled = frame.desc.get("snapToAlignment") !== false; // default on
+  // Same condition that decides whether <Grid> is rendered below, so we never
+  // snap to grid lines the user cannot see.
+  const gridEnabled = mainFrameType == "whiteboard";
+
   const backgroundDivRef = useRef<any>(null);
 
   // canvasRef is the div that is our main whiteboard "canvas".
@@ -200,6 +207,7 @@ export default function Canvas({
     min: MIN_FONT_SIZE,
     max: MAX_FONT_SIZE,
     throttleMs: 100,
+    wheelSpeed: 2,
     getFontSize: () => font_size ?? DEFAULT_FONT_SIZE,
     onZoom: ({ fontSize, first }) => {
       lastPinchRef.current = Date.now();
@@ -425,6 +433,70 @@ export default function Canvas({
       left: number;
     };
   }>({ scale: 1, rect: { left: 0, top: 0, width: 0, height: 0 } });
+
+  const penPreviewFrameRef = useRef<number | null>(null);
+
+  // Redraw the entire preview path from scratch.  Drawing it incrementally
+  // would be cheaper, but with a translucent pen (the highlighter) the
+  // overlapping ends of the segments composite on top of each other, so the
+  // stroke looks fully opaque while drawing, then suddenly turns translucent
+  // when it is finished and rendered as an element.  See drawCurve.
+  const drawPenPreview = () => {
+    penPreviewFrameRef.current = null;
+    const previewPath = penPreviewPath.current;
+    const canvas = penCanvasRef.current;
+    if (previewPath == null || canvas == null) return;
+    const ctx = canvas.getContext("2d");
+    if (ctx == null) return;
+    const { scale, rect } = penCanvasParamsRef.current;
+    // Size the canvas here rather than relying on a react render, since the
+    // params above are a ref.  Note that the css size has to be set
+    // explicitly: without it the canvas is laid out at its *bitmap* size,
+    // which is wrong as soon as the display has more than one device pixel
+    // per css pixel.
+    const width = Math.round(scale * penDPIFactor * rect.width);
+    const height = Math.round(scale * penDPIFactor * rect.height);
+    if (canvas.width != width) {
+      canvas.width = width;
+    }
+    if (canvas.height != height) {
+      canvas.height = height;
+    }
+    canvas.style.setProperty("width", `${rect.width}px`);
+    canvas.style.setProperty("height", `${rect.height}px`);
+    // scale * penDPIFactor is how many canvas pixels there are per css pixel,
+    // so with this transform we can draw in css pixels relative to the canvas.
+    const s = scale * penDPIFactor;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    clearCanvas({ ctx });
+    ctx.setTransform(s, 0, 0, s, 0, 0);
+    const path: Point[] = previewPath.map(({ x, y }) => ({
+      x: x - rect.left,
+      y: y - rect.top,
+    }));
+    const { color, radius, opacity, nib } = getToolElement("pen").data ?? {};
+    drawCurve({
+      ctx,
+      path,
+      color,
+      radius: scaleRef.current * (radius ?? 1),
+      opacity,
+      nib,
+    });
+    canvas.style.setProperty("visibility", "visible");
+  };
+
+  const schedulePenPreview = () => {
+    if (penPreviewFrameRef.current != null) return;
+    penPreviewFrameRef.current = requestAnimationFrame(drawPenPreview);
+  };
+
+  const cancelPenPreview = () => {
+    if (penPreviewFrameRef.current != null) {
+      cancelAnimationFrame(penPreviewFrameRef.current);
+      penPreviewFrameRef.current = null;
+    }
+  };
   const resize = useResizeObserver({ ref: canvasRef });
   useEffect(() => {
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -524,29 +596,31 @@ export default function Canvas({
   useLayoutEffect(() => {
     if (isNavigator || !frame.desc.get("fitToScreen") || !isBoard) return;
     try {
-      const viewport = getViewportData();
-      if (viewport == null) return;
+      // Use screen-pixel viewport (not data-coordinate viewport) so the
+      // computed zoom is independent of the current scale.  Previous code
+      // used getViewportData() which divides by the current scale, causing
+      // fitToScreen to oscillate when called repeatedly.
+      const screenViewport = getViewportWindow();
+      if (screenViewport == null) return;
       if (elements.length == 0) {
-        // Special case -- the screen is blank; don't want to just
-        // maximal zoom in on the center!
         setCenterPositionData({ x: 0, y: 0 });
-        lastViewport.current = viewport;
         frame.actions.set_font_size(frame.id, zoomToFontSize(1));
         return;
       }
-      lastViewport.current = viewport;
       let rect;
       if (mainFrameType == "slides" || presentation) {
         rect = rectSpan(elements.filter((elt) => elt.z == -Infinity));
       } else {
         rect = rectSpan(elements);
       }
-      const factor = presentation ? 1 : 0.95; // 0.95 for extra room too.
-      const s =
-        Math.min(
-          2 / factor,
-          Math.max(MIN_ZOOM, fitRectToRect(rect, viewport).scale * canvasScale),
-        ) * factor;
+      const factor = presentation ? 1 : 0.95;
+      // rect is in data coords, screenViewport is in pixels.
+      // scale = pixels / data-units → the canvasScale to fit content.
+      const fitScale = Math.min(
+        screenViewport.w / rect.w,
+        screenViewport.h / rect.h,
+      );
+      const s = Math.min(2 / factor, Math.max(MIN_ZOOM, fitScale)) * factor;
       scale.set(s);
       frame.actions.set_font_size(frame.id, zoomToFontSize(s));
       const centerIt = () => {
@@ -711,6 +785,9 @@ export default function Canvas({
           transforms={transformsRef.current}
           readOnly={readOnly}
           cursors={cursors?.[id]}
+          setSnapLines={setSnapLines}
+          snapEnabled={snapEnabled}
+          gridEnabled={gridEnabled}
         >
           {elt}
         </Focused>
@@ -735,6 +812,10 @@ export default function Canvas({
             frame={frame}
             canvasScale={canvasScale}
             readOnly={readOnly}
+            allElements={elements}
+            setSnapLines={setSnapLines}
+            snapEnabled={snapEnabled}
+            gridEnabled={gridEnabled}
             onDrag={() => {
               // dragging element cancels any selection in progress.
               mousePath.current = null;
@@ -803,6 +884,9 @@ export default function Canvas({
         transforms={transformsRef.current}
         readOnly={readOnly}
         multi={multi}
+        setSnapLines={setSnapLines}
+        snapEnabled={snapEnabled}
+        gridEnabled={gridEnabled}
       >
         {!isAllEdges && (
           <RenderElt element={element} canvasScale={canvasScale} focused />
@@ -817,7 +901,7 @@ export default function Canvas({
     edgeStart &&
     edgePreview
   ) {
-    // Draw arrow from source element to where mouse is now.
+    // Draw a directed edge from the source element to the pointer.
     const element = getToolElement("edge");
     if (element.data == null) throw Error("bug");
     element.data = { ...element.data, from: edgeStart, previewTo: edgePreview };
@@ -1118,6 +1202,7 @@ export default function Canvas({
         return;
       } else if (selectedTool == "pen") {
         penPreviewPath.current = null;
+        cancelPenPreview();
         const canvas = penCanvasRef.current;
         if (canvas != null) {
           // we wait slightly before hiding/clearing it, so
@@ -1281,44 +1366,21 @@ export default function Canvas({
       if (point == null) return;
       mousePath.current.push(point);
 
-      // Rest of this code is just for drawing a preview of the path:
-      if (penPreviewPath.current != null) {
-        penPreviewPath.current.push({ x: e.clientX, y: e.clientY });
-      } else {
+      // The rest is just the preview of the path.  We only record a new
+      // point when the pointer actually moved by at least a pixel, since
+      // high frequency pointing devices emit far more events than that,
+      // and every point costs us on each repaint below.
+      if (penPreviewPath.current == null) return;
+      const last = penPreviewPath.current[penPreviewPath.current.length - 1];
+      if (
+        last != null &&
+        Math.abs(last.x - e.clientX) < 1 &&
+        Math.abs(last.y - e.clientY) < 1
+      ) {
         return;
       }
-      const canvas = penCanvasRef.current;
-      if (canvas == null) return;
-      const ctx = canvas.getContext("2d");
-      if (ctx == null) return;
-
-      if (penPreviewPath.current.length <= 2) {
-        // initialize
-        canvas.style.setProperty("visibility", "visible");
-        clearCanvas({ ctx });
-        ctx.restore();
-        ctx.save();
-        ctx.scale(penDPIFactor, penDPIFactor);
-      }
-      // Actually draw it:
-      const path: Point[] = [];
-      const { rect } = penCanvasParamsRef.current;
-      for (const point of penPreviewPath.current.slice(
-        penPreviewPath.current.length - 2,
-      )) {
-        path.push({
-          x: (point.x - rect.left) / penDPIFactor,
-          y: (point.y - rect.top) / penDPIFactor,
-        });
-      }
-      const { color, radius, opacity } = getToolElement("pen").data ?? {};
-      drawCurve({
-        ctx,
-        path,
-        color,
-        radius: (scaleRef.current * (radius ?? 1)) / penDPIFactor,
-        opacity,
-      });
+      penPreviewPath.current.push({ x: e.clientX, y: e.clientY });
+      schedulePenPreview();
       return;
     }
   };
@@ -1582,6 +1644,13 @@ export default function Canvas({
             />
           )}
           {renderedElements}
+          {snapLines.length > 0 && (
+            <SnapGuides
+              lines={snapLines}
+              transforms={transformsRef.current}
+              canvasScale={canvasScale}
+            />
+          )}
         </div>
       </div>
     </div>

@@ -1156,6 +1156,56 @@ describe("CodexAppServerAgent", () => {
     expect(error?.error).toContain("/opt/cocalc/bin2/codex: not found");
   });
 
+  it.each<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  }>([
+    { code: 137, signal: null },
+    { code: null, signal: "SIGKILL" },
+  ])(
+    "explains that a $signal/$code app-server exit is usually out of memory",
+    async ({ code, signal }) => {
+      const proc = new FakeCodexAppServerProc((fake, message) => {
+        if (message.method !== "initialize") return;
+        fake.exitCode = code;
+        setImmediate(() => fake.emit("exit", code, signal));
+      });
+
+      setCodexProjectSpawner({
+        spawnCodexExec: async () => {
+          throw new Error("unexpected codex exec spawn");
+        },
+        spawnCodexAppServer: async () => ({
+          proc: proc as any,
+          cmd: "fake-codex",
+          args: ["app-server"],
+          cwd: "/tmp/project",
+        }),
+      });
+
+      const agent = new CodexAppServerAgent();
+      const streamPayloads: any[] = [];
+      await agent.evaluate({
+        project_id: "00000000-0000-4000-8000-000000000000",
+        account_id: "00000000-0000-4000-8000-000000000001",
+        prompt: "say hello",
+        stream: async (payload) => {
+          if (payload) streamPayloads.push(payload);
+        },
+        config: { workingDirectory: "/tmp/project" } as any,
+      });
+
+      const error = streamPayloads.find((payload) => payload.type === "error");
+      expect(error?.error).toContain(
+        "Codex was killed by SIGKILL (exit code 137).",
+      );
+      expect(error?.error).toContain(
+        "usually caused by the project running out of RAM",
+      );
+      expect(error?.error).toContain("Increase the project's RAM");
+    },
+  );
+
   it("fails immediately when the app-server exits while a turn is running", async () => {
     const proc = new FakeCodexAppServerProc((fake, message) => {
       switch (message.method) {

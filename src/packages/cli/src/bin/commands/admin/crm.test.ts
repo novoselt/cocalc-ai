@@ -150,12 +150,18 @@ test("CRM search forwards external identifiers and bounded pagination", async ()
     "search",
     "--domain",
     "example.edu",
+    "--account",
+    "owner@example.edu",
     "--zendesk-ticket",
     "20599",
     "--limit",
     "25",
   ]);
   assert.equal(captured.domain, "example.edu");
+  assert.equal(
+    captured.linked_account_id,
+    "22222222-2222-4222-8222-222222222222",
+  );
   assert.equal(captured.zendesk_ticket_id, 20599);
   assert.equal(captured.limit, 25);
   assert.equal(captured.reason, "Search CRM customers");
@@ -246,6 +252,75 @@ test("people link manages reviewed email relationships without raw SQL", async (
   assert.equal(captured.kind, "billing");
   assert.equal(captured.is_primary, true);
   assert.equal(captured.verified, true);
+  assert.equal(captured.commit, false);
+});
+
+test("people create exposes reviewed profile links and an internal note", async () => {
+  let captured: any;
+  const { program } = setup({
+    createPerson: async (opts: any) => {
+      captured = opts;
+      return { preview: true, expected_version: 0 };
+    },
+  });
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "people",
+    "create",
+    "--name",
+    "Ada Example",
+    "--website",
+    "https://ada.example.edu",
+    "--linkedin",
+    "https://linkedin.com/in/ada-example",
+    "--facebook",
+    "https://facebook.com/ada.example",
+    "--x",
+    "https://x.com/ada_example",
+    "--note",
+    "Primary procurement contact",
+    "--reason",
+    "reviewed public contact details",
+  ]);
+  assert.equal(captured.website, "https://ada.example.edu");
+  assert.equal(captured.linkedin_url, "https://linkedin.com/in/ada-example");
+  assert.equal(captured.facebook_url, "https://facebook.com/ada.example");
+  assert.equal(captured.x_url, "https://x.com/ada_example");
+  assert.equal(captured.note, "Primary procurement contact");
+  assert.equal(captured.commit, false);
+});
+
+test("people update accepts profile fields without requiring a JSON file", async () => {
+  let captured: any;
+  const { program } = setup({
+    updatePerson: async (opts: any) => {
+      captured = opts;
+      return { preview: true, expected_version: 3 };
+    },
+  });
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "people",
+    "update",
+    "ada@example.edu",
+    "--website",
+    "https://ada.example.edu",
+    "--note",
+    "Coordinates pilot onboarding",
+    "--reason",
+    "reviewed current contact context",
+  ]);
+  assert.equal(captured.person, "ada@example.edu");
+  assert.deepEqual(captured.changes, {
+    website: "https://ada.example.edu",
+    note: "Coordinates pilot onboarding",
+  });
   assert.equal(captured.commit, false);
 });
 

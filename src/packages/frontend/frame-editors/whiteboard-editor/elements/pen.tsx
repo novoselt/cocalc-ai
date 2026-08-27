@@ -3,7 +3,7 @@ Render a pen element.
 */
 
 import { useEffect, useRef } from "react";
-import type { Element, Point } from "../types";
+import type { Element, PenNib, Point } from "../types";
 import { decompressPath, midPoint } from "../math";
 
 interface Props {
@@ -36,18 +36,35 @@ export default function Pen({ element, renderStatic }: Props) {
     if (ctx == null) return;
 
     const data:
-      | { path?: number[]; color?: string; radius?: number; opacity?: number }
+      | {
+          path?: number[];
+          color?: string;
+          radius?: number;
+          opacity?: number;
+          nib?: PenNib;
+        }
       | undefined = element.data;
     if (data == null) return;
 
-    const { path, radius, color, opacity } = data;
+    const { path, radius, color, opacity, nib } = data;
     if (path == null) return;
 
-    ctx.restore();
-    ctx.save();
-    ctx.scale(DPIFactor, DPIFactor);
-    ctx.translate(pad, pad);
+    // Clear with the identity transform: clearRect is in user space, so
+    // clearing *after* the translate below would leave the pad wide strip
+    // along the top and left edges of the canvas untouched.  That strip is
+    // where the top half of a wide stroke lives, so with a translucent pen
+    // each re-render used to composite it on top of itself and the stroke
+    // got darker and darker.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     clearCanvas({ ctx });
+    ctx.setTransform(
+      DPIFactor,
+      0,
+      0,
+      DPIFactor,
+      DPIFactor * pad,
+      DPIFactor * pad,
+    );
 
     drawCurve({
       ctx,
@@ -55,6 +72,7 @@ export default function Pen({ element, renderStatic }: Props) {
       color: color ?? "black",
       radius: (radius ?? 1) * scaleRef.current,
       opacity,
+      nib,
     });
   }, [pad, element]);
 
@@ -89,25 +107,37 @@ export function drawCurve({
   color,
   radius,
   opacity,
+  nib,
 }: {
   ctx;
   path: Point[];
   color?: string;
   radius?: number;
   opacity?: number;
+  nib?: PenNib;
 }) {
   if (path.length == 0) {
     // empty path -- nothing to draw
     return;
   }
+  // NOTE: the entire curve is always drawn using a *single* stroke or fill
+  // operation.  This matters when opacity < 1 (e.g., the highlighter): if we
+  // instead drew it segment by segment, the overlapping ends of consecutive
+  // segments would each be composited separately, so the stroke would build up
+  // to fully opaque instead of staying translucent.
+  ctx.globalAlpha = opacity ?? 1;
+  ctx.strokeStyle = color ?? "#000";
+  ctx.fillStyle = color ?? "#000";
+
+  if (nib == "chisel") {
+    drawChiselCurve({ ctx, path, radius });
+    return;
+  }
+
   // There's some useful MIT licensed code at https://github.com/embiem/react-canvas-draw
   // that inspired this.
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
-  ctx.strokeStyle = color ?? "#000";
-  if (opacity) {
-    ctx.globalAlpha = opacity;
-  }
 
   ctx.lineWidth = 2 * (radius ?? 0.5);
 
@@ -138,6 +168,72 @@ export function drawCurve({
   // Draw last line as a straight line.
   ctx.lineTo(p1.x, p1.y);
   ctx.stroke();
+}
+
+// A chisel nib is an upright rectangle that is 2*radius tall and
+// CHISEL_NIB_RATIO*radius wide, i.e., what a real highlighter looks like:
+// sweeping horizontally paints a wide band, and moving vertically paints a
+// thin line.  The stroke is the region swept out by that rectangle along the
+// path, which we build as one path out of the convex hull of the nib at each
+// pair of consecutive points, then fill in a single operation.
+const CHISEL_NIB_RATIO = 0.3;
+
+function drawChiselCurve({
+  ctx,
+  path,
+  radius,
+}: {
+  ctx;
+  path: Point[];
+  radius?: number;
+}) {
+  const r = Math.max(radius ?? 0.5, 0.5);
+  const hw = Math.max(r * CHISEL_NIB_RATIO, 0.5);
+  ctx.beginPath();
+  if (path.length <= 1) {
+    const p = path[0];
+    ctx.rect(p.x - hw, p.y - r, 2 * hw, 2 * r);
+  } else {
+    for (let i = 1; i < path.length; i++) {
+      addSweptNib(ctx, path[i - 1], path[i], hw, r);
+    }
+  }
+  // "nonzero" (the default) unions the subpaths -- they all have the same
+  // orientation -- so overlaps are filled exactly once.
+  ctx.fill();
+}
+
+// Add the convex hull of the nib rectangle placed at p and at q.  Since the
+// nib is axis aligned and the same at both ends, the hull is just the two
+// rectangles joined along the direction of travel, so no general hull
+// computation is needed.  The vertices are always emitted in the same
+// rotational order, which is what makes the nonzero fill above work.
+function addSweptNib(ctx, p: Point, q: Point, hw: number, r: number) {
+  // normalize so that we always sweep left to right
+  const [a, b] = p.x <= q.x ? [p, q] : [q, p];
+  const poly: Point[] =
+    b.y >= a.y
+      ? [
+          { x: a.x - hw, y: a.y - r },
+          { x: a.x + hw, y: a.y - r },
+          { x: b.x + hw, y: b.y - r },
+          { x: b.x + hw, y: b.y + r },
+          { x: b.x - hw, y: b.y + r },
+          { x: a.x - hw, y: a.y + r },
+        ]
+      : [
+          { x: a.x - hw, y: a.y - r },
+          { x: b.x - hw, y: b.y - r },
+          { x: b.x + hw, y: b.y - r },
+          { x: b.x + hw, y: b.y + r },
+          { x: a.x + hw, y: a.y + r },
+          { x: a.x - hw, y: a.y + r },
+        ];
+  ctx.moveTo(poly[0].x, poly[0].y);
+  for (let i = 1; i < poly.length; i++) {
+    ctx.lineTo(poly[i].x, poly[i].y);
+  }
+  ctx.closePath();
 }
 
 // Return a single scalar so that multiplying by it transforms

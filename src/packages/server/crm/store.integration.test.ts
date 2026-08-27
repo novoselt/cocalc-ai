@@ -273,12 +273,19 @@ describePglite("integrated CRM store", () => {
       department: "Finance",
       email: "ada@example.edu",
       cocalc_account_id: linkedAccount,
+      website: "ada.example.edu",
+      linkedin_url: "https://www.linkedin.com/in/ada-procurement",
+      facebook_url: "https://www.facebook.com/ada.procurement",
+      note: "Primary procurement contact for the adoption pilot.",
       reason: "customer supplied billing contact",
     });
     if (!personPreview.preview) throw Error("expected preview");
     expect(personPreview.proposed).toMatchObject({
       title: "Procurement Manager",
       department: "Finance",
+      website: "https://ada.example.edu/",
+      linkedin_url: "https://www.linkedin.com/in/ada-procurement",
+      note: "Primary procurement contact for the adoption pilot.",
     });
     const person = committed(
       await store.createPerson({
@@ -290,6 +297,10 @@ describePglite("integrated CRM store", () => {
         department: "Finance",
         email: "ada@example.edu",
         cocalc_account_id: linkedAccount,
+        website: "ada.example.edu",
+        linkedin_url: "https://www.linkedin.com/in/ada-procurement",
+        facebook_url: "https://www.facebook.com/ada.procurement",
+        note: "Primary procurement contact for the adoption pilot.",
         reason: "customer supplied billing contact",
         commit: true,
         expected_version: personPreview.expected_version,
@@ -302,6 +313,45 @@ describePglite("integrated CRM store", () => {
     });
     expect(loadedPerson.accounts[0]?.account_id).toBe(linkedAccount);
     expect(loadedPerson.accounts[0]?.account_id).not.toBe(actor);
+    expect(loadedPerson).toMatchObject({
+      website: "https://ada.example.edu/",
+      linkedin_url: "https://www.linkedin.com/in/ada-procurement",
+      facebook_url: "https://www.facebook.com/ada.procurement",
+      note: "Primary procurement contact for the adoption pilot.",
+    });
+
+    const personUpdatePreview = await store.updatePerson({
+      account_id: actor,
+      person: person.id,
+      changes: {
+        x_url: "x.com/ada_procurement",
+        note: "Coordinates procurement and pilot onboarding.",
+      },
+      reason: "review public profile and contact context",
+    });
+    if (!personUpdatePreview.preview) throw Error("expected preview");
+    expect(personUpdatePreview.proposed).toMatchObject({
+      x_url: "https://x.com/ada_procurement",
+      note: "Coordinates procurement and pilot onboarding.",
+    });
+    const updatedPerson = committed(
+      await store.updatePerson({
+        account_id: actor,
+        person: person.id,
+        changes: {
+          x_url: "x.com/ada_procurement",
+          note: "Coordinates procurement and pilot onboarding.",
+        },
+        reason: "review public profile and contact context",
+        commit: true,
+        expected_version: personUpdatePreview.expected_version,
+        idempotency_key: personUpdatePreview.idempotency_key,
+      }),
+    );
+    expect(updatedPerson).toMatchObject({
+      x_url: "https://x.com/ada_procurement",
+      note: "Coordinates procurement and pilot onboarding.",
+    });
 
     const emailPreview = await store.mutatePersonEmail({
       account_id: actor,
@@ -402,14 +452,40 @@ describePglite("integrated CRM store", () => {
     expect(
       supportContext.candidates[0].evidence.map(({ kind }) => kind).sort(),
     ).toEqual(["cocalc_account", "verified_email", "zendesk_ticket"]);
+    for (const query of [
+      organization.id,
+      organization.customer_number,
+      organization.display_name,
+    ]) {
+      expect(
+        (
+          await store.searchOrganizations({
+            account_id: actor,
+            query,
+            reason: "hydrate an existing customer selector",
+          })
+        ).organizations.map(({ id }) => id),
+      ).toContain(organization.id);
+    }
     expect(
       (
         await store.searchOrganizations({
-          query: organization.id,
-          reason: "hydrate an existing customer selector",
+          account_id: actor,
+          linked_account_id: linkedAccount,
+          reason: "find a customer by linked CoCalc account",
         })
       ).organizations.map(({ id }) => id),
     ).toContain(organization.id);
+    expect(
+      (
+        await store.searchOrganizations({
+          account_id: actor,
+          query: organization.id,
+          linked_account_id: randomUUID(),
+          reason: "exclude a customer not linked to the requested account",
+        })
+      ).organizations,
+    ).toHaveLength(0);
     expect(
       (
         await store.listPeople({

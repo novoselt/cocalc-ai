@@ -13,6 +13,7 @@ import { useFrameContext } from "../../hooks";
 import useWheel from "../scroll-wheel";
 import { getJupyterActions } from "./actions";
 import { moreOutput } from "./static";
+import { withDisplayedCellRuntime } from "@cocalc/frontend/jupyter/run-cell-overlay";
 
 // Support for all the output Jupyter MIME types must be explicitly loaded.
 import "@cocalc/frontend/jupyter/output-messages/mime-types/init-frontend";
@@ -36,6 +37,11 @@ export default function Output({ element, onClick }) {
   // We hook into the Jupyter store for the associated notebook, when available,
   // to get the additional output map.
   const more_output = useRedux([jupyterActions?.name ?? "", "more_output"]);
+  const runCellOverlays = useRedux([
+    jupyterActions?.name ?? "",
+    "runCellOverlays",
+  ]);
+  const runOverlay = runCellOverlays?.get(element.id);
 
   // If there is any additional output, we save it in the moreOutput LRU cache.
   // This is needed so that the additional output is available and visible even
@@ -59,6 +65,15 @@ export default function Output({ element, onClick }) {
     return null;
   }
 
+  const cell = withDisplayedCellRuntime(
+    fromJS({
+      ...element.data,
+      state: element.data?.runState,
+      exec_count: element.data?.execCount,
+    }),
+    runOverlay,
+  );
+
   return (
     <div
       className="nodrag" /* because of ipywidgets, e.g., sliders */
@@ -69,7 +84,8 @@ export default function Output({ element, onClick }) {
         name={jupyterActions?.name}
         id={element.id}
         more_output={more_output?.get(element.id) ?? moreOutput.get(element.id)}
-        cell={fromJS(element.data)}
+        cell={cell}
+        runOverlay={runOverlay}
         project_id={project_id}
         directory={path_split(path).head}
         trust={true}

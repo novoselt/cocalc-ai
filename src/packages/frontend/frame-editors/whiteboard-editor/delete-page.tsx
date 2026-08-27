@@ -8,18 +8,19 @@ import { COLORS } from "@cocalc/util/theme";
 export default function DeletePage({ pageId }) {
   const { actions } = useFrameContext();
   return (
-    <Popconfirm
-      title={"Delete this page?"}
-      onConfirm={(e) => {
-        e?.stopPropagation();
-        actions.deletePage(pageId);
-      }}
-      onCancel={(e) => {
-        e?.stopPropagation();
-      }}
-    >
-      <Tooltip title="Delete this page" placement="right" mouseEnterDelay={1}>
+    <Tooltip title="Delete this page" placement="right" mouseEnterDelay={1}>
+      <Popconfirm
+        title={"Delete this page?"}
+        onConfirm={(e) => {
+          e?.stopPropagation();
+          actions.deletePage(pageId);
+        }}
+        onCancel={(e) => {
+          e?.stopPropagation();
+        }}
+      >
         <Button
+          aria-label="Delete this page"
           type="text"
           size="small"
           icon={<Icon style={{ color: COLORS.FILE_ICON }} name="trash" />}
@@ -27,7 +28,7 @@ export default function DeletePage({ pageId }) {
             e?.stopPropagation();
           }}
         />
-      </Tooltip>
-    </Popconfirm>
+      </Popconfirm>
+    </Tooltip>
   );
 }
