@@ -12,6 +12,7 @@ import {
   DatePicker,
   Divider,
   Drawer,
+  Form,
   Input,
   InputNumber,
   Modal,
@@ -55,9 +56,11 @@ import {
   assignSiteLicensePoolSeat,
   cancelSiteLicensePoolRequest,
   claimMembershipPackageSeat,
+  deleteSiteLicenseRevenuePeriod,
   getClaimableMembershipPackages,
   getTeamLicense,
   getTeamLicenseQuote,
+  listSiteLicenseRevenuePeriods,
   listSiteLicenseOverviews,
   processPaymentIntents,
   purchaseTeamLicenseChange,
@@ -67,6 +70,7 @@ import {
   reviewSiteLicensePoolRequest,
   revokeMembershipPackageSeat,
   searchSiteLicensePoolAccounts,
+  saveSiteLicenseRevenuePeriod,
   setSiteLicenseManager,
   updateMembershipPackage,
   updateSiteLicense,
@@ -86,6 +90,7 @@ import type {
   SiteLicensePoolAccountSearchResult,
   SiteLicensePoolConfig,
   SiteLicensePoolRequest,
+  SiteLicenseRevenuePeriod,
   SiteLicenseVerificationPolicy,
   TeamLicenseOverview,
   TeamLicenseQuote,
@@ -1812,6 +1817,308 @@ export function SiteLicenseManager({
   );
 }
 
+interface SiteLicenseRevenuePeriodFormValues {
+  starts_on: Dayjs;
+  ends_on: Dayjs;
+  amount: number;
+  invoice_number?: string;
+  notes?: string;
+}
+
+function SiteLicenseRevenuePeriodModal({
+  open,
+  period,
+  saving,
+  onCancel,
+  onSave,
+}: {
+  open: boolean;
+  period?: SiteLicenseRevenuePeriod;
+  saving: boolean;
+  onCancel: () => void;
+  onSave: (values: SiteLicenseRevenuePeriodFormValues) => void | Promise<void>;
+}) {
+  const [form] = Form.useForm<SiteLicenseRevenuePeriodFormValues>();
+
+  useEffect(() => {
+    if (!open) return;
+    form.resetFields();
+    form.setFieldsValue({
+      starts_on: period ? dayjs(period.starts_on) : undefined,
+      ends_on: period ? dayjs(period.ends_on) : undefined,
+      amount: period ? period.amount_cents / 100 : undefined,
+      invoice_number: period?.invoice_number ?? undefined,
+      notes: period?.notes ?? undefined,
+    });
+  }, [form, open, period]);
+
+  return (
+    <Modal
+      open={open}
+      modalRender={(modal) => (
+        <section
+          aria-labelledby="site-license-revenue-period-modal-title"
+          role="dialog"
+        >
+          {modal}
+        </section>
+      )}
+      title={
+        <span id="site-license-revenue-period-modal-title">
+          {period ? "Edit revenue period" : "Add revenue period"}
+        </span>
+      }
+      okText={period ? "Save changes" : "Add period"}
+      confirmLoading={saving}
+      onCancel={onCancel}
+      onOk={() => form.submit()}
+      destroyOnHidden
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        requiredMark="optional"
+        onFinish={onSave}
+      >
+        <Space wrap align="start">
+          <Form.Item
+            label="Start date"
+            name="starts_on"
+            rules={[{ required: true, message: "Enter a start date." }]}
+          >
+            <DatePicker aria-label="Revenue period start date" />
+          </Form.Item>
+          <Form.Item
+            label="End date"
+            name="ends_on"
+            dependencies={["starts_on"]}
+            rules={[
+              { required: true, message: "Enter an end date." },
+              ({ getFieldValue }) => ({
+                validator(_, value: Dayjs | undefined) {
+                  const startsOn = getFieldValue("starts_on") as
+                    | Dayjs
+                    | undefined;
+                  if (!value || !startsOn || !value.isBefore(startsOn, "day")) {
+                    return Promise.resolve();
+                  }
+                  return Promise.reject(
+                    new Error("End date must not precede start date."),
+                  );
+                },
+              }),
+            ]}
+          >
+            <DatePicker aria-label="Revenue period end date" />
+          </Form.Item>
+          <Form.Item
+            label="Amount"
+            name="amount"
+            rules={[{ required: true, message: "Enter an amount." }]}
+          >
+            <InputNumber
+              aria-label="Revenue period amount"
+              min={0}
+              precision={2}
+              prefix="$"
+              step={1}
+              style={{ width: 156 }}
+            />
+          </Form.Item>
+        </Space>
+        <Form.Item label="Invoice number" name="invoice_number">
+          <Input
+            autoComplete="off"
+            maxLength={200}
+            placeholder="Optional customer-visible invoice number"
+          />
+        </Form.Item>
+        <Form.Item label="Internal notes or references" name="notes">
+          <Input.TextArea
+            autoSize={{ minRows: 2, maxRows: 6 }}
+            maxLength={4000}
+          />
+        </Form.Item>
+      </Form>
+    </Modal>
+  );
+}
+
+function SiteLicenseRevenuePeriodsPanel({
+  siteLicenseId,
+}: {
+  siteLicenseId: string;
+}) {
+  const [periods, setPeriods] = useState<SiteLicenseRevenuePeriod[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [editing, setEditing] = useState<
+    SiteLicenseRevenuePeriod | undefined
+  >();
+  const [modalOpen, setModalOpen] = useState(false);
+  const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
+
+  async function refresh() {
+    setLoading(true);
+    setError("");
+    try {
+      setPeriods(
+        await listSiteLicenseRevenuePeriods({
+          site_license_id: siteLicenseId,
+        }),
+      );
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+  }, [siteLicenseId]);
+
+  function openEditor(period?: SiteLicenseRevenuePeriod) {
+    setEditing(period);
+    setModalOpen(true);
+  }
+
+  async function save(values: SiteLicenseRevenuePeriodFormValues) {
+    setSaving(true);
+    setError("");
+    try {
+      await runFreshAuthAction(async () => {
+        await saveSiteLicenseRevenuePeriod({
+          site_license_id: siteLicenseId,
+          period_id: editing?.id,
+          starts_on: values.starts_on.format("YYYY-MM-DD"),
+          ends_on: values.ends_on.format("YYYY-MM-DD"),
+          amount_cents: Math.round(values.amount * 100),
+          invoice_number: values.invoice_number,
+          notes: values.notes,
+          metadata: editing?.metadata,
+        });
+      });
+      setModalOpen(false);
+      setEditing(undefined);
+      await refresh();
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove(period: SiteLicenseRevenuePeriod) {
+    setSaving(true);
+    setError("");
+    try {
+      await runFreshAuthAction(async () => {
+        await deleteSiteLicenseRevenuePeriod({
+          site_license_id: siteLicenseId,
+          period_id: period.id,
+        });
+      });
+      await refresh();
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Space vertical size="middle" style={{ width: "100%" }}>
+      <Space
+        wrap
+        align="center"
+        style={{ justifyContent: "space-between", width: "100%" }}
+      >
+        <Text strong>Revenue periods</Text>
+        <Button onClick={() => openEditor()}>
+          <Icon name="plus-circle" /> Add period
+        </Button>
+      </Space>
+      {error ? <Alert type="error" showIcon title={error} /> : null}
+      {loading ? (
+        <Spin description="Loading revenue periods" />
+      ) : periods.length === 0 ? (
+        <Text type="secondary">No revenue periods recorded.</Text>
+      ) : (
+        <Table<SiteLicenseRevenuePeriod>
+          bordered
+          dataSource={periods}
+          pagination={false}
+          rowKey="id"
+          size="small"
+          style={{ width: "100%" }}
+        >
+          <Table.Column<SiteLicenseRevenuePeriod>
+            title="Start"
+            dataIndex="starts_on"
+          />
+          <Table.Column<SiteLicenseRevenuePeriod>
+            title="End"
+            dataIndex="ends_on"
+          />
+          <Table.Column<SiteLicenseRevenuePeriod>
+            title="Amount"
+            dataIndex="amount_cents"
+            align="right"
+            render={(amountCents: number) => currency(amountCents / 100)}
+          />
+          <Table.Column<SiteLicenseRevenuePeriod>
+            title="Invoice number"
+            dataIndex="invoice_number"
+          />
+          <Table.Column<SiteLicenseRevenuePeriod>
+            title="Internal notes"
+            dataIndex="notes"
+          />
+          <Table.Column<SiteLicenseRevenuePeriod>
+            title="Actions"
+            render={(_, period) => (
+              <Space wrap>
+                <Button
+                  size="small"
+                  disabled={saving}
+                  onClick={() => openEditor(period)}
+                >
+                  Edit
+                </Button>
+                <Popconfirm
+                  title="Delete revenue period?"
+                  description="This immediately removes its revenue from historical analytics."
+                  okText="Delete period"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => remove(period)}
+                >
+                  <Button danger size="small" disabled={saving}>
+                    Delete
+                  </Button>
+                </Popconfirm>
+              </Space>
+            )}
+          />
+        </Table>
+      )}
+      <SiteLicenseRevenuePeriodModal
+        open={modalOpen}
+        period={editing}
+        saving={saving}
+        onCancel={() => {
+          if (saving) return;
+          setModalOpen(false);
+          setEditing(undefined);
+        }}
+        onSave={save}
+      />
+      <FreshAuthModal {...freshAuthModalProps} />
+    </Space>
+  );
+}
+
 export function SiteLicenseAdminPanel({
   tiers,
   onChanged,
@@ -1953,6 +2260,7 @@ export function SiteLicenseAdminPanel({
       tiers={tiers}
       accountNames={accountNames}
       isAdmin={true}
+      showRevenuePeriods
       reviewingRequestId={reviewingRequestId}
       onEditPool={(pool) => setEditTarget(pool)}
       onAddPool={async (site_license_id, pool) => {
@@ -2414,6 +2722,7 @@ function SiteLicenseDashboard({
   tiers,
   accountNames,
   isAdmin,
+  showRevenuePeriods = false,
   reviewingRequestId,
   onEditPool,
   onAddPool,
@@ -2431,6 +2740,7 @@ function SiteLicenseDashboard({
   tiers: MembershipTierLike[];
   accountNames: AccountNames;
   isAdmin: boolean;
+  showRevenuePeriods?: boolean;
   reviewingRequestId: string;
   onEditPool?: (pool: SiteLicenseOverview["pools"][number]) => void;
   onAddPool?: (
@@ -3021,6 +3331,12 @@ function SiteLicenseDashboard({
                       ))}
                     </Space>
                   </Card>
+                ) : null}
+
+                {showRevenuePeriods && isAdmin ? (
+                  <SiteLicenseRevenuePeriodsPanel
+                    siteLicenseId={overview.site_license.id}
+                  />
                 ) : null}
 
                 {isAdmin ? (

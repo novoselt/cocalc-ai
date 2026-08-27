@@ -28,6 +28,7 @@ import type {
   SiteLicenseOverview,
   SiteLicensePoolConfig,
   SiteLicensePoolRequest,
+  SiteLicenseRevenuePeriod,
   TeamLicenseOverview,
   TeamLicenseQuote,
 } from "@cocalc/conat/hub/api/purchases";
@@ -617,6 +618,44 @@ export async function updateSiteLicense(opts: {
   return await (
     await getPurchasesHubRpc()
   ).updateSiteLicense({
+    ...opts,
+    browser_id: webapp_client.browser_id,
+  });
+}
+
+export async function listSiteLicenseRevenuePeriods(opts: {
+  site_license_id: string;
+}): Promise<SiteLicenseRevenuePeriod[]> {
+  return await (await getPurchasesHubRpc()).listSiteLicenseRevenuePeriods(opts);
+}
+
+export async function saveSiteLicenseRevenuePeriod(opts: {
+  site_license_id: string;
+  period_id?: string;
+  starts_on: Date | string;
+  ends_on: Date | string;
+  amount_cents: number;
+  invoice_number?: string | null;
+  notes?: string | null;
+  metadata?: Record<string, unknown> | null;
+}): Promise<SiteLicenseRevenuePeriod> {
+  const { webapp_client } = await import("@cocalc/frontend/webapp-client");
+  return await (
+    await getPurchasesHubRpc()
+  ).saveSiteLicenseRevenuePeriod({
+    ...opts,
+    browser_id: webapp_client.browser_id,
+  });
+}
+
+export async function deleteSiteLicenseRevenuePeriod(opts: {
+  site_license_id: string;
+  period_id: string;
+}): Promise<{ deleted: boolean }> {
+  const { webapp_client } = await import("@cocalc/frontend/webapp-client");
+  return await (
+    await getPurchasesHubRpc()
+  ).deleteSiteLicenseRevenuePeriod({
     ...opts,
     browser_id: webapp_client.browser_id,
   });

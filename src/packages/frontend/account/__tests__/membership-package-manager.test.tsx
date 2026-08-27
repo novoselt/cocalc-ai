@@ -30,6 +30,9 @@ const adminProvisionSiteLicense = jest.fn();
 const addSiteLicensePool = jest.fn();
 const archiveSiteLicensePool = jest.fn();
 const updateSiteLicense = jest.fn();
+const listSiteLicenseRevenuePeriods = jest.fn();
+const saveSiteLicenseRevenuePeriod = jest.fn();
+const deleteSiteLicenseRevenuePeriod = jest.fn();
 const setSiteLicenseManager = jest.fn();
 const removeSiteLicenseManager = jest.fn();
 const updateMembershipPackage = jest.fn();
@@ -174,6 +177,12 @@ jest.mock("@cocalc/frontend/purchases/api", () => ({
   addSiteLicensePool: (...args: any[]) => addSiteLicensePool(...args),
   archiveSiteLicensePool: (...args: any[]) => archiveSiteLicensePool(...args),
   updateSiteLicense: (...args: any[]) => updateSiteLicense(...args),
+  listSiteLicenseRevenuePeriods: (...args: any[]) =>
+    listSiteLicenseRevenuePeriods(...args),
+  saveSiteLicenseRevenuePeriod: (...args: any[]) =>
+    saveSiteLicenseRevenuePeriod(...args),
+  deleteSiteLicenseRevenuePeriod: (...args: any[]) =>
+    deleteSiteLicenseRevenuePeriod(...args),
   setSiteLicenseManager: (...args: any[]) => setSiteLicenseManager(...args),
   removeSiteLicenseManager: (...args: any[]) =>
     removeSiteLicenseManager(...args),
@@ -377,6 +386,7 @@ describe("membership package managers", () => {
     getClaimableMembershipPackages.mockResolvedValue([]);
     sendVerificationEmail.mockResolvedValue(undefined);
     listSiteLicenseOverviews.mockResolvedValue([]);
+    listSiteLicenseRevenuePeriods.mockResolvedValue([]);
     getTeamLicense.mockResolvedValue(null);
     getTeamLicenseQuote.mockResolvedValue({
       current_period_start: new Date("2026-06-01T00:00:00Z"),
@@ -1028,6 +1038,51 @@ describe("membership package managers", () => {
       expect(screen.getAllByText("Researchers").length).toBeGreaterThan(0);
       expectTextNotVisible("Students");
     });
+  });
+
+  it("loads admin-only revenue periods for the expanded license", async () => {
+    isAdmin = true;
+    listSiteLicenseOverviews.mockResolvedValue([makeSiteLicenseOverview()]);
+    listSiteLicenseRevenuePeriods.mockResolvedValue([
+      {
+        id: "period-1",
+        site_license_id: "license-1",
+        starts_on: "2026-08-17",
+        ends_on: "2027-08-31",
+        amount_cents: 400_000,
+        invoice_number: "INV-0042",
+        notes: "Initial agreement",
+      },
+    ]);
+
+    render(<SiteLicenseAdminPanel tiers={TIERS} />);
+
+    await screen.findByText("Campus License");
+    expect(listSiteLicenseRevenuePeriods).not.toHaveBeenCalled();
+    fireEvent.click(getSiteLicenseSummaryRow("Campus License"));
+
+    expect(await screen.findByText("Revenue periods")).toBeVisible();
+    expect(listSiteLicenseRevenuePeriods).toHaveBeenCalledWith({
+      site_license_id: "license-1",
+    });
+    expect(screen.getByText("INV-0042")).toBeVisible();
+    expect(screen.getByText("Initial agreement")).toBeVisible();
+    expect(screen.getByText("$4,000.00")).toBeVisible();
+    expect(
+      screen.queryByText(/Amounts are distributed over every included/),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add period" }));
+    expect(
+      screen.getByRole("dialog", { name: "Add revenue period" }),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Revenue period start date")).toBeVisible();
+    expect(screen.getByLabelText("Revenue period end date")).toBeVisible();
+    const amount = screen.getByLabelText("Revenue period amount");
+    expect(amount).toBeVisible();
+    expect(
+      screen.queryByText("Saving will update historical revenue analytics."),
+    ).not.toBeInTheDocument();
   });
 
   it("lets admins revoke an active site-license pool seat", async () => {
