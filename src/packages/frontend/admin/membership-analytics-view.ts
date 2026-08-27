@@ -23,7 +23,13 @@ export type MembershipAnalyticsBreakdown =
   | "tier-interval"
   | "tier-lifecycle"
   | "interval"
-  | "lifecycle";
+  | "lifecycle"
+  | "source"
+  | "product"
+  | "cost-component"
+  | "provider"
+  | "product-cost-component"
+  | "product-provider";
 
 export interface MembershipAnalyticsTier {
   id: string;
@@ -47,7 +53,7 @@ export interface MembershipAnalyticsSeries {
   tierId?: string;
   channel?: MembershipAllocationChannel;
   groupKey?: string;
-  variant?: MembershipAllocationBillingInterval | MembershipAllocationLifecycle;
+  variant?: string;
   priority: number;
   order: number;
   current: MembershipAnalyticsPoint[];
@@ -65,6 +71,10 @@ export interface MembershipAnalyticsSummaryRow {
   comparisonPurchasedCapacity: number;
   revenueCents: number;
   comparisonRevenueCents: number;
+  averageRunningUnits?: number;
+  comparisonAverageRunningUnits?: number;
+  distinctRunningUnits?: number;
+  comparisonDistinctRunningUnits?: number;
 }
 
 export interface MembershipAnalyticsView {
@@ -172,6 +182,7 @@ function categoryForRow(
   const lifecycle = row.lifecycle;
   const channel = row.channel;
   switch (breakdown) {
+    case "source":
     case "channel":
       return {
         key: `channel:${channel}`,
@@ -256,6 +267,14 @@ function categoryForRow(
         priority: 0,
         order: LIFECYCLE_ORDER[lifecycle],
       };
+    case "product":
+    case "cost-component":
+    case "provider":
+    case "product-cost-component":
+    case "product-provider":
+      throw Error(
+        `compute breakdown ${breakdown} cannot group membership rows`,
+      );
   }
 }
 
