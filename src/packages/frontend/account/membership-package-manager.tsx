@@ -31,6 +31,7 @@ import {
   type CSSProperties,
   type ReactNode,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -113,6 +114,11 @@ import type { LineItem } from "@cocalc/util/stripe/types";
 const { Paragraph, Text, Title } = Typography;
 const TEAM_LICENSE_FINALIZATION_TIMEOUT_MS = 75_000;
 const TEAM_LICENSE_FINALIZATION_POLL_MS = 6_000;
+const SITE_LICENSE_ADMIN_DRAWER_WIDTH_KEY =
+  "cocalc-site-license-admin-dashboard-width";
+const DEFAULT_SITE_LICENSE_ADMIN_DRAWER_WIDTH =
+  "min(calc(100vw - 48px), max(720px, calc(100vw - 280px)))";
+const MIN_SITE_LICENSE_ADMIN_DRAWER_WIDTH = 720;
 const SITE_LICENSE_USERS_DRAWER_WIDTH_KEY = "cocalc-site-license-users-width";
 const DEFAULT_SITE_LICENSE_USERS_DRAWER_WIDTH = 760;
 const MIN_SITE_LICENSE_USERS_DRAWER_WIDTH = 520;
@@ -128,6 +134,39 @@ function retryDelayFromError(err: unknown, fallbackMs: number): number {
     return (Number(match[1]) + 1) * 1000;
   }
   return fallbackMs;
+}
+
+function clampSiteLicenseAdminDrawerWidth(value: number): number {
+  if (typeof window === "undefined") {
+    return Math.max(MIN_SITE_LICENSE_ADMIN_DRAWER_WIDTH, Math.round(value));
+  }
+  const maximum = Math.max(320, window.innerWidth - 48);
+  const minimum = Math.min(MIN_SITE_LICENSE_ADMIN_DRAWER_WIDTH, maximum);
+  return Math.min(maximum, Math.max(minimum, Math.round(value)));
+}
+
+function readSiteLicenseAdminDrawerWidth(): number | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const value = Number(
+      localStorage.getItem(SITE_LICENSE_ADMIN_DRAWER_WIDTH_KEY),
+    );
+    return Number.isFinite(value) && value > 0
+      ? clampSiteLicenseAdminDrawerWidth(value)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function persistSiteLicenseAdminDrawerWidth(value: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(
+      SITE_LICENSE_ADMIN_DRAWER_WIDTH_KEY,
+      `${clampSiteLicenseAdminDrawerWidth(value)}`,
+    );
+  } catch {}
 }
 
 function clampSiteLicenseUsersDrawerWidth(value: number): number {
@@ -2052,7 +2091,6 @@ function SiteLicenseRevenuePeriodsPanel({
           pagination={false}
           rowKey="id"
           size="small"
-          style={{ width: "100%" }}
         >
           <Table.Column<SiteLicenseRevenuePeriod>
             title="Start"
@@ -2126,6 +2164,7 @@ export function SiteLicenseAdminPanel({
   tiers: MembershipTierLike[];
   onChanged?: () => void;
 }) {
+  const dashboardDrawerTitleId = useId();
   const account_id = useTypedRedux("account", "account_id");
   const [overviews, setOverviews] = useState<SiteLicenseOverview[]>([]);
   const [loading, setLoading] = useState(false);
@@ -2137,6 +2176,9 @@ export function SiteLicenseAdminPanel({
   const [editTarget, setEditTarget] = useState<MembershipPackageDetails | null>(
     null,
   );
+  const [dashboardDrawerWidth, setDashboardDrawerWidth] = useState<
+    number | undefined
+  >(readSiteLicenseAdminDrawerWidth);
   const [accountNames, setAccountNames] = useState<AccountNames>({});
   const [reviewingRequestId, setReviewingRequestId] = useState("");
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
@@ -2234,6 +2276,9 @@ export function SiteLicenseAdminPanel({
     overviews.find(
       (overview) => overview.site_license.id === editTargetSiteLicenseId,
     )?.site_license.allowed_domains ?? [];
+  const selectedOverview = overviews.find(
+    (overview) => overview.site_license.id === selectedSiteLicenseId,
+  );
 
   useEffect(() => {
     if (filteredOverviews.length === 0) {
@@ -2394,7 +2439,6 @@ export function SiteLicenseAdminPanel({
               currentSiteLicenseId === siteLicenseId ? "" : siteLicenseId,
             )
           }
-          renderExpandedRow={(overview) => renderAdminDashboard([overview])}
         />
       ) : null}
       {overviews.length > 0 && filteredOverviews.length === 0 ? (
@@ -2405,6 +2449,58 @@ export function SiteLicenseAdminPanel({
           description="Clear the search to show all configured site licenses."
         />
       ) : null}
+      <Drawer
+        aria-labelledby={dashboardDrawerTitleId}
+        destroyOnHidden
+        onClose={() => {
+          setSelectedSiteLicenseId("");
+          setEditTarget(null);
+        }}
+        open={selectedOverview != null}
+        placement="right"
+        resizable={{
+          onResize: (value) => {
+            const next = clampSiteLicenseAdminDrawerWidth(value);
+            setDashboardDrawerWidth(next);
+            persistSiteLicenseAdminDrawerWidth(next);
+          },
+        }}
+        size={dashboardDrawerWidth ?? DEFAULT_SITE_LICENSE_ADMIN_DRAWER_WIDTH}
+        styles={{
+          body: { padding: 16 },
+          title: {
+            clipPath: "inset(50%)",
+            height: 1,
+            overflow: "hidden",
+            position: "absolute",
+            whiteSpace: "nowrap",
+            width: 1,
+          },
+        }}
+        title={
+          <span id={dashboardDrawerTitleId}>
+            {selectedOverview
+              ? `Manage ${getSiteLicenseDisplayTitle(
+                  selectedOverview.site_license,
+                )} site license`
+              : "Manage site license"}
+          </span>
+        }
+      >
+        {selectedOverview ? renderAdminDashboard([selectedOverview]) : null}
+        <EditSiteLicenseModal
+          open={editTarget != null}
+          membershipPackage={editTarget}
+          inheritedDomains={editTargetLicenseDomains}
+          tiers={tiers}
+          onClose={() => setEditTarget(null)}
+          onUpdated={async () => {
+            setEditTarget(null);
+            await handleChanged();
+          }}
+        />
+        <FreshAuthModal {...freshAuthModalProps} />
+      </Drawer>
       <ProvisionSiteLicenseModal
         open={provisionOpen}
         tiers={tiers}
@@ -2414,18 +2510,6 @@ export function SiteLicenseAdminPanel({
           await handleChanged();
         }}
       />
-      <EditSiteLicenseModal
-        open={editTarget != null}
-        membershipPackage={editTarget}
-        inheritedDomains={editTargetLicenseDomains}
-        tiers={tiers}
-        onClose={() => setEditTarget(null)}
-        onUpdated={async () => {
-          setEditTarget(null);
-          await handleChanged();
-        }}
-      />
-      <FreshAuthModal {...freshAuthModalProps} />
     </Space>
   );
 }
@@ -2436,14 +2520,12 @@ function SiteLicenseSummaryTable({
   totalCount,
   onCustomerChanged,
   onToggle,
-  renderExpandedRow,
 }: {
   overviews: SiteLicenseOverview[];
   selectedSiteLicenseId: string;
   totalCount: number;
   onCustomerChanged: () => void | Promise<void>;
   onToggle: (siteLicenseId: string) => void;
-  renderExpandedRow: (overview: SiteLicenseOverview) => ReactNode;
 }) {
   return (
     <Card size="small">
@@ -2456,23 +2538,38 @@ function SiteLicenseSummaryTable({
         </Space>
         <Table<SiteLicenseOverview>
           dataSource={overviews}
-          expandable={{
-            expandedRowKeys: selectedSiteLicenseId
-              ? [selectedSiteLicenseId]
-              : [],
-            expandedRowRender: (overview) =>
-              selectedSiteLicenseId === overview.site_license.id
-                ? renderExpandedRow(overview)
-                : null,
-            showExpandColumn: false,
-          }}
           pagination={false}
           rowKey={(overview) => overview.site_license.id}
           onRow={(overview) => ({
             "aria-expanded": selectedSiteLicenseId === overview.site_license.id,
+            "aria-haspopup": "dialog",
+            "aria-label": `Manage ${getSiteLicenseDisplayTitle(
+              overview.site_license,
+            )} site license`,
             "data-site-license-id": overview.site_license.id,
-            onClick: () => onToggle(overview.site_license.id),
+            onClick: (event) => {
+              if (
+                event.target instanceof Element &&
+                event.target.closest(
+                  "a, button, input, select, textarea, [role='button'], [role='combobox'], [role='link']",
+                )
+              ) {
+                return;
+              }
+              onToggle(overview.site_license.id);
+            },
+            onKeyDown: (event) => {
+              if (
+                event.target !== event.currentTarget ||
+                (event.key !== "Enter" && event.key !== " ")
+              ) {
+                return;
+              }
+              event.preventDefault();
+              onToggle(overview.site_license.id);
+            },
             style: { cursor: "pointer" },
+            tabIndex: 0,
           })}
           scroll={{ x: true }}
           size="small"

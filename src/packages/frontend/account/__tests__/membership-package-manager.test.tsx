@@ -891,7 +891,7 @@ describe("membership package managers", () => {
     );
   });
 
-  it("shows a compact admin site-license list before the selected dashboard", async () => {
+  it("opens the selected admin site-license dashboard in a drawer", async () => {
     isAdmin = true;
     listSiteLicenseOverviews.mockResolvedValue([
       {
@@ -1020,27 +1020,48 @@ describe("membership package managers", () => {
       expect(screen.queryByText("Researchers")).toBeNull();
     });
 
-    fireEvent.click(getSiteLicenseSummaryRow("Campus License"));
+    const search = screen.getByPlaceholderText(
+      "Find by license, organization, domain, or bay",
+    );
+    fireEvent.change(search, { target: { value: "License" } });
+
+    const campusRow = getSiteLicenseSummaryRow("Campus License");
+    campusRow.focus();
+    fireEvent.keyDown(campusRow, { key: "Enter", code: "Enter" });
+
+    const campusDrawer = await screen.findByRole("dialog", {
+      name: "Manage Campus License - Example University site license",
+    });
+    expect(within(campusDrawer).getByText("Students")).toBeVisible();
+    expect(campusRow).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(
+      within(campusDrawer).getByRole("button", { name: "Close" }),
+    );
 
     await waitFor(() => {
-      expect(screen.getByText("Students")).toBeVisible();
+      expect(
+        screen.queryByRole("dialog", {
+          name: "Manage Campus License - Example University site license",
+        }),
+      ).toBeNull();
     });
-
-    fireEvent.click(getSiteLicenseSummaryRow("Campus License"));
-
-    await waitFor(() => {
-      expectTextNotVisible("Students");
-    });
+    expect(search).toHaveValue("License");
+    expect(campusRow).toHaveAttribute("aria-expanded", "false");
+    expect(campusRow).toHaveFocus();
 
     fireEvent.click(getSiteLicenseSummaryRow("Research License"));
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Researchers").length).toBeGreaterThan(0);
-      expectTextNotVisible("Students");
+    const researchDrawer = await screen.findByRole("dialog", {
+      name: "Manage Research License - Research Institute site license",
     });
+    expect(
+      within(researchDrawer).getAllByText("Researchers").length,
+    ).toBeGreaterThan(0);
+    expectTextNotVisible("Students");
   });
 
-  it("loads admin-only revenue periods for the expanded license", async () => {
+  it("loads admin-only revenue periods in the license drawer", async () => {
     isAdmin = true;
     listSiteLicenseOverviews.mockResolvedValue([makeSiteLicenseOverview()]);
     listSiteLicenseRevenuePeriods.mockResolvedValue([
@@ -1948,7 +1969,10 @@ describe("membership package managers", () => {
     });
 
     fireEvent.click(screen.getByText("Campus License"));
-    const search = await screen.findByRole("combobox", {
+    const drawer = await screen.findByRole("dialog", {
+      name: "Manage Campus License - Example University site license",
+    });
+    const search = within(drawer).getByRole("combobox", {
       name: "Search site-license delegates",
     });
     fireEvent.change(search, { target: { value: "ada@example.edu" } });
