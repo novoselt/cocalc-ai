@@ -125,4 +125,19 @@ describe("AppRedux nested store updates", () => {
     expect(firstValues).toEqual([1]);
     expect(secondValues).toEqual([1]);
   });
+
+  it("releases cached state when a store is removed", () => {
+    const app = new TestAppRedux();
+    const name = "temporary";
+    const store = app.createStore(name, undefined, { value: "retained" });
+
+    store.setState({ value: "updated" });
+    expect((app as any).lastReduxState.has(name)).toBe(true);
+
+    app.removeStore(name);
+
+    expect(app.reduxStore.getState().has(name)).toBe(false);
+    expect((app as any).lastReduxState.has(name)).toBe(false);
+    expect((app as any).changedStores.has(name)).toBe(false);
+  });
 });

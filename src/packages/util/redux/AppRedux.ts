@@ -148,6 +148,10 @@ export abstract class AppRedux implements AppReduxInterface {
       S.emit("destroy");
       delete this._stores[name];
       S.removeAllListeners();
+      this.changedStores.delete(name);
+      if (this.lastReduxState != null) {
+        this.lastReduxState = this.lastReduxState.delete(name);
+      }
       this.reduxStore.dispatch(actionRemoveStore(name));
     }
   }
