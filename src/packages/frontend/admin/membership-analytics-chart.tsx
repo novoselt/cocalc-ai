@@ -123,7 +123,9 @@ function isCompoundBreakdown(breakdown: MembershipAnalyticsBreakdown): boolean {
     breakdown === "tier-interval" ||
     breakdown === "tier-lifecycle" ||
     breakdown === "channel-tier" ||
-    breakdown === "tier-channel"
+    breakdown === "tier-channel" ||
+    breakdown === "product-cost-component" ||
+    breakdown === "product-provider"
   );
 }
 
@@ -257,7 +259,10 @@ export function buildMembershipAnalyticsSeriesVisuals({
           ? item.channel == null
             ? -1
             : usedChannels.indexOf(item.channel)
-          : -1;
+          : breakdown === "product-cost-component" ||
+              breakdown === "product-provider"
+            ? item.order
+            : -1;
     const tint =
       breakdown === "tier-interval" || breakdown === "tier-lifecycle"
         ? variantTint(breakdown, item.variant)

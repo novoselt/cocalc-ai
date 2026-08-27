@@ -9,8 +9,10 @@ import type { MembershipAllocationDailyRow } from "@cocalc/conat/hub/api/purchas
 
 import {
   buildMembershipAllocationDailyExport,
+  buildRevenueAnalyticsDailyExport,
   MembershipAnalyticsExport,
   membershipAllocationDailyExportCsv,
+  revenueAnalyticsDailyExportCsv,
 } from "./membership-analytics-export";
 
 function row(
@@ -123,5 +125,49 @@ describe("membership analytics export", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:membership-export");
 
     click.mockRestore();
+  });
+
+  it("exports selected membership and compute buckets without PII", () => {
+    const combined = buildRevenueAnalyticsDailyExport({
+      membershipRows: [row("2026-08-10")],
+      computeRevenueRows: [
+        {
+          day: "2026-08-10",
+          product: "dedicated-host",
+          provider: "gcp",
+          cost_component: "gpu",
+          revenue_cents: 1250,
+          purchase_count: 2,
+        },
+      ],
+      computeUsageRows: [
+        {
+          day: "2026-08-10",
+          product: "dedicated-host",
+          provider: "gcp",
+          running_unit_seconds: 86_400,
+          distinct_running_units: 2,
+        },
+      ],
+      membershipChannels: ["personal"],
+      computeProducts: ["dedicated-host"],
+      tiers: [{ id: "standard", label: "Standard", priority: 20 }],
+      startDay: "2026-08-10",
+      endDay: "2026-08-10",
+      exportedAt: new Date("2026-08-18T12:00:00.000Z"),
+    });
+    expect(combined).toMatchObject({
+      format: "cocalc-revenue-analytics-daily",
+      membership_channels: ["personal"],
+      compute_products: ["dedicated-host"],
+      tiers: [{ id: "standard", label: "Standard", priority: 20 }],
+      membership_rows: [{ day: "2026-08-10" }],
+      compute_revenue_rows: [{ day: "2026-08-10", revenue_cents: 1250 }],
+      compute_usage_rows: [{ day: "2026-08-10", running_unit_seconds: 86_400 }],
+    });
+    const csv = revenueAnalyticsDailyExportCsv(combined);
+    expect(csv).toContain("compute-revenue");
+    expect(csv).toContain("compute-usage");
+    expect(csv).not.toContain("account_id");
   });
 });
