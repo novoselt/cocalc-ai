@@ -75,7 +75,6 @@ import {
 import { CustomerSelector } from "./selector";
 import { TimelineFilter } from "./timeline-filter";
 import {
-  customerMatchesView,
   emptyViewDescription,
   type CustomerView,
   VIEW_OPTIONS,
@@ -1131,6 +1130,7 @@ function CustomerQueue({
       const result = search
         ? await api.searchOrganizations({
             query: search,
+            ...viewRequest(view),
             reason: "Search CRM customer queue",
             limit: 100,
           })
@@ -1139,13 +1139,7 @@ function CustomerQueue({
             reason: "Review CRM customer queue",
             limit: 100,
           });
-      setCustomers(
-        search
-          ? result.organizations.filter((customer) =>
-              customerMatchesView(customer, view),
-            )
-          : result.organizations,
-      );
+      setCustomers(result.organizations);
     } catch (err) {
       setError(err);
     } finally {

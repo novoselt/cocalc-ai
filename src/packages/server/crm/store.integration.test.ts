@@ -550,6 +550,24 @@ describePglite("integrated CRM store", () => {
       open_opportunity_count: 1,
       open_opportunity_kinds: ["adoption_pilot"],
     });
+    expect(
+      (
+        await store.searchOrganizations({
+          account_id: actor,
+          query: organization.display_name,
+          opportunity_kinds: ["adoption_pilot"],
+          reason: "search customers with open pilot opportunities",
+        })
+      ).organizations.map(({ id }) => id),
+    ).toContain(organization.id);
+    expect(
+      await store.searchOrganizations({
+        account_id: actor,
+        query: organization.display_name,
+        opportunity_kinds: ["renewal"],
+        reason: "exclude search matches without a renewal opportunity",
+      }),
+    ).toMatchObject({ organizations: [] });
     const taskPreview = await store.createTask({
       account_id: actor,
       organization: organization.id,

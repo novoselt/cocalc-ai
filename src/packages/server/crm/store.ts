@@ -37,6 +37,7 @@ import type {
   CrmOrganizationListResponse,
   CrmOrganizationMergeRequest,
   CrmOrganizationPersonMutationRequest,
+  CrmOrganizationQueueFilters,
   CrmOrganizationSearchRequest,
   CrmOrganizationUpdateRequest,
   CrmPersonAccountMutationRequest,
@@ -825,6 +826,42 @@ async function summaryForOrganization(
   };
 }
 
+function appendOrganizationQueueFilters(
+  opts: CrmOrganizationQueueFilters,
+  values: unknown[],
+  clauses: string[],
+): void {
+  const add = (clause: string, value: unknown) => {
+    values.push(value);
+    clauses.push(clause.replace("?", `$${values.length}`));
+  };
+  if (opts.lifecycle_stages?.length) {
+    add("o.lifecycle_stage=ANY(?::text[])", opts.lifecycle_stages);
+  }
+  if (opts.statuses?.length) {
+    add("o.status=ANY(?::text[])", opts.statuses);
+  }
+  if (opts.organization_types?.length) {
+    add("o.organization_type=ANY(?::text[])", opts.organization_types);
+  }
+  if (opts.opportunity_kinds?.length) {
+    add(
+      "EXISTS (SELECT 1 FROM crm_opportunities q WHERE q.organization_id=o.id AND q.kind=ANY(?::text[]) AND q.stage NOT IN ('won','lost'))",
+      opts.opportunity_kinds,
+    );
+  }
+  if (opts.owner_account_id === null || opts.unassigned) {
+    clauses.push("o.relationship_owner_account_id IS NULL");
+  } else if (opts.owner_account_id) {
+    add("o.relationship_owner_account_id=?::uuid", opts.owner_account_id);
+  }
+  if (opts.has_overdue_tasks) {
+    clauses.push(
+      "EXISTS (SELECT 1 FROM crm_tasks t WHERE t.organization_id=o.id AND t.state IN ('open','waiting') AND t.due_at<NOW())",
+    );
+  }
+}
+
 export async function listOrganizations(
   opts: CrmOrganizationListRequest,
 ): Promise<CrmOrganizationListResponse> {
@@ -833,10 +870,6 @@ export async function listOrganizations(
   const maxBytes = byteLimit(opts.max_bytes);
   const values: unknown[] = [];
   const where: string[] = [];
-  const add = (clause: string, value: unknown) => {
-    values.push(value);
-    where.push(clause.replace("?", `$${values.length}`));
-  };
   if (opts.search?.trim()) {
     const query = `%${opts.search.trim()}%`;
     values.push(query);
@@ -844,24 +877,7 @@ export async function listOrganizations(
       `(o.display_name ILIKE $${values.length} OR o.legal_name ILIKE $${values.length} OR o.customer_number ILIKE $${values.length} OR EXISTS (SELECT 1 FROM unnest(o.aliases) a WHERE a ILIKE $${values.length}))`,
     );
   }
-  if (opts.lifecycle_stages?.length)
-    add("o.lifecycle_stage=ANY(?::text[])", opts.lifecycle_stages);
-  if (opts.statuses?.length) add("o.status=ANY(?::text[])", opts.statuses);
-  if (opts.organization_types?.length)
-    add("o.organization_type=ANY(?::text[])", opts.organization_types);
-  if (opts.opportunity_kinds?.length)
-    add(
-      "EXISTS (SELECT 1 FROM crm_opportunities q WHERE q.organization_id=o.id AND q.kind=ANY(?::text[]) AND q.stage NOT IN ('won','lost'))",
-      opts.opportunity_kinds,
-    );
-  if (opts.owner_account_id === null || opts.unassigned)
-    where.push("o.relationship_owner_account_id IS NULL");
-  else if (opts.owner_account_id)
-    add("o.relationship_owner_account_id=?::uuid", opts.owner_account_id);
-  if (opts.has_overdue_tasks)
-    where.push(
-      "EXISTS (SELECT 1 FROM crm_tasks t WHERE t.organization_id=o.id AND t.state IN ('open','waiting') AND t.due_at<NOW())",
-    );
+  appendOrganizationQueueFilters(opts, values, where);
   const cursor = decodeCursor(opts.cursor);
   if (cursor) {
     values.push(cursor.updated_at, cursor.id);
@@ -939,6 +955,7 @@ export async function searchOrganizations(
       `EXISTS (SELECT 1 FROM site_licenses sl WHERE sl.crm_organization_id=o.id AND sl.id=$${values.length}::uuid)`,
     );
   }
+  appendOrganizationQueueFilters(opts, values, clauses);
   values.push(limit + 1);
   const { rows } = await getPool().query(
     `SELECT DISTINCT o.* FROM crm_organizations o ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
