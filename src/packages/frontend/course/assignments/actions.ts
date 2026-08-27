@@ -206,7 +206,7 @@ export class AssignmentsActions {
       });
     } catch (err) {
       this.course_actions.set_error(`error creating assignment: ${err}`);
-      return;
+      throw err;
     }
     this.course_actions.set({
       path,
