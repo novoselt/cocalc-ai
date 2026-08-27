@@ -221,6 +221,11 @@ export interface CrmOrganizationPerson {
 export interface CrmPerson {
   id: string;
   display_name: string;
+  website?: string | null;
+  linkedin_url?: string | null;
+  facebook_url?: string | null;
+  x_url?: string | null;
+  note?: string | null;
   timezone?: string | null;
   status: "active" | "merged" | "archived";
   merged_into_person_id?: string | null;
