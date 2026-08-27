@@ -61,9 +61,10 @@ export default function Pages() {
   }
 
   const STYLE = {
+    boxSizing: "border-box",
     cursor: "pointer",
-    width: `${width - 2 * HMARGIN}px`,
-    padding: `${VMARGIN}px 10px`,
+    width: `calc(100% - ${2 * HMARGIN}px)`,
+    padding: `${VMARGIN}px 12px 12px 10px`,
     position: "relative",
     overflow: "hidden",
   } as CSSProperties;
@@ -88,6 +89,7 @@ export default function Pages() {
     const elementsOnPage = thisPage ? elementsList(thisPage) : [];
     return (
       <div
+        data-testid="whiteboard-page-item"
         onClick={(e) => {
           e.stopPropagation(); // so doesn't focus this frame then page, causing flicker.
           const frameId = actions.show_focused_frame_of_type(
@@ -102,6 +104,7 @@ export default function Pages() {
         style={{ ...STYLE }}
       >
         <div
+          data-testid="whiteboard-page-preview-row"
           style={{
             display: "flex",
             alignItems: "center",
@@ -130,7 +133,7 @@ export default function Pages() {
             elementsMap={elementsMap}
             width={
               width -
-              70 /* that 70 accounts for the margin/padding/buttons; without this page gets cut off on right*/
+              55 /* account for the page number, drag handle, and item padding */
             }
             navMap={"page"}
             style={{
@@ -142,10 +145,18 @@ export default function Pages() {
             maxScale={2}
             presentation={actions.mainFrameType == "slides"}
           />
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            <DeletePage pageId={`${sortedPageIds.get(index)}`} />
-            <AddPage pageId={`${sortedPageIds.get(index)}`} />
-          </div>
+        </div>
+        <div
+          data-testid="whiteboard-page-controls"
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: "4px",
+            marginTop: "4px",
+          }}
+        >
+          <DeletePage pageId={`${sortedPageIds.get(index)}`} />
+          <AddPage pageId={`${sortedPageIds.get(index)}`} />
         </div>
       </div>
     );

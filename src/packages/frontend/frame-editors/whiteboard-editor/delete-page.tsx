@@ -20,6 +20,7 @@ export default function DeletePage({ pageId }) {
     >
       <Tooltip title="Delete this page" placement="right" mouseEnterDelay={1}>
         <Button
+          aria-label="Delete this page"
           type="text"
           size="small"
           icon={<Icon style={{ color: COLORS.FILE_ICON }} name="trash" />}
