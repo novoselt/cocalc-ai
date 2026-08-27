@@ -1108,6 +1108,7 @@ describe("membership package managers", () => {
 
   it("lets admins revoke an active site-license pool seat", async () => {
     isAdmin = true;
+    localStorage.removeItem("cocalc-site-license-users-width");
     const activeOverview = {
       site_license: {
         id: "license-1",
@@ -1185,7 +1186,12 @@ describe("membership package managers", () => {
 
     fireEvent.click(screen.getByText("Manage users"));
 
-    await screen.findByText("Students users");
+    const usersDrawer = await screen.findByRole("dialog", {
+      name: "Students users",
+    });
+    expect(
+      usersDrawer.closest(".ant-drawer-content-wrapper")?.getAttribute("style"),
+    ).toContain("calc(100vw - 48px)");
     expect(await screen.findByText("Grace Hopper")).toBeTruthy();
     expect(screen.getByText("grace@example.edu")).toBeTruthy();
     expect(screen.getByText("Seat given on")).toBeTruthy();

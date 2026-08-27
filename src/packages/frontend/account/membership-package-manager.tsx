@@ -120,9 +120,9 @@ const DEFAULT_SITE_LICENSE_ADMIN_DRAWER_WIDTH =
   "min(calc(100vw - 48px), max(720px, calc(100vw - 280px)))";
 const MIN_SITE_LICENSE_ADMIN_DRAWER_WIDTH = 720;
 const SITE_LICENSE_USERS_DRAWER_WIDTH_KEY = "cocalc-site-license-users-width";
-const DEFAULT_SITE_LICENSE_USERS_DRAWER_WIDTH = 760;
+const DEFAULT_SITE_LICENSE_USERS_DRAWER_WIDTH =
+  DEFAULT_SITE_LICENSE_ADMIN_DRAWER_WIDTH;
 const MIN_SITE_LICENSE_USERS_DRAWER_WIDTH = 520;
-const MAX_SITE_LICENSE_USERS_DRAWER_WIDTH = 1280;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -170,27 +170,30 @@ function persistSiteLicenseAdminDrawerWidth(value: number): void {
 }
 
 function clampSiteLicenseUsersDrawerWidth(value: number): number {
-  if (!Number.isFinite(value)) {
-    return DEFAULT_SITE_LICENSE_USERS_DRAWER_WIDTH;
+  if (typeof window === "undefined") {
+    return Math.max(MIN_SITE_LICENSE_USERS_DRAWER_WIDTH, Math.round(value));
   }
-  return Math.max(
-    MIN_SITE_LICENSE_USERS_DRAWER_WIDTH,
-    Math.min(MAX_SITE_LICENSE_USERS_DRAWER_WIDTH, Math.round(value)),
-  );
+  const maximum = Math.max(320, window.innerWidth - 48);
+  const minimum = Math.min(MIN_SITE_LICENSE_USERS_DRAWER_WIDTH, maximum);
+  return Math.min(maximum, Math.max(minimum, Math.round(value)));
 }
 
-function readSiteLicenseUsersDrawerWidth(): number {
+function readSiteLicenseUsersDrawerWidth(): number | undefined {
+  if (typeof window === "undefined") return undefined;
   try {
     const value = Number(
       localStorage.getItem(SITE_LICENSE_USERS_DRAWER_WIDTH_KEY),
     );
-    return clampSiteLicenseUsersDrawerWidth(value);
+    return Number.isFinite(value) && value > 0
+      ? clampSiteLicenseUsersDrawerWidth(value)
+      : undefined;
   } catch {
-    return DEFAULT_SITE_LICENSE_USERS_DRAWER_WIDTH;
+    return undefined;
   }
 }
 
 function persistSiteLicenseUsersDrawerWidth(value: number): void {
+  if (typeof window === "undefined") return;
   try {
     localStorage.setItem(
       SITE_LICENSE_USERS_DRAWER_WIDTH_KEY,
@@ -4014,7 +4017,8 @@ function PoolUsersDrawer({
   setRevokingSeat: (value: string) => void;
   setSearch: (value: string) => void;
 }) {
-  const [drawerWidth, setDrawerWidth] = useState<number>(
+  const drawerTitleId = useId();
+  const [drawerWidth, setDrawerWidth] = useState<number | undefined>(
     readSiteLicenseUsersDrawerWidth,
   );
   const activeAssignments = useMemo(
@@ -4040,16 +4044,17 @@ function PoolUsersDrawer({
 
   return (
     <Drawer
+      aria-labelledby={drawerTitleId}
       destroyOnHidden
       onClose={onClose}
       open={open}
       title={
-        <Space>
+        <Space id={drawerTitleId}>
           <Icon name="users" />
           <span>{pool ? `${pool.pool_name} users` : "Users"}</span>
         </Space>
       }
-      size={drawerWidth}
+      size={drawerWidth ?? DEFAULT_SITE_LICENSE_USERS_DRAWER_WIDTH}
       resizable={{
         onResize: (value) => {
           const next = clampSiteLicenseUsersDrawerWidth(value);
