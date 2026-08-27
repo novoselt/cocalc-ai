@@ -118,6 +118,7 @@ export interface ChatMessage {
   acp_thread_id?: string | null;
   acp_automation_id?: string | null;
   acp_started_at_ms?: number;
+  acp_guidance_delivered_at_ms?: number;
   acp_usage?: any;
   acp_config?: CodexThreadConfig;
   acp_account_id?: string;

@@ -144,6 +144,16 @@ export function outreachProviderConfigurationErrors(config: {
   ].filter((value): value is string => !!value);
 }
 
+export function requireOutreachOptOutSecret(secret?: string): string {
+  const value = `${secret ?? ""}`.trim();
+  if (!value) {
+    throw Error(
+      "webhook/opt-out secret must be configured before adding outreach recipients",
+    );
+  }
+  return value;
+}
+
 function assertSeed(): void {
   if (getConfiguredBayId() !== getConfiguredClusterSeedBayId()) {
     throw Error("CRM outreach is seed-global and must run on seed authority");
@@ -1397,14 +1407,14 @@ export async function addOutreachRecipient(
   const accountId = actor(opts.account_id);
   const batch = await resolveBatch(getPool(), opts.batch);
   const config = await loadOutreachConfiguration();
+  const optOutSecret = requireOutreachOptOutSecret(config.webhook_secret);
   const target = await recipientContext(opts, batch);
   const template = batch.template_id
     ? await resolveTemplate(getPool(), batch.template_id)
     : null;
   const inputKey = `crm:outreach.recipient:${digest({ batch: batch.id, person: target.person.id, email: target.email.id, opportunity: target.opportunity?.id, subject: opts.subject, body: opts.body_markdown }).slice(0, 32)}`;
   const idempotencyKey = opts.idempotency_key ?? inputKey;
-  const tokenSecret = config.webhook_secret || `disabled-outreach:${batch.id}`;
-  const optOutToken = createHmac("sha256", tokenSecret)
+  const optOutToken = createHmac("sha256", optOutSecret)
     .update(`opt-out:${idempotencyKey}`)
     .digest("base64url");
   const optOutUrl = `${config.site_url}/crm/outreach/opt-out/${optOutToken}`;

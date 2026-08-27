@@ -25,6 +25,10 @@ import {
   ensureCommercialNextActionSchema,
 } from "./commercial-next-action";
 import {
+  commercialQuoteLifecycleSchemaNeedsSync,
+  ensureCommercialQuoteLifecycleSchema,
+} from "./commercial-quote-lifecycle";
+import {
   getColumnInvariantActions,
   syncTableSchemaColumnInvariants,
 } from "./column-invariants";
@@ -464,6 +468,9 @@ export async function syncSchema(
     if (dbSchema.commercial_orders != null) {
       await ensureCommercialNextActionSchema(db);
     }
+    if (dbSchema.commercial_quotes != null) {
+      await ensureCommercialQuoteLifecycleSchema(db);
+    }
     if (dbSchema.compute_vm_project_access != null) {
       await backfillComputeVmProjectAccess(db);
     }
@@ -563,6 +570,13 @@ export async function schemaNeedsSync(
       (await commercialNextActionSchemaNeedsSync(db))
     ) {
       dbg("detected missing commercial next-action guard");
+      return true;
+    }
+    if (
+      dbSchema.commercial_quotes != null &&
+      (await commercialQuoteLifecycleSchemaNeedsSync(db))
+    ) {
+      dbg("detected stale commercial quote lifecycle guard");
       return true;
     }
     dbg("schema matches");

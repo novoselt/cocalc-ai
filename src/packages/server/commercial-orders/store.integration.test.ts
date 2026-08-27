@@ -77,6 +77,7 @@ describePglite("commercial order store", () => {
     await getPool().query("DELETE FROM commercial_order_events");
     await getPool().query("DELETE FROM commercial_payments");
     await getPool().query("DELETE FROM commercial_invoices");
+    await getPool().query("DELETE FROM commercial_order_documents");
     await getPool().query("DELETE FROM commercial_quotes");
     await getPool().query("DELETE FROM commercial_order_contacts");
     await getPool().query("DELETE FROM commercial_order_items");
@@ -604,6 +605,212 @@ describePglite("commercial order store", () => {
       reason: "verify voided quote retention",
     });
     expect(retained.content_base64).toBe(document.content_base64);
+  });
+
+  it("persists and reconciles a Stripe quote intent without using local void", async () => {
+    const created = await store.createCommercialOrder(request());
+    const intentRequest = {
+      account_id: actor,
+      id: created.id,
+      expected_version: created.version,
+      reason: "create reviewed Stripe quote",
+      source: "cli" as const,
+      idempotency_key: `stripe-quote-${randomUUID()}`,
+      valid_until: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+    };
+    const intent = await store.createCommercialStripeQuoteIntent(intentRequest);
+    const replay = await store.createCommercialStripeQuoteIntent(intentRequest);
+    expect(replay.quote.id).toBe(intent.quote.id);
+    expect(intent.quote).toMatchObject({
+      provider: "stripe",
+      status: "draft",
+      provider_status: null,
+    });
+
+    const draft = await store.updateCommercialQuoteProvider({
+      quote_id: intent.quote.id,
+      status: "draft",
+      provider_quote_id: "qt_store_integration",
+      provider_status: "draft",
+      provider_snapshot: {
+        id: "qt_store_integration",
+        status: "draft",
+      },
+      actor_account_id: actor,
+      event_type: "stripe-quote-draft-created",
+      event_source: "cli",
+      event_reason: "attach Stripe draft identity",
+      event_idempotency_key: `stripe-quote-attached-${randomUUID()}`,
+    });
+    expect(draft.quotes[0]).toMatchObject({
+      provider_quote_id: "qt_store_integration",
+      provider_status: "draft",
+    });
+    await expect(
+      store.updateCommercialBillingDetails({
+        account_id: actor,
+        id: draft.id,
+        expected_version: draft.version,
+        reason: "attempt billing correction with active quote",
+        billing_contacts: [
+          {
+            role: "billing",
+            name_snapshot: "Replacement Billing",
+            email_snapshot: "replacement@example.edu",
+          },
+        ],
+      }),
+    ).rejects.toThrow("cancel it first");
+
+    const approved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: draft.id,
+      expected_version: draft.version,
+      reason: "approve active Stripe quote fixture",
+    });
+    await expect(
+      store.reviseCommercialOrder({
+        account_id: actor,
+        id: approved.id,
+        expected_version: approved.version,
+        reason: "attempt revision with active Stripe quote",
+        changes: {
+          agreed_subtotal: "4100",
+          agreed_total: "4100",
+        },
+        items: [
+          {
+            description: "Revised adoption pilot",
+            quantity: "1",
+            unit_amount: "4100",
+            subtotal: "4100",
+            product_kind: "site_license",
+          },
+        ],
+      }),
+    ).rejects.toThrow("cancel it first");
+
+    await expect(
+      store.voidCommercialQuote({
+        account_id: actor,
+        id: approved.id,
+        commercial_quote_id: intent.quote.id,
+        expected_version: approved.version,
+        reason: "attempt local void on provider quote",
+      }),
+    ).rejects.toThrow("Stripe quotes must be canceled");
+
+    const pdf = Buffer.from("%PDF-1.4\nStripe quote\n%%EOF\n");
+    const { createHash } = await import("node:crypto");
+    const issued = await store.updateCommercialQuoteProvider({
+      quote_id: intent.quote.id,
+      status: "issued",
+      provider_quote_id: "qt_store_integration",
+      provider_status: "open",
+      provider_snapshot: {
+        id: "qt_store_integration",
+        status: "open",
+      },
+      issued_at: new Date().toISOString(),
+      document_filename: "QT-TEST.pdf",
+      document_sha256: createHash("sha256").update(pdf).digest("hex"),
+      document_data: pdf,
+      actor_account_id: actor,
+      event_type: "stripe-quote-finalized",
+      event_source: "cli",
+      event_reason: "retain finalized Stripe quote",
+      event_idempotency_key: `stripe-quote-finalized-${randomUUID()}`,
+    });
+    expect(issued.quotes[0]).toMatchObject({
+      status: "issued",
+      provider_status: "open",
+      document_filename: "QT-TEST.pdf",
+    });
+    const document = await store.getCommercialQuoteDocument({
+      id: issued.id,
+      commercial_quote_id: intent.quote.id,
+      reason: "verify retained Stripe quote",
+    });
+    expect(Buffer.from(document.content_base64, "base64")).toEqual(pdf);
+
+    const operation = await store.reserveCommercialProviderOperation({
+      order_id: issued.id,
+      quote_id: intent.quote.id,
+      operation: "quote_reconcile",
+      expected_version: issued.version,
+      idempotency_key: `stripe-quote-operation-${randomUUID()}`,
+    });
+    expect(operation.operation.commercial_quote_id).toBe(intent.quote.id);
+  });
+
+  it("attaches, downloads, and voids immutable purchase-order PDFs", async () => {
+    const created = await store.createCommercialOrder(request());
+    const content = Buffer.from("%PDF-1.4\nPurchase order 5874860\n%%EOF\n");
+    const uploadRequest = {
+      account_id: actor,
+      id: created.id,
+      document_kind: "purchase_order" as const,
+      document_filename: "upenn-po-5874860.pdf",
+      document_reference: "5874860",
+      note: "Received from Penn procurement",
+      content_base64: content.toString("base64"),
+      expected_version: created.version,
+      reason: "attach received purchase order",
+      idempotency_key: `document-upload-${randomUUID()}`,
+    };
+    const attached = await store.uploadCommercialOrderDocument(uploadRequest);
+    const replay = await store.uploadCommercialOrderDocument(uploadRequest);
+    expect(replay.version).toBe(attached.version);
+    expect(attached.po_number).toBe("5874860");
+    expect(attached.documents).toHaveLength(1);
+    expect(attached.documents[0]).toMatchObject({
+      document_kind: "purchase_order",
+      status: "active",
+      document_reference: "5874860",
+      document_filename: "upenn-po-5874860.pdf",
+      document_size: content.length,
+    });
+    expect(attached.documents[0].document_sha256).toMatch(/^[0-9a-f]{64}$/);
+    await expect(
+      store.uploadCommercialOrderDocument({
+        ...uploadRequest,
+        expected_version: attached.version,
+        document_reference: "DIFFERENT-PO",
+        idempotency_key: `document-conflict-${randomUUID()}`,
+      }),
+    ).rejects.toThrow("conflicts with existing PO number 5874860");
+    await expect(
+      store.uploadCommercialOrderDocument({
+        ...uploadRequest,
+        expected_version: attached.version,
+        idempotency_key: `document-duplicate-${randomUUID()}`,
+      }),
+    ).rejects.toThrow("already attached");
+
+    const downloaded = await store.getCommercialOrderDocument({
+      id: attached.id,
+      commercial_order_document_id: attached.documents[0].id,
+      reason: "verify stored purchase order",
+    });
+    expect(Buffer.from(downloaded.content_base64, "base64")).toEqual(content);
+    expect(downloaded.document).not.toHaveProperty("document_data");
+
+    const voided = await store.voidCommercialOrderDocument({
+      account_id: actor,
+      id: attached.id,
+      commercial_order_document_id: attached.documents[0].id,
+      expected_version: attached.version,
+      reason: "replace superseded purchase order",
+      idempotency_key: `document-void-${randomUUID()}`,
+    });
+    expect(voided.documents[0].status).toBe("void");
+    expect(voided.documents[0].voided_by_account_id).toBe(actor);
+    const retained = await store.getCommercialOrderDocument({
+      id: voided.id,
+      commercial_order_document_id: voided.documents[0].id,
+      reason: "verify voided purchase order retention",
+    });
+    expect(retained.content_base64).toBe(downloaded.content_base64);
   });
 
   it("corrects billing details after fulfillment but before invoicing", async () => {

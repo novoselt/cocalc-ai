@@ -25,6 +25,10 @@ import type {
   CommercialOrderListRequest,
   CommercialOrderListResponse,
   CommercialOrderNoteRequest,
+  CommercialOrderDocumentDownload,
+  CommercialOrderDocumentDownloadRequest,
+  CommercialOrderDocumentUploadRequest,
+  CommercialOrderDocumentVoidRequest,
   CommercialOrderRevisionRequest,
   CommercialOrderTransitionRequest,
   CommercialOrderUpdateRequest,
@@ -39,6 +43,11 @@ import type {
   CommercialReconcilePreviewRequest,
   CommercialStripeEventRetryRequest,
   CommercialStripeEventRetryResult,
+  CommercialStripeQuoteAcceptRequest,
+  CommercialStripeQuoteCreateRequest,
+  CommercialStripeQuoteMutationRequest,
+  CommercialStripeQuotePreview,
+  CommercialStripeQuotePreviewRequest,
 } from "@cocalc/conat/hub/api/commercial-orders";
 import type {
   CommercialOrder,
@@ -273,6 +282,81 @@ export async function quoteDocument(
   opts: CommercialQuoteDocumentRequest,
 ): Promise<CommercialQuoteDocument> {
   return await invoke("quoteDocument", opts);
+}
+
+export async function stripeQuotePreview(
+  opts: CommercialStripeQuotePreviewRequest,
+): Promise<CommercialStripeQuotePreview> {
+  return await invoke("stripeQuotePreview", opts);
+}
+
+export async function createStripeQuote(
+  opts: CommercialStripeQuoteCreateRequest,
+): Promise<CommercialOrder> {
+  return await invoke("createStripeQuote", opts, {
+    fresh: true,
+    capability: "stripeQuotes",
+  });
+}
+
+export async function finalizeStripeQuote(
+  opts: CommercialStripeQuoteMutationRequest,
+): Promise<CommercialOrder> {
+  return await invoke("finalizeStripeQuote", opts, {
+    fresh: true,
+    capability: "stripeQuoteFinalize",
+  });
+}
+
+export async function acceptStripeQuote(
+  opts: CommercialStripeQuoteAcceptRequest,
+): Promise<CommercialOrder> {
+  return await invoke("acceptStripeQuote", opts, {
+    fresh: true,
+    capability: "stripeQuoteAccept",
+  });
+}
+
+export async function cancelStripeQuote(
+  opts: CommercialStripeQuoteMutationRequest,
+): Promise<CommercialOrder> {
+  return await invoke("cancelStripeQuote", opts, {
+    fresh: true,
+    capability: "stripeQuotes",
+  });
+}
+
+export async function reconcileStripeQuote(
+  opts: CommercialStripeQuoteMutationRequest,
+): Promise<CommercialOrder> {
+  return await invoke("reconcileStripeQuote", opts, {
+    fresh: true,
+    capability: "reconciliation",
+  });
+}
+
+export async function uploadDocument(
+  opts: CommercialOrderDocumentUploadRequest,
+): Promise<CommercialOrder> {
+  return await invoke("uploadDocument", opts, {
+    fresh: true,
+    capability: "mutate",
+  });
+}
+
+export async function voidDocument(
+  opts: CommercialOrderDocumentVoidRequest,
+): Promise<CommercialOrder> {
+  return await invoke("voidDocument", opts, {
+    fresh: true,
+    capability: "mutate",
+  });
+}
+
+export async function downloadDocument(
+  opts: CommercialOrderDocumentDownloadRequest,
+): Promise<CommercialOrderDocumentDownload> {
+  return await invoke("downloadDocument", opts);
 }
 
 export async function invoicePreview(

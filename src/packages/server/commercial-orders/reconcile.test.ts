@@ -34,6 +34,7 @@ const describePglite =
 
 describePglite("commercial Stripe event queue", () => {
   const mockReconcile = jest.fn();
+  const mockReconcileQuote = jest.fn();
   const originalEnv = {
     COCALC_DB: process.env.COCALC_DB,
     COCALC_PGLITE_DATA_DIR: process.env.COCALC_PGLITE_DATA_DIR,
@@ -142,5 +143,38 @@ describePglite("commercial Stripe event queue", () => {
     );
     expect(rows[0].status).toBe("processed");
     expect(rows[0].processed_at).toBeTruthy();
+  });
+
+  it("routes quote events through quote reconciliation", async () => {
+    const eventId = `evt_${randomUUID().replaceAll("-", "")}`;
+    const orderId = randomUUID();
+    const quoteId = randomUUID();
+    await enqueueCommercialStripeEvent({
+      event_id: eventId,
+      event_type: "quote.finalized",
+      livemode: false,
+      commercial_order_id: orderId,
+      commercial_quote_id: quoteId,
+      provider_quote_id: "qt_test_quote",
+    });
+    mockReconcileQuote.mockResolvedValue({});
+
+    await expect(
+      processCommercialStripeEventQueue(
+        1,
+        mockReconcile,
+        { warn: mockLoggerWarn },
+        mockReconcileQuote,
+      ),
+    ).resolves.toEqual({ processed: 1, failed: 0 });
+
+    expect(mockReconcile).not.toHaveBeenCalled();
+    expect(mockReconcileQuote).toHaveBeenCalledWith({
+      order_id: orderId,
+      commercial_quote_id: quoteId,
+      reason: "Stripe webhook quote.finalized",
+      source: "stripe-webhook",
+      event_idempotency_key: `stripe-event:${eventId}`,
+    });
   });
 });

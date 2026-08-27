@@ -121,6 +121,100 @@ describe("account_project_index projector", () => {
     expect(outboxRows.rows).toEqual([{ published_at: null }]);
   });
 
+  it("does not let newer project events overtake a locked older event", async () => {
+    await seedBaseRows();
+    await getPool().query(
+      `UPDATE projects
+          SET host_id = NULL,
+              state = '{}'::JSONB
+        WHERE project_id = $1`,
+      [PROJECT_ID],
+    );
+    await appendProjectOutboxEventForProject({
+      event_type: "project.created",
+      project_id: PROJECT_ID,
+      default_bay_id: LOCAL_BAY_ID,
+    });
+    await getPool().query(
+      `UPDATE projects
+          SET host_id = $2,
+              state = '{"state":"running"}'::JSONB
+        WHERE project_id = $1`,
+      [PROJECT_ID, HOST_ID],
+    );
+    await appendProjectOutboxEventForProject({
+      event_type: "project.host_changed",
+      project_id: PROJECT_ID,
+      default_bay_id: LOCAL_BAY_ID,
+    });
+
+    const blocker = await getPool().connect();
+    let blockerCommitted = false;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        `SELECT event_id
+           FROM project_events_outbox
+          WHERE project_id = $1
+            AND event_type = 'project.created'
+          FOR UPDATE`,
+        [PROJECT_ID],
+      );
+
+      let drainSettled = false;
+      const drain = drainAccountProjectIndexProjection({
+        bay_id: LOCAL_BAY_ID,
+        limit: 10,
+        dry_run: false,
+      }).finally(() => {
+        drainSettled = true;
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(drainSettled).toBe(false);
+      const beforeRelease = await getPool().query(
+        `SELECT event_type, published_at
+           FROM project_events_outbox
+          WHERE project_id = $1
+          ORDER BY created_at ASC, event_id ASC`,
+        [PROJECT_ID],
+      );
+      expect(beforeRelease.rows).toEqual([
+        { event_type: "project.created", published_at: null },
+        { event_type: "project.host_changed", published_at: null },
+      ]);
+
+      await blocker.query("COMMIT");
+      blockerCommitted = true;
+      await expect(drain).resolves.toMatchObject({
+        applied_events: 2,
+        event_types: {
+          "project.created": 1,
+          "project.host_changed": 1,
+        },
+      });
+
+      const projected = await getPool().query(
+        `SELECT host_id, state_summary
+           FROM account_project_index
+          WHERE account_id = $1
+            AND project_id = $2`,
+        [ACCOUNT_LOCAL, PROJECT_ID],
+      );
+      expect(projected.rows).toEqual([
+        {
+          host_id: HOST_ID,
+          state_summary: { state: "running" },
+        },
+      ]);
+    } finally {
+      if (!blockerCommitted) {
+        await blocker.query("ROLLBACK").catch(() => undefined);
+      }
+      blocker.release();
+    }
+  });
+
   it("reports unpublished outbox lag and per-type counts", async () => {
     await seedBaseRows();
     await appendProjectOutboxEventForProject({

@@ -14,7 +14,6 @@
 
 import { debounce } from "lodash";
 import { useEffect, useRef, useState } from "react";
-import useResizeObserver from "use-resize-observer";
 
 import useIsMountedRef from "@cocalc/frontend/app-framework/is-mounted-hook";
 import { codemirrorMode } from "@cocalc/frontend/file-extensions";
@@ -29,8 +28,11 @@ import InputStatic from "./input-static";
 import Output from "./output";
 import getStyle from "./style";
 
-const EXTRA_HEIGHT = 30;
 const MIN_HEIGHT = 78;
+
+function isRunning(runState?: string): boolean {
+  return runState === "start" || runState === "run" || runState === "busy";
+}
 
 interface Props {
   element: Element;
@@ -92,74 +94,136 @@ export default function Code({
     }
     return <InputStatic element={element} mode={mode} />;
   };
+  const outerRef = useRef<HTMLDivElement>(null);
   const divRef = useRef<any>(null);
   const getValueRef = useRef<any>(null);
-  const resize = useResizeObserver({
-    ref: readOnly || !focused ? undefined : divRef, // only listen if necessary!
-  });
-  const resizeRef = useRef<Function | null>(null);
+
+  // Track element.h in a ref so callbacks always see the latest value.
+  const elementHRef = useRef<number>(element.h ?? 0);
+  elementHRef.current = element.h ?? 0;
+
+  function getOuterChrome(): { border: number; padding: number } {
+    const outer = outerRef.current;
+    if (outer == null) return { border: 0, padding: 0 };
+    const style = getComputedStyle(outer);
+    const toNum = (v: string) => Number.parseFloat(v) || 0;
+    return {
+      border: toNum(style.borderTopWidth) + toNum(style.borderBottomWidth),
+      padding: toNum(style.paddingTop) + toNum(style.paddingBottom),
+    };
+  }
+
+  // Measure using outerRef.scrollHeight (accurate, blocks margin collapse).
+  // When focused, outerRef has height:100% so scrollHeight can't drop
+  // below element.h -- measureHeightInner provides a fallback for shrink.
+  function measureHeight(): number | undefined {
+    const outer = outerRef.current;
+    if (outer == null) return;
+    const { border } = getOuterChrome();
+    return Math.max(MIN_HEIGHT, Math.ceil(outer.scrollHeight + border));
+  }
+
+  // Fallback measurement via divRef for detecting shrink in focused mode.
+  // May slightly underestimate due to margin collapse, but correctly
+  // detects "content got smaller than element.h".
+  function measureHeightInner(): number | undefined {
+    const inner = divRef.current;
+    if (inner == null) return;
+    const { border, padding } = getOuterChrome();
+    return Math.max(
+      MIN_HEIGHT,
+      Math.ceil(inner.scrollHeight + padding + border),
+    );
+  }
+
+  // Single unified height-sync effect for both focused and unfocused modes.
+  // Observes both outerRef (for scrollHeight measurement) and divRef (to
+  // catch internal content changes that may not resize outerRef when it has
+  // a fixed height in focused mode).
   useEffect(() => {
-    if (readOnly || !focused) {
-      resizeRef.current = null;
-      return;
-    }
-    const shrinkElement = debounce(() => {
+    if (readOnly) return;
+    const outer = outerRef.current;
+    const inner = divRef.current;
+    if (outer == null || inner == null) return;
+    if (typeof ResizeObserver === "undefined") return;
+
+    const shrink = debounce(() => {
       // for why "element.str == getValueRef.current?.()" see comment in ../text.tsx
       if (actions.in_undo_mode() && element.str == getValueRef.current?.()) {
         return;
       }
-      const elt = divRef.current;
-      if (elt == null) return;
-      const h = Math.max(
-        MIN_HEIGHT,
-        elt.getBoundingClientRect()?.height / canvasScale + EXTRA_HEIGHT,
-      );
-      actions.setElement({
-        obj: { id: element.id, h },
-        commit: false,
-      });
+      // Always measure the inner div for shrink: the outer div is floored at
+      // element.h (minHeight/height 100% against the fixed-height parent from
+      // position.tsx), so outer.scrollHeight can never report a smaller box.
+      const h = measureHeightInner();
+      if (h != null && Math.abs(h - elementHRef.current) > 2) {
+        actions.setElement({ obj: { id: element.id, h }, commit: !focused });
+      }
     }, 250);
 
-    resizeRef.current = () => {
+    const sync = () => {
       if (actions.in_undo_mode() && element.str == getValueRef?.current?.()) {
         return;
       }
-      const elt = divRef.current;
-      if (elt == null) return;
-      const newHeight = Math.max(
-        MIN_HEIGHT,
-        elt.getBoundingClientRect()?.height / canvasScale + EXTRA_HEIGHT,
-      );
-      if (newHeight > element.h) {
-        shrinkElement.cancel();
-        actions.setElement({
-          obj: { id: element.id, h: newHeight },
-          commit: false,
-        });
-      } else if (newHeight < element.h) {
-        shrinkElement();
+      const h = measureHeight();
+      if (h == null) return;
+      if (h > elementHRef.current + 2) {
+        // Grow immediately so bounding box matches content.
+        // Commit when unfocused so collaborators see the change.
+        // The 2px threshold mirrors the shrink side: without it a constant
+        // sub-pixel overshoot in the measurement feeds back through the
+        // ResizeObserver and the cell grows without bound.
+        shrink.cancel();
+        actions.setElement({ obj: { id: element.id, h }, commit: !focused });
+      } else if (!focused) {
+        // Shrink with a delay to avoid oscillation, and only when unfocused --
+        // shrinking a focused cell fights the editor and oscillates.
+        // Measured on the inner div for the reason given in shrink() above.
+        const inner = measureHeightInner();
+        if (inner != null && inner < elementHRef.current - 2) {
+          shrink();
+        }
       }
     };
 
-    resizeRef.current?.();
+    const observer = new ResizeObserver(sync);
+    observer.observe(outer);
+    observer.observe(inner);
+
+    // Immediate measurement.
+    sync();
+    // Deferred: catch children that lay out after the first frame
+    // (e.g. CodeMirror editor, output rendering).
+    const raf = requestAnimationFrame(sync);
 
     return () => {
-      shrinkElement.cancel();
+      observer.disconnect();
+      shrink.cancel();
+      cancelAnimationFrame(raf);
     };
-  }, [element.id, canvasScale, editFocus, readOnly]);
-
-  useEffect(() => {
-    resizeRef.current?.();
-  }, [resize]);
+  }, [focused, element.id, canvasScale, editFocus, readOnly]);
 
   return (
-    <div style={{ ...getStyle(element), height: "100%" }}>
-      <div ref={divRef}>
+    <div
+      ref={outerRef}
+      style={{
+        ...getStyle(element),
+        ...(focused
+          ? { height: "100%", overflowY: "hidden" }
+          : { minHeight: "100%", height: "auto", overflowY: "visible" }),
+      }}
+    >
+      {/* flow-root establishes a block formatting context so the InputPrompt's
+          margin-top is contained rather than collapsing out of this div; that
+          is what makes divRef.scrollHeight an accurate content measurement. */}
+      <div ref={divRef} style={{ display: "flow-root" }}>
         {!hideInput && <InputPrompt element={element} />}
         {renderInput()}
-        {!hideOutput && element.data?.output && (
-          <Output element={element} onClick={() => setEditFocus(true)} />
-        )}
+        {!hideOutput &&
+          (element.data?.output != null ||
+            isRunning(element.data?.runState)) && (
+            <Output element={element} onClick={() => setEditFocus(true)} />
+          )}
         {focused && !readOnly && <ControlBar element={element} />}
       </div>
     </div>

@@ -5,6 +5,7 @@
 
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
+import { basename } from "node:path";
 import { Command } from "commander";
 
 import type {
@@ -16,15 +17,21 @@ import type {
   CommercialManualPaymentRequest,
   CommercialMutationRequest,
   CommercialOrderCreateRequest,
+  CommercialOrderDocumentUploadRequest,
+  CommercialOrderDocumentVoidRequest,
   CommercialOrderListRequest,
   CommercialOrderRevisionRequest,
   CommercialOrderUpdateRequest,
   CommercialProvisionRequest,
   CommercialQuoteIssueRequest,
+  CommercialStripeQuoteAcceptRequest,
+  CommercialStripeQuoteCreateRequest,
+  CommercialStripeQuoteMutationRequest,
   CommercialQuoteVoidRequest,
 } from "@cocalc/conat/hub/api/commercial-orders";
 import {
   COMMERCIAL_COLLECTION_STATES,
+  COMMERCIAL_ORDER_DOCUMENT_MAX_BYTES,
   COMMERCIAL_FULFILLMENT_STATES,
   COMMERCIAL_NEXT_ACTIONS,
   COMMERCIAL_PAYMENT_METHODS,
@@ -70,6 +77,7 @@ const READ_REASONS = {
   invoicePreview: "Review commercial invoice preview",
   quotePreview: "Review commercial quote preview",
   quoteDocument: "Download stored commercial quote document",
+  orderDocument: "Download stored commercial purchase order",
   fulfillmentPreview: "Review commercial fulfillment preview",
   diagnostics: "Review commercial receivables diagnostics",
 } as const;
@@ -1151,6 +1159,168 @@ function registerQuoteCommands(
       );
     });
 
+  const stripe = quote
+    .command("stripe")
+    .description("manage Stripe-native commercial quote lifecycles");
+
+  stripe
+    .command("preview <order>")
+    .description("preview authoritative Stripe quote inputs and readiness")
+    .option(
+      "--valid-until <iso>",
+      "quote expiration timestamp; defaults to 30 days",
+    )
+    .option("--reason <text>", "audit reason for this admin read")
+    .action(async (orderRef: string, opts: any, command: Command) => {
+      await deps.withContext(
+        command,
+        "admin receivables quote stripe preview",
+        async (ctx) =>
+          await ctx.hub.commercialOrders.stripeQuotePreview({
+            id: normalizeOrderReference(orderRef),
+            ...(opts.validUntil
+              ? {
+                  valid_until: normalizeIso(opts.validUntil, "--valid-until"),
+                }
+              : {}),
+            reason: readReason(opts.reason, READ_REASONS.quotePreview),
+          }),
+      );
+    });
+
+  mutationOptions(
+    stripe
+      .command("create <order>")
+      .description("preview or create a Stripe quote draft")
+      .option(
+        "--valid-until <iso>",
+        "quote expiration timestamp; defaults to 30 days",
+      ),
+    "create the Stripe quote draft",
+  ).action(async (orderRef: string, opts: any, command: Command) => {
+    await deps.withContext(
+      command,
+      "admin receivables quote stripe create",
+      async (ctx) => {
+        const reason = requireReason(opts.reason);
+        const order = await ctx.hub.commercialOrders.get({
+          id: normalizeOrderReference(orderRef),
+          reason,
+        });
+        const validUntil = opts.validUntil
+          ? normalizeIso(opts.validUntil, "--valid-until")
+          : undefined;
+        const request = {
+          id: order.id,
+          ...commonMutationRequest("quote-stripe-create", order, opts, {
+            ...(validUntil ? { valid_until: validUntil } : {}),
+          }),
+        } as CommercialStripeQuoteCreateRequest;
+        if (!opts.commit) {
+          return preview(
+            "quote-stripe-create",
+            order,
+            request as unknown as JsonObject,
+            {
+              stripe_quote_preview:
+                await ctx.hub.commercialOrders.stripeQuotePreview({
+                  id: order.id,
+                  ...(validUntil ? { valid_until: validUntil } : {}),
+                  reason,
+                }),
+            },
+          );
+        }
+        return await ctx.hub.commercialOrders.createStripeQuote(request);
+      },
+    );
+  });
+
+  for (const operation of ["finalize", "cancel", "reconcile"] as const) {
+    const apiMethod = {
+      finalize: "finalizeStripeQuote",
+      cancel: "cancelStripeQuote",
+      reconcile: "reconcileStripeQuote",
+    }[operation] as
+      | "finalizeStripeQuote"
+      | "cancelStripeQuote"
+      | "reconcileStripeQuote";
+    mutationOptions(
+      stripe
+        .command(`${operation} <order>`)
+        .description(`preview or ${operation} a Stripe commercial quote`)
+        .requiredOption("--quote-id <uuid>", "internal commercial quote id"),
+      `${operation} the Stripe commercial quote`,
+    ).action(async (orderRef: string, opts: any, command: Command) => {
+      await deps.withContext(
+        command,
+        `admin receivables quote stripe ${operation}`,
+        async (ctx) => {
+          const reason = requireReason(opts.reason);
+          const order = await ctx.hub.commercialOrders.get({
+            id: normalizeOrderReference(orderRef),
+            reason,
+          });
+          const request = {
+            id: order.id,
+            ...commonMutationRequest(`quote-stripe-${operation}`, order, opts, {
+              commercial_quote_id: `${opts.quoteId ?? ""}`.trim(),
+            }),
+          } as CommercialStripeQuoteMutationRequest;
+          if (!opts.commit) {
+            return preview(
+              `quote-stripe-${operation}`,
+              order,
+              request as unknown as JsonObject,
+            );
+          }
+          return await ctx.hub.commercialOrders[apiMethod](request);
+        },
+      );
+    });
+  }
+
+  mutationOptions(
+    stripe
+      .command("accept <order>")
+      .description(
+        "preview or accept a Stripe quote and create its unsent invoice draft",
+      )
+      .requiredOption("--quote-id <uuid>", "internal commercial quote id")
+      .requiredOption(
+        "--customer-acceptance-confirmed",
+        "confirm that customer acceptance was explicitly authorized",
+      ),
+    "accept the Stripe commercial quote",
+  ).action(async (orderRef: string, opts: any, command: Command) => {
+    await deps.withContext(
+      command,
+      "admin receivables quote stripe accept",
+      async (ctx) => {
+        const reason = requireReason(opts.reason);
+        const order = await ctx.hub.commercialOrders.get({
+          id: normalizeOrderReference(orderRef),
+          reason,
+        });
+        const request = {
+          id: order.id,
+          ...commonMutationRequest("quote-stripe-accept", order, opts, {
+            commercial_quote_id: `${opts.quoteId ?? ""}`.trim(),
+            customer_acceptance_confirmed: true,
+          }),
+        } as CommercialStripeQuoteAcceptRequest;
+        if (!opts.commit) {
+          return preview(
+            "quote-stripe-accept",
+            order,
+            request as unknown as JsonObject,
+          );
+        }
+        return await ctx.hub.commercialOrders.acceptStripeQuote(request);
+      },
+    );
+  });
+
   mutationOptions(
     quote
       .command("issue <order>")
@@ -1202,7 +1372,7 @@ function registerQuoteCommands(
     .command("download <order>")
     .description("download and verify a stored quote PDF")
     .requiredOption("--quote-id <uuid>", "internal commercial quote id")
-    .requiredOption("--output <path>", "destination PDF path")
+    .requiredOption("--output-file <path>", "destination PDF path")
     .option("--force", "replace an existing output file", false)
     .option("--reason <text>", "audit reason for this admin read")
     .action(async (orderRef: string, opts: any, command: Command) => {
@@ -1216,12 +1386,12 @@ function registerQuoteCommands(
             reason: readReason(opts.reason, READ_REASONS.quoteDocument),
           });
           const content = Buffer.from(document.content_base64, "base64");
-          await writeFile(opts.output, content, {
+          await writeFile(opts.outputFile, content, {
             flag: opts.force ? "w" : "wx",
           });
           return {
             quote_number: document.quote.quote_number,
-            output: opts.output,
+            output: opts.outputFile,
             bytes: content.length,
             sha256: document.quote.document_sha256,
           };
@@ -1254,6 +1424,168 @@ function registerQuoteCommands(
           return preview("quote-void", order, request as unknown as JsonObject);
         }
         return await ctx.hub.commercialOrders.voidQuote(request);
+      },
+    );
+  });
+}
+
+async function readPurchaseOrderPdf(path: string): Promise<{
+  content: Buffer;
+  filename: string;
+  sha256: string;
+}> {
+  const content = await readFile(path);
+  if (!content.length || content.length > COMMERCIAL_ORDER_DOCUMENT_MAX_BYTES) {
+    throw new Error("purchase order PDF must be between 1 byte and 5 MiB");
+  }
+  if (content.subarray(0, 5).toString("ascii") !== "%PDF-") {
+    throw new Error("--file must contain a PDF purchase order");
+  }
+  const filename = basename(path);
+  if (!filename.toLowerCase().endsWith(".pdf") || filename.length > 255) {
+    throw new Error(
+      "--file must have a PDF filename of at most 255 characters",
+    );
+  }
+  return {
+    content,
+    filename,
+    sha256: createHash("sha256").update(content).digest("hex"),
+  };
+}
+
+function registerDocumentCommands(
+  receivables: Command,
+  deps: ReceivablesCommandDeps,
+) {
+  const document = receivables
+    .command("document")
+    .description("attach and retain procurement documents");
+
+  mutationOptions(
+    document
+      .command("upload <order>")
+      .description("preview or attach an immutable purchase-order PDF")
+      .requiredOption("--file <path>", "purchase-order PDF path")
+      .option("--reference <text>", "PO number or procurement reference")
+      .option("--note <text>", "internal document note"),
+    "attach the reviewed purchase-order PDF",
+  ).action(async (orderRef: string, opts: any, command: Command) => {
+    await deps.withContext(
+      command,
+      "admin receivables document upload",
+      async (ctx) => {
+        const reason = requireReason(opts.reason);
+        const order = await ctx.hub.commercialOrders.get({
+          id: normalizeOrderReference(orderRef),
+          reason,
+        });
+        const pdf = await readPurchaseOrderPdf(opts.file);
+        const fields = {
+          document_kind: "purchase_order" as const,
+          document_filename: pdf.filename,
+          content_base64: pdf.content.toString("base64"),
+          ...(`${opts.reference ?? ""}`.trim()
+            ? { document_reference: `${opts.reference}`.trim() }
+            : {}),
+          ...(`${opts.note ?? ""}`.trim()
+            ? { note: `${opts.note}`.trim() }
+            : {}),
+        };
+        const request = {
+          id: order.id,
+          ...commonMutationRequest("document-upload", order, opts, fields),
+        } as CommercialOrderDocumentUploadRequest;
+        if (!opts.commit) {
+          const { content_base64: _content, ...reviewedFields } = request;
+          return preview(
+            "document-upload",
+            order,
+            reviewedFields as unknown as JsonObject,
+            {
+              document: {
+                path: opts.file,
+                bytes: pdf.content.length,
+                sha256: pdf.sha256,
+              },
+              safety:
+                "The PDF is retained immutably. A supplied PO reference also fills an empty order PO number and cannot conflict with an existing one.",
+            },
+          );
+        }
+        return await ctx.hub.commercialOrders.uploadDocument(request);
+      },
+    );
+  });
+
+  document
+    .command("download <order>")
+    .description("download and verify an attached procurement document")
+    .requiredOption("--document-id <uuid>", "commercial order document id")
+    .requiredOption("--output-file <path>", "destination PDF path")
+    .option("--force", "replace an existing output file", false)
+    .option("--reason <text>", "audit reason for this admin read")
+    .action(async (orderRef: string, opts: any, command: Command) => {
+      await deps.withContext(
+        command,
+        "admin receivables document download",
+        async (ctx) => {
+          const result = await ctx.hub.commercialOrders.downloadDocument({
+            id: normalizeOrderReference(orderRef),
+            commercial_order_document_id: `${opts.documentId ?? ""}`.trim(),
+            reason: readReason(opts.reason, READ_REASONS.orderDocument),
+          });
+          const content = Buffer.from(result.content_base64, "base64");
+          const sha256 = createHash("sha256").update(content).digest("hex");
+          if (sha256 !== result.document.document_sha256) {
+            throw new Error(
+              "downloaded purchase order failed its integrity check",
+            );
+          }
+          await writeFile(opts.outputFile, content, {
+            flag: opts.force ? "w" : "wx",
+          });
+          return {
+            document_id: result.document.id,
+            reference: result.document.document_reference,
+            filename: result.document.document_filename,
+            output: opts.outputFile,
+            bytes: content.length,
+            sha256,
+          };
+        },
+      );
+    });
+
+  mutationOptions(
+    document
+      .command("void <order>")
+      .description("preview or void an attached procurement document")
+      .requiredOption("--document-id <uuid>", "commercial order document id"),
+    "void the purchase-order attachment while retaining its audit trail",
+  ).action(async (orderRef: string, opts: any, command: Command) => {
+    await deps.withContext(
+      command,
+      "admin receivables document void",
+      async (ctx) => {
+        const order = await ctx.hub.commercialOrders.get({
+          id: normalizeOrderReference(orderRef),
+          reason: requireReason(opts.reason),
+        });
+        const request = {
+          id: order.id,
+          ...commonMutationRequest("document-void", order, opts, {
+            commercial_order_document_id: `${opts.documentId ?? ""}`.trim(),
+          }),
+        } as CommercialOrderDocumentVoidRequest;
+        if (!opts.commit) {
+          return preview(
+            "document-void",
+            order,
+            request as unknown as JsonObject,
+          );
+        }
+        return await ctx.hub.commercialOrders.voidDocument(request);
       },
     );
   });
@@ -1603,6 +1935,10 @@ Examples:
   cocalc admin receivables show AR-2026-000123 --json
   cocalc admin receivables quote preview AR-2026-000123
   cocalc admin receivables quote issue AR-2026-000123 --reason "formal quote"
+  cocalc admin receivables quote stripe preview AR-2026-000123
+  cocalc admin receivables quote stripe create AR-2026-000123 --reason "draft Stripe quote"
+  cocalc admin receivables document upload AR-2026-000123 --file PO.pdf \
+    --reference PO-123 --reason "attach received purchase order"
   cocalc admin receivables invoice preview AR-2026-000123
   cocalc admin receivables payment record AR-2026-000123 --amount 3900 \\
     --method check --reference CHECK-123 --reason "check deposited"
@@ -1612,6 +1948,7 @@ Examples:
   registerOrderMutationCommands(receivables, deps);
   registerBillingCommands(receivables, deps);
   registerQuoteCommands(receivables, deps);
+  registerDocumentCommands(receivables, deps);
   registerInvoiceCommands(receivables, deps);
   registerPaymentCommands(receivables, deps);
   registerFulfillmentCommands(receivables, deps);

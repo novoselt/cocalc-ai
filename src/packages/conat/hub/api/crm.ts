@@ -102,7 +102,7 @@ export interface CrmOrganizationSearchRequest extends CrmPageRequest {
   query?: string;
   domain?: string;
   email?: string;
-  account_id?: string;
+  linked_account_id?: string;
   zendesk_ticket_id?: number;
   commercial_order?: string;
   site_license_id?: string;
@@ -272,6 +272,11 @@ export interface CrmDomainMutationRequest extends CrmMutationRequest {
 
 export interface CrmPersonCreateRequest extends CrmMutationRequest {
   display_name: string;
+  website?: string;
+  linkedin_url?: string;
+  facebook_url?: string;
+  x_url?: string;
+  note?: string;
   timezone?: string;
   organization?: string;
   roles?: CrmPersonRole[];
@@ -283,7 +288,19 @@ export interface CrmPersonCreateRequest extends CrmMutationRequest {
 
 export interface CrmPersonUpdateRequest extends CrmMutationRequest {
   person: string;
-  changes: Partial<Pick<CrmPerson, "display_name" | "timezone" | "status">>;
+  changes: Partial<
+    Pick<
+      CrmPerson,
+      | "display_name"
+      | "website"
+      | "linkedin_url"
+      | "facebook_url"
+      | "x_url"
+      | "note"
+      | "timezone"
+      | "status"
+    >
+  >;
 }
 
 export interface CrmPersonEmailMutationRequest extends CrmMutationRequest {

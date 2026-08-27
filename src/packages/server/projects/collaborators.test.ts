@@ -4,6 +4,7 @@ import { encryptSecretSettingValue } from "@cocalc/util/secret-settings-crypto";
 let assertLocalProjectCollaboratorMock: jest.Mock;
 let getLocalProjectAccessStatusMock: jest.Mock;
 let assertProjectCollaboratorAccessAllowRemoteMock: jest.Mock;
+let resolveProjectReferenceAllowRemoteMock: jest.Mock;
 let queryMock: jest.Mock;
 let callback2Mock: jest.Mock;
 let isAdminMock: jest.Mock;
@@ -36,6 +37,8 @@ jest.mock("@cocalc/server/conat/project-remote-access", () => ({
   __esModule: true,
   assertProjectCollaboratorAccessAllowRemote: (...args: any[]) =>
     assertProjectCollaboratorAccessAllowRemoteMock(...args),
+  resolveProjectReferenceAllowRemote: (...args: any[]) =>
+    resolveProjectReferenceAllowRemoteMock(...args),
 }));
 
 jest.mock("@cocalc/database/pool", () => ({
@@ -252,6 +255,7 @@ describe("project collaborators local bay access", () => {
         [TARGET_ACCOUNT_ID]: { group: "collaborator" },
       },
     }));
+    resolveProjectReferenceAllowRemoteMock = jest.fn(async () => null);
     queryMock = jest.fn(async (sql: string) => {
       if (sql.includes("AS actor_group")) {
         return {
@@ -2045,6 +2049,19 @@ describe("project collaborators local bay access", () => {
     });
 
     const { redeemEmailProjectInvite } = await import("./collaborators");
+    resolveProjectReferenceAllowRemoteMock.mockResolvedValueOnce({
+      project_id: courseProjectId,
+      users: { [ACCOUNT_ID]: { group: "collaborator" } },
+    });
+    await expect(
+      redeemEmailProjectInvite({
+        account_id: ACCOUNT_ID,
+        invite_id: inviteId,
+        token,
+      }),
+    ).rejects.toThrow("Course managers cannot accept student invitations");
+    expect(addUserToProject).not.toHaveBeenCalled();
+
     await expect(
       redeemEmailProjectInvite({
         account_id: ACCOUNT_ID,
@@ -2078,6 +2095,11 @@ describe("project collaborators local bay access", () => {
       course_project_id: courseProjectId,
       student_project_id: PROJECT_ID,
       student_id: studentId,
+    });
+    expect(resolveProjectReferenceAllowRemoteMock).toHaveBeenCalledWith({
+      account_id: ACCOUNT_ID,
+      project_id: courseProjectId,
+      warmRoute: false,
     });
   });
 

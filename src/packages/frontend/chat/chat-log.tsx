@@ -318,10 +318,16 @@ function collectSteers({
       resolvedMessageAcpState({ message, acpState }),
     );
     if (!state || !anchoredParentId) continue;
+    const deliveredAtMs = Number(
+      field(message, "acp_guidance_delivered_at_ms"),
+    );
     const steer = {
       messageId,
       assistantMessageId,
-      date: messageDate.valueOf(),
+      date:
+        Number.isFinite(deliveredAtMs) && deliveredAtMs > 0
+          ? deliveredAtMs
+          : messageDate.valueOf(),
       text,
       state,
     };
@@ -1533,17 +1539,19 @@ export function MessageList({
       attachedSteersByParentMessageId?.get(messageId) ?? [];
     const revision = [
       ...activitySteers.map(
-        ({ messageId, state }) => `activity:${messageId}:${state}`,
+        ({ messageId, state, date }) =>
+          `activity:${messageId}:${state}:${date}`,
       ),
       ...attachedSteers.map(
-        ({ messageId, state }) => `attached:${messageId}:${state}`,
+        ({ messageId, state, date }) =>
+          `attached:${messageId}:${state}:${date}`,
       ),
     ].join("|");
     return revision ? `${date}:${revision}` : date;
   };
   // Virtuoso memoizes mounted items. The key includes guidance revisions so an
-  // existing assistant activity row remounts when guidance is added or changes
-  // state, without remounting the rest of the chat history.
+  // existing assistant activity row remounts when guidance is added, delivered,
+  // or changes state, without remounting the rest of the chat history.
   const virtuosoData: ChatVirtualRow[] = Array.from(
     { length: sortedDates.length + 1 },
     (_, index) => {

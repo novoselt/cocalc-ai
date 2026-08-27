@@ -11,6 +11,8 @@ import type {
   CommercialNextAction,
   CommercialOrder,
   CommercialOrderContact,
+  CommercialOrderDocument,
+  CommercialOrderDocumentKind,
   CommercialOrderDiagnostics,
   CommercialOrderEvent,
   CommercialOrderItem,
@@ -272,6 +274,67 @@ export interface CommercialQuoteDocument {
   content_base64: string;
 }
 
+export interface CommercialStripeQuotePreview extends CommercialQuotePreview {
+  stripe_mode: "test" | "live";
+  stripe_customer_id?: string | null;
+  collection_method: "send_invoice";
+  payment_terms_days: number;
+  description: string;
+  header: string;
+  footer: string;
+  metadata: Record<string, string>;
+  products: Array<{
+    commercial_order_item_id: string;
+    product_kind: string;
+    provider_product_id?: string | null;
+    quantity: number;
+    unit_amount: number;
+  }>;
+}
+
+export interface CommercialStripeQuotePreviewRequest extends CommercialReadRequest {
+  id: string;
+  valid_until?: string;
+}
+
+export interface CommercialStripeQuoteCreateRequest extends CommercialMutationRequest {
+  id: string;
+  valid_until?: string;
+}
+
+export interface CommercialStripeQuoteMutationRequest extends CommercialMutationRequest {
+  id: string;
+  commercial_quote_id: string;
+}
+
+export interface CommercialStripeQuoteAcceptRequest extends CommercialStripeQuoteMutationRequest {
+  customer_acceptance_confirmed: boolean;
+}
+
+export interface CommercialOrderDocumentUploadRequest extends CommercialMutationRequest {
+  id: string;
+  document_kind: CommercialOrderDocumentKind;
+  document_filename: string;
+  content_base64: string;
+  document_reference?: string;
+  note?: string;
+}
+
+export interface CommercialOrderDocumentVoidRequest extends CommercialMutationRequest {
+  id: string;
+  commercial_order_document_id: string;
+}
+
+export interface CommercialOrderDocumentDownloadRequest extends CommercialReadRequest {
+  id: string;
+  commercial_order_document_id: string;
+}
+
+export interface CommercialOrderDocumentDownload {
+  document: CommercialOrderDocument;
+  content_base64: string;
+}
+
 export interface CommercialInvoiceMutationRequest extends CommercialMutationRequest {
   id: string;
   commercial_invoice_id?: string;
@@ -404,6 +467,33 @@ export interface CommercialOrdersApi {
   quoteDocument: (
     opts: CommercialQuoteDocumentRequest,
   ) => Promise<CommercialQuoteDocument>;
+  stripeQuotePreview: (
+    opts: CommercialStripeQuotePreviewRequest,
+  ) => Promise<CommercialStripeQuotePreview>;
+  createStripeQuote: (
+    opts: CommercialStripeQuoteCreateRequest,
+  ) => Promise<CommercialOrder>;
+  finalizeStripeQuote: (
+    opts: CommercialStripeQuoteMutationRequest,
+  ) => Promise<CommercialOrder>;
+  acceptStripeQuote: (
+    opts: CommercialStripeQuoteAcceptRequest,
+  ) => Promise<CommercialOrder>;
+  cancelStripeQuote: (
+    opts: CommercialStripeQuoteMutationRequest,
+  ) => Promise<CommercialOrder>;
+  reconcileStripeQuote: (
+    opts: CommercialStripeQuoteMutationRequest,
+  ) => Promise<CommercialOrder>;
+  uploadDocument: (
+    opts: CommercialOrderDocumentUploadRequest,
+  ) => Promise<CommercialOrder>;
+  voidDocument: (
+    opts: CommercialOrderDocumentVoidRequest,
+  ) => Promise<CommercialOrder>;
+  downloadDocument: (
+    opts: CommercialOrderDocumentDownloadRequest,
+  ) => Promise<CommercialOrderDocumentDownload>;
   invoicePreview: (
     opts: CommercialInvoicePreviewRequest,
   ) => Promise<CommercialInvoicePreview>;
@@ -466,6 +556,15 @@ export const commercialOrders = {
   issueQuote: authFirstRequireAccount,
   voidQuote: authFirstRequireAccount,
   quoteDocument: authFirstRequireAccount,
+  stripeQuotePreview: authFirstRequireAccount,
+  createStripeQuote: authFirstRequireAccount,
+  finalizeStripeQuote: authFirstRequireAccount,
+  acceptStripeQuote: authFirstRequireAccount,
+  cancelStripeQuote: authFirstRequireAccount,
+  reconcileStripeQuote: authFirstRequireAccount,
+  uploadDocument: authFirstRequireAccount,
+  voidDocument: authFirstRequireAccount,
+  downloadDocument: authFirstRequireAccount,
   invoicePreview: authFirstRequireAccount,
   createInvoiceDraft: authFirstRequireAccount,
   linkExistingInvoice: authFirstRequireAccount,

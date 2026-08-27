@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -37,6 +38,7 @@ function order(overrides: Record<string, unknown> = {}) {
     items: [],
     contacts: [],
     quotes: [],
+    documents: [],
     invoices: [],
     payments: [],
     ...overrides,
@@ -187,6 +189,133 @@ test("receivables create previews without mutating and commits explicitly", asyn
   assert.equal(calls, 1);
   assert.equal(captured.reason, "accepted pilot");
   assert.match(captured.idempotency_key, /^receivables-create-/);
+});
+
+test("purchase-order upload previews metadata without exposing PDF content and commits explicitly", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cocalc-ar-po-"));
+  const file = join(directory, "PO-5874860.pdf");
+  const content = Buffer.from("%PDF-1.4\n%%EOF\n");
+  await writeFile(file, content);
+  let calls = 0;
+  let captured: any;
+  const api = {
+    get: async () => order(),
+    uploadDocument: async (opts: any) => {
+      calls += 1;
+      captured = opts;
+      return order({ version: 8 });
+    },
+  };
+
+  const dryRun = setup(api);
+  await dryRun.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "document",
+    "upload",
+    "AR-2026-000123",
+    "--file",
+    file,
+    "--reference",
+    "5874860",
+    "--reason",
+    "attach Penn purchase order",
+  ]);
+  assert.equal(calls, 0);
+  assert.equal(dryRun.output().request.document_filename, "PO-5874860.pdf");
+  assert.equal(dryRun.output().request.document_reference, "5874860");
+  assert.equal(dryRun.output().request.content_base64, undefined);
+  assert.equal(dryRun.output().document.bytes, content.length);
+  assert.equal(
+    dryRun.output().document.sha256,
+    createHash("sha256").update(content).digest("hex"),
+  );
+
+  const commitRun = setup(api);
+  await commitRun.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "document",
+    "upload",
+    "AR-2026-000123",
+    "--file",
+    file,
+    "--reference",
+    "5874860",
+    "--expected-version",
+    "7",
+    "--reason",
+    "attach Penn purchase order",
+    "--commit",
+  ]);
+  assert.equal(calls, 1);
+  assert.equal(captured.expected_version, 7);
+  assert.equal(captured.content_base64, content.toString("base64"));
+  assert.equal(captured.document_kind, "purchase_order");
+});
+
+test("purchase-order download verifies integrity and void is preview-first", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cocalc-ar-po-download-"));
+  const outputFile = join(directory, "downloaded.pdf");
+  const content = Buffer.from("%PDF-1.4\n%%EOF\n");
+  const sha256 = createHash("sha256").update(content).digest("hex");
+  let voidCalls = 0;
+  const api = {
+    get: async () => order(),
+    downloadDocument: async () => ({
+      document: {
+        id: "44444444-4444-4444-8444-444444444444",
+        document_reference: "5874860",
+        document_filename: "PO-5874860.pdf",
+        document_sha256: sha256,
+      },
+      content_base64: content.toString("base64"),
+    }),
+    voidDocument: async () => {
+      voidCalls += 1;
+      return order({ version: 8 });
+    },
+  };
+  const downloadRun = setup(api);
+  await downloadRun.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "document",
+    "download",
+    "AR-2026-000123",
+    "--document-id",
+    "44444444-4444-4444-8444-444444444444",
+    "--output-file",
+    outputFile,
+  ]);
+  assert.deepEqual(await readFile(outputFile), content);
+  assert.equal(downloadRun.output().sha256, sha256);
+
+  const voidRun = setup(api);
+  await voidRun.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "document",
+    "void",
+    "AR-2026-000123",
+    "--document-id",
+    "44444444-4444-4444-8444-444444444444",
+    "--reason",
+    "replace incorrect purchase order",
+  ]);
+  assert.equal(voidCalls, 0);
+  assert.equal(
+    voidRun.output().request.commercial_order_document_id,
+    "44444444-4444-4444-8444-444444444444",
+  );
 });
 
 test("receivables billing correction previews and commits explicitly", async () => {
@@ -344,11 +473,224 @@ test("receivables quote issue previews inputs and stored PDFs download", async (
     "AR-2026-000123",
     "--quote-id",
     quote.id,
-    "--output",
+    "--output-file",
     outputFile,
   ]);
   assert.equal((await readFile(outputFile)).toString(), "%PDF-test");
   assert.equal(download.output().quote_number, quote.quote_number);
+});
+
+test("Stripe quote preview and create are dry-run first", async () => {
+  const validUntil = "2026-10-01T00:00:00.000Z";
+  const stripePreview = {
+    order_id: order().id,
+    order_number: order().order_number,
+    organization_name: order().organization_name,
+    billing_contacts: [],
+    items: [],
+    currency: "usd",
+    subtotal: "3900",
+    total: "3900",
+    default_valid_until: validUntil,
+    ready: true,
+    blockers: [],
+    stripe_mode: "test",
+    stripe_customer_id: "cus_test",
+    collection_method: "send_invoice",
+    payment_terms_days: 30,
+    description: "Example University commercial order",
+    header: "CoCalc quote",
+    footer: "Thank you",
+    metadata: { commercial_order_id: order().id },
+    products: [],
+  };
+  const previewRequests: any[] = [];
+  const createRequests: any[] = [];
+  const api = {
+    get: async () => order(),
+    stripeQuotePreview: async (request: any) => {
+      previewRequests.push(request);
+      return stripePreview;
+    },
+    createStripeQuote: async (request: any) => {
+      createRequests.push(request);
+      return order({ version: 8 });
+    },
+  };
+
+  const directPreview = setup(api);
+  await directPreview.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "quote",
+    "stripe",
+    "preview",
+    "AR-2026-000123",
+    "--valid-until",
+    validUntil,
+  ]);
+  assert.deepEqual(directPreview.output(), stripePreview);
+  assert.equal(previewRequests[0].valid_until, validUntil);
+  assert.equal(previewRequests[0].reason, "Review commercial quote preview");
+
+  const dryRun = setup(api);
+  await dryRun.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "quote",
+    "stripe",
+    "create",
+    "AR-2026-000123",
+    "--valid-until",
+    validUntil,
+    "--reason",
+    "create reviewed Stripe quote",
+  ]);
+  assert.equal(createRequests.length, 0);
+  assert.equal(dryRun.output().operation, "quote-stripe-create");
+  assert.equal(dryRun.output().request.expected_version, 7);
+  assert.equal(dryRun.output().request.valid_until, validUntil);
+  assert.deepEqual(dryRun.output().stripe_quote_preview, stripePreview);
+  assert.match(
+    dryRun.output().request.idempotency_key,
+    /^receivables-quote-stripe-create-/,
+  );
+
+  const unreviewedCommit = setup(api);
+  await assert.rejects(
+    unreviewedCommit.program.parseAsync([
+      "node",
+      "test",
+      "admin",
+      "receivables",
+      "quote",
+      "stripe",
+      "create",
+      "AR-2026-000123",
+      "--reason",
+      "create reviewed Stripe quote",
+      "--commit",
+    ]),
+    /--expected-version or --expected-updated-at is required/,
+  );
+  assert.equal(createRequests.length, 0);
+
+  const commit = setup(api);
+  await commit.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "quote",
+    "stripe",
+    "create",
+    "AR-2026-000123",
+    "--valid-until",
+    validUntil,
+    "--reason",
+    "create reviewed Stripe quote",
+    "--expected-version",
+    "7",
+    "--idempotency-key",
+    "example-university-stripe-quote-2026",
+    "--commit",
+  ]);
+  assert.equal(createRequests.length, 1);
+  assert.equal(createRequests[0].expected_version, 7);
+  assert.equal(
+    createRequests[0].idempotency_key,
+    "example-university-stripe-quote-2026",
+  );
+  assert.equal(createRequests[0].source, "cli");
+});
+
+test("Stripe quote lifecycle mutations preview before committed writes", async () => {
+  const quoteId = "44444444-4444-4444-8444-444444444444";
+  const calls: Array<{ operation: string; request: any }> = [];
+  const api = {
+    get: async () => order(),
+    finalizeStripeQuote: async (request: any) => {
+      calls.push({ operation: "finalize", request });
+      return order({ version: 8 });
+    },
+    acceptStripeQuote: async (request: any) => {
+      calls.push({ operation: "accept", request });
+      return order({ version: 8 });
+    },
+    cancelStripeQuote: async (request: any) => {
+      calls.push({ operation: "cancel", request });
+      return order({ version: 8 });
+    },
+    reconcileStripeQuote: async (request: any) => {
+      calls.push({ operation: "reconcile", request });
+      return order({ version: 8 });
+    },
+  };
+
+  for (const operation of ["finalize", "accept", "cancel", "reconcile"]) {
+    const acceptance =
+      operation === "accept" ? ["--customer-acceptance-confirmed"] : [];
+    const dryRun = setup(api);
+    await dryRun.program.parseAsync([
+      "node",
+      "test",
+      "admin",
+      "receivables",
+      "quote",
+      "stripe",
+      operation,
+      "AR-2026-000123",
+      "--quote-id",
+      quoteId,
+      "--reason",
+      `${operation} reviewed Stripe quote`,
+      ...acceptance,
+    ]);
+    assert.equal(calls.length, 0);
+    assert.equal(dryRun.output().operation, `quote-stripe-${operation}`);
+    assert.equal(dryRun.output().request.commercial_quote_id, quoteId);
+    assert.equal(dryRun.output().request.expected_version, 7);
+    assert.match(
+      dryRun.output().request.idempotency_key,
+      new RegExp(`^receivables-quote-stripe-${operation}-`),
+    );
+    if (operation === "accept") {
+      assert.equal(dryRun.output().request.customer_acceptance_confirmed, true);
+    }
+
+    const commit = setup(api);
+    await commit.program.parseAsync([
+      "node",
+      "test",
+      "admin",
+      "receivables",
+      "quote",
+      "stripe",
+      operation,
+      "AR-2026-000123",
+      "--quote-id",
+      quoteId,
+      "--reason",
+      `${operation} reviewed Stripe quote`,
+      "--expected-version",
+      "7",
+      ...acceptance,
+      "--commit",
+    ]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].operation, operation);
+    assert.equal(calls[0].request.commercial_quote_id, quoteId);
+    assert.equal(calls[0].request.expected_version, 7);
+    assert.equal(calls[0].request.source, "cli");
+    if (operation === "accept") {
+      assert.equal(calls[0].request.customer_acceptance_confirmed, true);
+    }
+    calls.length = 0;
+  }
 });
 
 test("committed approval requires reviewed optimistic concurrency", async () => {

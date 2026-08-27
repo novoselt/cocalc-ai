@@ -8,13 +8,14 @@ import { useState } from "react";
 import { FormattedMessage, useIntl } from "react-intl";
 
 import { Icon } from "@cocalc/frontend/components";
+import ShowError from "@cocalc/frontend/components/error";
 import { course } from "@cocalc/frontend/i18n";
 import DirectorySelector from "@cocalc/frontend/project/directory-selector";
 import { capitalize, plural } from "@cocalc/util/misc";
 import { ItemName } from "./types";
 
 interface MultipleAddSearchProps {
-  addSelected: (keys: string[]) => void; // Submit user selected results add_selected(['paths', 'of', 'folders'])
+  addSelected: (keys: string[]) => void | Promise<void>; // Submit user selected results add_selected(['paths', 'of', 'folders'])
   itemName: ItemName;
   err?: string;
   isExcluded: (path: string) => boolean;
@@ -37,11 +38,27 @@ export function MultipleAddSearch({
   const intl = useIntl();
   const [selecting, setSelecting] = useState<boolean>(defaultOpen);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set([]));
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<any>();
   const n = selectedItems.size;
 
   function clear() {
     setSelecting(false);
     setSelectedItems(new Set([]));
+    setError(undefined);
+  }
+
+  async function submit() {
+    setSubmitting(true);
+    setError(undefined);
+    try {
+      await addSelected(Array.from(selectedItems));
+      clear();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   function label(): string {
@@ -113,26 +130,35 @@ export function MultipleAddSearch({
         />
       )}
       {selecting && (
-        <Button
-          type="primary"
-          disabled={n == 0}
-          onClick={() => {
-            addSelected(Array.from(selectedItems));
-            clear();
-          }}
-        >
-          <Icon name="plus" />
-          <FormattedMessage
-            id="course.multiple-add-search.directory-selector.add_button"
-            defaultMessage={`{n, select,
-              0 {Select one or more directories}
-              other {Add {n} {name}}}`}
-            values={{
-              n,
-              name: labelPlural(),
-            }}
+        <>
+          <Button
+            type="primary"
+            disabled={n == 0 || submitting}
+            loading={submitting}
+            onClick={submit}
+          >
+            <Icon name="plus" />
+            <FormattedMessage
+              id="course.multiple-add-search.directory-selector.add_button"
+              defaultMessage={`{n, select,
+                0 {Select one or more directories}
+                other {Add {n} {name}}}`}
+              values={{
+                n,
+                name: labelPlural(),
+              }}
+            />
+          </Button>
+          <ShowError
+            error={error}
+            setError={setError}
+            message={intl.formatMessage({
+              id: "course.multiple-add-search.add_error",
+              defaultMessage: "Unable to add selected folders",
+            })}
+            style={{ marginTop: "10px", maxWidth: "500px" }}
           />
-        </Button>
+        </>
       )}
     </div>
   );

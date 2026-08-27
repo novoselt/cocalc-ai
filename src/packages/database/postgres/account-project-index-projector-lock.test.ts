@@ -85,6 +85,11 @@ describe("account_project_index projector locking", () => {
         `${sql}`.includes("FROM project_events_outbox"),
       ),
     ).toBe(false);
+    const eventSelect = firstClient.query.mock.calls.find(([sql]) =>
+      `${sql}`.includes("FROM project_events_outbox"),
+    )?.[0];
+    expect(`${eventSelect}`).toContain("FOR UPDATE");
+    expect(`${eventSelect}`).not.toContain("SKIP LOCKED");
     expect(secondClient.query).toHaveBeenCalledWith("ROLLBACK");
 
     finishFirstSelect();

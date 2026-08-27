@@ -83,6 +83,19 @@ export function formatReceivablesError(error: unknown): string {
   return `${value}. Enable the corresponding Billing & Commerce → Accounts Receivable feature flag in Admin → Site Settings, then retry.`;
 }
 
+export function downloadBase64Pdf(content: string, filename: string): void {
+  const binary = atob(content);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  const url = URL.createObjectURL(
+    new Blob([bytes], { type: "application/pdf" }),
+  );
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 export function StateTriplet({
   order,
   compact = false,

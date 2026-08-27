@@ -331,6 +331,7 @@ function buildReconcileRequest({
       desired_account_ids:
         !student.deleted && student.account_id ? [student.account_id] : [],
       student_id: student.student_id,
+      student_deleted: student.deleted === true,
       student_email_address: student.email_address,
       send_email_invite: !student.deleted && student.send_email_invite === true,
       invite: input.settings.invite,

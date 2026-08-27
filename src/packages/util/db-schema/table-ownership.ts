@@ -372,6 +372,7 @@ export const TABLE_OWNERSHIP = {
       "buckets",
       "commercial_invoices",
       "commercial_order_contacts",
+      "commercial_order_documents",
       "commercial_order_events",
       "commercial_order_items",
       "commercial_orders",

@@ -3,7 +3,7 @@
 Floating panel from which you can select a tool.
 
 */
-import { Button, Typography } from "antd";
+import { Button, Divider, Typography } from "antd";
 import { ReactNode, useEffect } from "react";
 
 import { CSS } from "@cocalc/frontend/app-framework";
@@ -12,7 +12,7 @@ import { Icon } from "@cocalc/frontend/components/icon";
 import { r_join } from "@cocalc/frontend/components/r_join";
 import { useFrameContext } from "../hooks";
 import { MAX_ELEMENTS } from "../math";
-import { SELECTED } from "./common";
+import { SELECTED, SELECTED_FG } from "./common";
 import { Tool, TOOLS } from "./desc";
 export const PANEL_STYLE: CSS = {
   zIndex: MAX_ELEMENTS + 1,
@@ -71,6 +71,7 @@ export default function Panel({
         <ToolButton key={tool} tool={tool} isSelected={tool == selectedTool} />,
       );
     }
+    v.push(<SnapToggleButton key="snap-toggle" />);
   }
   return (
     <div
@@ -121,6 +122,43 @@ function ToolButton({ tool, isSelected }) {
         />
       </Button>
     </Tooltip>
+  );
+}
+
+export function SnapToggleButton() {
+  const { actions, id, desc } = useFrameContext();
+  const snapEnabled = desc.get("snapToAlignment") !== false;
+  return (
+    <>
+      <Divider style={{ margin: "2px 4px", minWidth: "auto", width: "auto" }} />
+      <Tooltip
+        placement="right"
+        title={
+          snapEnabled
+            ? "Snap to alignment enabled (hold Shift to move freely)"
+            : "Snap to alignment disabled"
+        }
+      >
+        <Button
+          type="text"
+          aria-label="Snap to alignment"
+          aria-pressed={snapEnabled}
+          onClick={() => {
+            actions.set_frame_tree({
+              id,
+              snapToAlignment: !snapEnabled,
+            });
+          }}
+          style={
+            snapEnabled
+              ? { color: SELECTED_FG, background: SELECTED }
+              : { opacity: 0.5 }
+          }
+        >
+          <Icon name="aim" style={{ fontSize: "16px" }} />
+        </Button>
+      </Tooltip>
+    </>
   );
 }
 

@@ -124,6 +124,9 @@ export type SiteSettingsKeys =
   | "commercial_receivables_mutations_enabled"
   | "commercial_receivables_stripe_drafts_enabled"
   | "commercial_receivables_stripe_send_enabled"
+  | "commercial_receivables_stripe_quotes_enabled"
+  | "commercial_receivables_stripe_quote_finalize_enabled"
+  | "commercial_receivables_stripe_quote_accept_enabled"
   | "commercial_receivables_manual_settlement_enabled"
   | "commercial_receivables_reconciliation_enabled"
   | "commercial_receivables_fulfillment_enabled"
@@ -1427,6 +1430,36 @@ export const site_settings_conf: SiteSettings = {
   commercial_receivables_stripe_send_enabled: {
     name: "Enable commercial Stripe invoice send",
     desc: "Allow fresh-auth admins to finalize, send, and void Stripe invoices for commercial orders.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization", "Stripe"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
+  commercial_receivables_stripe_quotes_enabled: {
+    name: "Enable commercial Stripe quote drafts",
+    desc: "Allow fresh-auth admins to create Stripe quote drafts from reviewed commercial orders. Drafts are not finalized or sent automatically.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization", "Stripe"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
+  commercial_receivables_stripe_quote_finalize_enabled: {
+    name: "Enable commercial Stripe quote finalization",
+    desc: "Allow fresh-auth admins to finalize Stripe quotes and retain their Stripe-generated PDFs. Enable only after confirming Stripe Invoicing Plus for live mode.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Commercialization", "Stripe"],
+    group: "Billing & Commerce",
+    subgroup: "Accounts Receivable",
+  },
+  commercial_receivables_stripe_quote_accept_enabled: {
+    name: "Enable commercial Stripe quote acceptance",
+    desc: "Allow fresh-auth admins to record reviewed customer acceptance in Stripe and adopt the generated draft invoice into Accounts Receivable. This never sends the invoice automatically.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,

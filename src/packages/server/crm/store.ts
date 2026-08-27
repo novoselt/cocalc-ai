@@ -154,8 +154,8 @@ function optionalBounded(
   return text;
 }
 
-function normalizeWebsite(value: unknown): string | null {
-  const text = optionalBounded(value, "website", 2_000);
+function normalizeHttpUrl(value: unknown, name: string): string | null {
+  const text = optionalBounded(value, name, 2_000);
   if (text == null) return null;
   const candidate = /^[a-z][a-z\d+.-]*:(?!\d)/i.test(text)
     ? text
@@ -164,17 +164,27 @@ function normalizeWebsite(value: unknown): string | null {
   try {
     url = new URL(candidate);
   } catch {
-    throw Error("website must be a valid HTTP or HTTPS URL");
+    throw Error(`${name} must be a valid HTTP or HTTPS URL`);
   }
   if (!["http:", "https:"].includes(url.protocol)) {
-    throw Error("website must use HTTP or HTTPS");
+    throw Error(`${name} must use HTTP or HTTPS`);
   }
   if (!url.hostname || url.username || url.password) {
     throw Error(
-      "website must be a public HTTP or HTTPS URL without credentials",
+      `${name} must be a public HTTP or HTTPS URL without credentials`,
     );
   }
-  return bounded(url.toString(), "website", 2_000);
+  return bounded(url.toString(), name, 2_000);
+}
+
+function normalizeWebsite(value: unknown): string | null {
+  return normalizeHttpUrl(value, "website");
+}
+
+function normalizePersonNote(value: unknown): string | null {
+  const note = optionalBounded(value, "note", 20_000);
+  assertSafeText(note, "note");
+  return note;
 }
 
 function assertSafeText(value: unknown, name: string): void {
@@ -900,8 +910,8 @@ export async function searchOrganizations(
         OR EXISTS (SELECT 1 FROM site_licenses sl WHERE sl.crm_organization_id=o.id AND (sl.id::text ILIKE $1 OR sl.name ILIKE $1)))`,
     );
   }
-  if (opts.account_id) {
-    values.push(opts.account_id);
+  if (opts.linked_account_id) {
+    values.push(opts.linked_account_id);
     clauses.push(
       `EXISTS (SELECT 1 FROM crm_organization_people r JOIN crm_person_accounts a ON a.person_id=r.person_id WHERE r.organization_id=o.id AND a.account_id=$${values.length}::uuid)`,
     );
@@ -2057,6 +2067,11 @@ export async function createPerson(
     : null;
   const proposed = {
     display_name: bounded(opts.display_name, "display_name", 500),
+    website: normalizeHttpUrl(opts.website, "website"),
+    linkedin_url: normalizeHttpUrl(opts.linkedin_url, "linkedin_url"),
+    facebook_url: normalizeHttpUrl(opts.facebook_url, "facebook_url"),
+    x_url: normalizeHttpUrl(opts.x_url, "x_url"),
+    note: normalizePersonNote(opts.note),
     timezone: optionalBounded(opts.timezone, "timezone", 100),
     organization_id: organizationId,
     email: opts.email ? normalizeEmail(opts.email) : null,
@@ -2086,8 +2101,21 @@ export async function createPerson(
     apply: async (client, eventId) => {
       const id = randomUUID();
       await client.query(
-        "INSERT INTO crm_people(id,display_name,timezone,created_by_account_id,updated_by_account_id) VALUES ($1,$2,$3,$4,$4)",
-        [id, proposed.display_name, proposed.timezone, opts.account_id],
+        `INSERT INTO crm_people
+          (id,display_name,website,linkedin_url,facebook_url,x_url,note,timezone,
+           created_by_account_id,updated_by_account_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
+        [
+          id,
+          proposed.display_name,
+          proposed.website,
+          proposed.linkedin_url,
+          proposed.facebook_url,
+          proposed.x_url,
+          proposed.note,
+          proposed.timezone,
+          opts.account_id,
+        ],
       );
       if (proposed.email)
         await client.query(
@@ -2139,13 +2167,30 @@ export async function updatePerson(
   await prepareRead(opts.reason);
   const id = await resolvePersonId(getPool(), opts.person);
   const changes: Json = {};
-  for (const key of ["display_name", "timezone", "status"])
+  for (const key of [
+    "display_name",
+    "website",
+    "linkedin_url",
+    "facebook_url",
+    "x_url",
+    "note",
+    "timezone",
+    "status",
+  ])
     if (Object.hasOwn(opts.changes, key))
       changes[key] = (opts.changes as any)[key];
   if (changes.display_name != null)
     changes.display_name = bounded(changes.display_name, "display_name", 500);
   if (Object.hasOwn(changes, "timezone"))
     changes.timezone = optionalBounded(changes.timezone, "timezone", 100);
+  for (const key of ["website", "linkedin_url", "facebook_url", "x_url"]) {
+    if (Object.hasOwn(changes, key)) {
+      changes[key] = normalizeHttpUrl(changes[key], key);
+    }
+  }
+  if (Object.hasOwn(changes, "note")) {
+    changes.note = normalizePersonNote(changes.note);
+  }
   if (
     changes.status != null &&
     !["active", "merged", "archived"].includes(`${changes.status}`)

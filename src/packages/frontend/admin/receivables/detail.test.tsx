@@ -21,6 +21,9 @@ const quotePreview = jest.fn();
 const issueQuote = jest.fn();
 const voidQuote = jest.fn();
 const quoteDocument = jest.fn();
+const uploadDocument = jest.fn();
+const voidDocument = jest.fn();
+const downloadDocument = jest.fn();
 const updateBillingDetails = jest.fn();
 const showSupportTicket = jest.fn();
 const getNames = jest.fn();
@@ -95,6 +98,9 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
           issueQuote: (...args: unknown[]) => issueQuote(...args),
           voidQuote: (...args: unknown[]) => voidQuote(...args),
           quoteDocument: (...args: unknown[]) => quoteDocument(...args),
+          uploadDocument: (...args: unknown[]) => uploadDocument(...args),
+          voidDocument: (...args: unknown[]) => voidDocument(...args),
+          downloadDocument: (...args: unknown[]) => downloadDocument(...args),
           updateBillingDetails: (...args: unknown[]) =>
             updateBillingDetails(...args),
           listAssignees: (...args: unknown[]) => listAssignees(...args),
@@ -149,6 +155,7 @@ const order: CommercialOrder = {
     },
   ],
   quotes: [],
+  documents: [],
   invoices: [
     {
       id: "invoice-1",
@@ -246,6 +253,35 @@ describe("receivable order detail", () => {
         name: /Open Stripe invoice PDF \(external\)/,
       }),
     ).toHaveAttribute("target", "_blank");
+  });
+
+  it("offers a reviewed purchase-order attachment workflow", async () => {
+    render(<ReceivableOrderDetail id={order.id} onBack={jest.fn()} />);
+
+    expect(
+      await screen.findByText("No purchase orders are attached"),
+    ).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: /Attach purchase order/ }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Attach purchase order",
+    });
+    expect(
+      within(dialog).getByText(
+        "This becomes part of the commercial audit record",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("checkbox", {
+        name: /I reviewed the PDF, purchase-order reference, and AR record/,
+      }),
+    ).not.toBeChecked();
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Attach PDF (fresh authentication required)",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("fresh-authenticates approval with the displayed order version", async () => {
