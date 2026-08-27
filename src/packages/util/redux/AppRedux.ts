@@ -85,6 +85,9 @@ export abstract class AppRedux implements AppReduxInterface {
       if (store == null) continue;
       const s = state.get(name);
       if (this.lastReduxState.get(name) !== s) {
+        // Update before notifying listeners so a nested dispatch cannot emit
+        // this same, unchanged store again.
+        this.lastReduxState = this.lastReduxState.set(name, s!);
         store._handle_store_change(s);
       }
     }

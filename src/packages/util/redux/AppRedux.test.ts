@@ -101,3 +101,28 @@ describe("AppRedux editor path fallback", () => {
     expect(app.getEditorActions(projectId, displayPath)).toBe(syncActions);
   });
 });
+
+describe("AppRedux nested store updates", () => {
+  it("does not emit an unchanged store again during a nested dispatch", () => {
+    const app = new TestAppRedux();
+    const first = app.createStore("first", undefined, { value: 0 });
+    const second = app.createStore("second", undefined, { value: 0 });
+    const firstValues: number[] = [];
+    const secondValues: number[] = [];
+
+    first.on("change", (state) => {
+      firstValues.push(state.get("value"));
+      if (firstValues.length === 1) {
+        second.setState({ value: 1 });
+      }
+    });
+    second.on("change", (state) => {
+      secondValues.push(state.get("value"));
+    });
+
+    first.setState({ value: 1 });
+
+    expect(firstValues).toEqual([1]);
+    expect(secondValues).toEqual([1]);
+  });
+});
