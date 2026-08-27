@@ -16,6 +16,8 @@ Label: <https://github.com/sagemathinc/cocalc/pulls?q=is%3Apr+label%3APR-TODO-co
    subsystem no longer exists at all, so there is nothing the idea could apply to).
 3. Consequence: the label is a *reference index*, not a work queue. Priorities live in
    §1b and the tier headings below, not in whether the label is present.
+4. The exception to (2) is a **design** that would be redone from scratch anyway — not
+   merely code that drifted. #8783 (OAuth2 provider) is the one case so far; see §6.
 
 ---
 
@@ -387,10 +389,20 @@ in §7.
 
 ---
 
-## 6. Still open upstream — can't port yet
+## 6. Still open upstream
 
-- **#8783** OAuth2 provider (OPEN, ~7000 lines) — would need a multibay review.
-- **#8636**, **#8815** — see §3 and §4; both wanted, both staged.
+- **#8636**, **#8815** — open upstream drafts, both **wanted**, both to be taken in
+  stages rather than ported wholesale. See §3 and §4.
+- **#8783** OAuth2 provider — **label removed deliberately** (Harald): *"either way,
+  if cocalc becomes an oauth2 provider, we'll do it differently."* This is the one
+  case where convention 2 does **not** apply: it is not that the code diverged, it is
+  that the *design* would be redone from scratch here — cocalc-ai's control plane is
+  multibay (which bay is authoritative for a client, a grant, a consent record?) and
+  routes through Conat RPC rather than the Next `/api/v2` routes the PR builds on
+  (`next/pages/api/v2/oauth2/*`), which do not exist here at all. So upstream's
+  ~7000-line implementation has little reference value beyond "cocalc once did this".
+  If we ever want CoCalc to *be* an authorization server, start from
+  `src/.agents/scalable-architecture.md`, not from #8783.
 
 ---
 
