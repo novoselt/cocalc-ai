@@ -22,6 +22,7 @@ import type {
   ComputeRevenueSeries,
   MembershipAllocationChannel,
   MembershipAllocationSeries,
+  SiteLicenseRevenueSeries,
 } from "@cocalc/conat/hub/api/purchases";
 import { Tooltip } from "@cocalc/frontend/components";
 import ShowError from "@cocalc/frontend/components/error";
@@ -54,6 +55,7 @@ import {
   type MembershipAnalyticsSummaryRow,
   type MembershipAnalyticsTier,
 } from "./membership-analytics-view";
+import { addSiteLicenseRevenueToAnalyticsView } from "./site-license-revenue-analytics-view";
 
 const { Text, Title } = Typography;
 const DAYS_IN_YEAR_COMPARISON = 364;
@@ -214,6 +216,10 @@ function formatMoneyCents(cents: number): string {
   }).format(cents / 100);
 }
 
+export function formatRevenueAnalyticsTableMoney(cents: number): string {
+  return cents === 0 ? "-" : formatMoneyCents(cents);
+}
+
 function formatInteger(value: number): string {
   return Math.round(value).toLocaleString("en-US");
 }
@@ -222,6 +228,14 @@ function formatComputeUnits(value: number): string {
   return value.toLocaleString("en-US", {
     maximumFractionDigits: value < 10 ? 2 : 1,
   });
+}
+
+function formatTableInteger(value: number): string {
+  return value === 0 ? "-" : formatInteger(value);
+}
+
+function formatTableComputeUnits(value: number): string {
+  return value === 0 ? "-" : formatComputeUnits(value);
 }
 
 function formatPercent(value: number): string {
@@ -256,6 +270,7 @@ function ComparisonValue({
 }) {
   if (previous === 0) return <Text type="secondary">-</Text>;
   const difference = current - previous;
+  if (difference === 0) return <Text type="secondary">-</Text>;
   const percent = (100 * difference) / Math.abs(previous);
   const color =
     difference > 0
@@ -269,6 +284,23 @@ function ComparisonValue({
       {format(difference)} ({formatPercent(percent)})
     </Text>
   );
+}
+
+export function siteLicenseAnalyticsTableRowExplanation(
+  row: MembershipAnalyticsSummaryRow,
+  breakdown: MembershipAnalyticsBreakdown,
+): string | undefined {
+  if (row.countApplicable === false) {
+    return breakdown === "channel" || breakdown === "source"
+      ? "Site license revenue is shown for the license as a whole. This row does not represent an assigned membership count."
+      : "Site license revenue is shown for the license as a whole. Membership counts are included in the tier breakdown.";
+  }
+  if (
+    row.channel === "site" &&
+    (breakdown === "channel-tier" || breakdown === "tier-channel")
+  ) {
+    return "Site license memberships are shown by tier. Revenue is shown separately for the license as a whole.";
+  }
 }
 
 function AnalyticsTable({
@@ -290,6 +322,7 @@ function AnalyticsTable({
   breakdown: MembershipAnalyticsBreakdown;
   countMode: "membership" | "compute" | "none";
 }) {
+  const notShown = () => <Text type="secondary">-</Text>;
   const categoryTitle =
     breakdown === "source"
       ? "Source"
@@ -327,7 +360,7 @@ function AnalyticsTable({
             dataIndex: "label",
             render: (label: string, row) => {
               const visual = visualByKey.get(row.key);
-              return (
+              const content = (
                 <Space>
                   {visual ? (
                     <MembershipAnalyticsSeriesSwatch
@@ -337,6 +370,19 @@ function AnalyticsTable({
                   ) : null}
                   <Text strong={row.total}>{label}</Text>
                 </Space>
+              );
+              const explanation = siteLicenseAnalyticsTableRowExplanation(
+                row,
+                breakdown,
+              );
+              return explanation ? (
+                <Tooltip title={explanation}>
+                  <div style={{ width: "100%" }} tabIndex={0}>
+                    {content}
+                  </div>
+                </Tooltip>
+              ) : (
+                content
               );
             },
           },
@@ -350,12 +396,15 @@ function AnalyticsTable({
                     value: number,
                     row: MembershipAnalyticsSummaryRow,
                   ) => {
+                    if (row.countApplicable === false) {
+                      return notShown();
+                    }
                     const assigned = formatInteger(value);
                     if (
                       (row.channel !== "team" && !teamOnly) ||
                       row.purchasedCapacity <= 0
                     ) {
-                      return assigned;
+                      return formatTableInteger(value);
                     }
                     const paid = formatInteger(row.purchasedCapacity);
                     return (
@@ -390,7 +439,7 @@ function AnalyticsTable({
                     dataIndex: "averageRunningUnits",
                     align: "right" as const,
                     render: (value: number | undefined) =>
-                      formatComputeUnits(value ?? 0),
+                      formatTableComputeUnits(value ?? 0),
                   },
                   {
                     title: (
@@ -401,7 +450,7 @@ function AnalyticsTable({
                     dataIndex: "distinctRunningUnits",
                     align: "right" as const,
                     render: (value: number | undefined) =>
-                      formatInteger(value ?? 0),
+                      formatTableInteger(value ?? 0),
                   },
                 ]
               : []),
@@ -411,13 +460,16 @@ function AnalyticsTable({
                   title: "Change",
                   key: "membershipChange",
                   align: "right" as const,
-                  render: (_: unknown, row: MembershipAnalyticsSummaryRow) => (
-                    <ComparisonValue
-                      current={row.activeMemberships}
-                      previous={row.comparisonActiveMemberships}
-                      format={formatInteger}
-                    />
-                  ),
+                  render: (_: unknown, row: MembershipAnalyticsSummaryRow) =>
+                    row.countApplicable === false ? (
+                      notShown()
+                    ) : (
+                      <ComparisonValue
+                        current={row.activeMemberships}
+                        previous={row.comparisonActiveMemberships}
+                        format={formatInteger}
+                      />
+                    ),
                 },
               ]
             : []),
@@ -425,7 +477,7 @@ function AnalyticsTable({
             title: "Revenue/day",
             dataIndex: "revenueCents",
             align: "right",
-            render: formatMoneyCents,
+            render: formatRevenueAnalyticsTableMoney,
           },
           ...(comparison
             ? [
@@ -448,7 +500,7 @@ function AnalyticsTable({
             dataIndex: "revenueCents",
             align: "right",
             render: (value: number) =>
-              formatMoneyCents(value * MONTHLY_EQUIVALENT_DAYS),
+              formatRevenueAnalyticsTableMoney(value * MONTHLY_EQUIVALENT_DAYS),
           },
         ]}
       />
@@ -469,6 +521,8 @@ export function RevenueAnalyticsDashboard({
     useState<MembershipAllocationSeries | null>(null);
   const [computeAllocation, setComputeAllocation] =
     useState<ComputeRevenueSeries | null>(null);
+  const [siteLicenseRevenue, setSiteLicenseRevenue] =
+    useState<SiteLicenseRevenueSeries | null>(null);
   const [tiers, setTiers] = useState<MembershipAnalyticsTier[]>([]);
   const [period, setPeriod] = useState<Period>("year");
   const [comparison, setComparison] = useState<Comparison>(364);
@@ -488,22 +542,30 @@ export function RevenueAnalyticsDashboard({
     setError("");
     try {
       const end = shiftMembershipAnalyticsDay(todayUtc(), 1);
-      const [allocationResult, computeResult, tierResult] = await Promise.all([
-        webapp_client.conat_client.hub.purchases.getMembershipAllocationSeries({
-          start,
-          end,
-        }),
-        webapp_client.conat_client.hub.purchases.getComputeRevenueSeries({
-          start,
-          end: todayUtc(),
-        }),
-        webapp_client.conat_client.hub.purchases.getMembershipTierAdminOverview(
-          {},
-        ),
-      ]);
+      const [allocationResult, computeResult, siteRevenueResult, tierResult] =
+        await Promise.all([
+          webapp_client.conat_client.hub.purchases.getMembershipAllocationSeries(
+            {
+              start,
+              end,
+            },
+          ),
+          webapp_client.conat_client.hub.purchases.getComputeRevenueSeries({
+            start,
+            end: todayUtc(),
+          }),
+          webapp_client.conat_client.hub.purchases.getSiteLicenseRevenueSeries({
+            start,
+            end,
+          }),
+          webapp_client.conat_client.hub.purchases.getMembershipTierAdminOverview(
+            {},
+          ),
+        ]);
       if (sequence !== loadSequence.current) return;
       setAllocation(allocationResult);
       setComputeAllocation(computeResult);
+      setSiteLicenseRevenue(siteRevenueResult);
       setTiers(tierMetadata(tierResult.tiers ?? []));
       setAllHistoryLoaded(start === fullHistoryStart());
     } catch (err) {
@@ -541,6 +603,9 @@ export function RevenueAnalyticsDashboard({
     computeAllocation?.usage.filter(({ product }) =>
       selectedComputeProducts.has(product),
     ) ?? [];
+  const selectedSiteLicenseRevenue = selectedChannels.has("site")
+    ? (siteLicenseRevenue?.rows ?? [])
+    : [];
   const hasMemberships = channels.length > 0;
   const hasCompute = computeProducts.length > 0;
   const mixedProducts = hasMemberships && hasCompute;
@@ -556,6 +621,9 @@ export function RevenueAnalyticsDashboard({
   const sourceDays = [
     ...selectedRows.map(({ day }) => new Date(day).toISOString().slice(0, 10)),
     ...selectedComputeRevenue.map(({ day }) =>
+      new Date(day).toISOString().slice(0, 10),
+    ),
+    ...selectedSiteLicenseRevenue.map(({ day }) =>
       new Date(day).toISOString().slice(0, 10),
     ),
   ];
@@ -577,8 +645,8 @@ export function RevenueAnalyticsDashboard({
     : hasCompute
       ? computeHistoryStart
       : membershipHistoryStart;
-  const view =
-    allocation && computeAllocation && end && start <= end
+  const baseView =
+    allocation && computeAllocation && siteLicenseRevenue && end && start <= end
       ? mixedProducts
         ? buildCombinedRevenueAnalyticsView({
             memberships: selectedRows,
@@ -611,6 +679,15 @@ export function RevenueAnalyticsDashboard({
               })
             : undefined
       : undefined;
+  const view =
+    baseView && selectedChannels.has("site")
+      ? addSiteLicenseRevenueToAnalyticsView({
+          view: baseView,
+          rows: selectedSiteLicenseRevenue,
+          breakdown: effectiveBreakdown,
+          comparisonDays: comparison,
+        })
+      : baseView;
   const visuals = view
     ? buildMembershipAnalyticsSeriesVisuals({
         series: view.series,
@@ -630,7 +707,11 @@ export function RevenueAnalyticsDashboard({
       rows.findIndex((row) => row.bay_id === bay_id) === index,
   );
   const exportPayload =
-    allocation && channels.length && !hasCompute && !failedBays.length
+    allocation &&
+    channels.length &&
+    !hasCompute &&
+    !selectedChannels.has("site") &&
+    !failedBays.length
       ? buildMembershipAllocationDailyExport({
           rows: selectedRows,
           tiers,
@@ -640,11 +721,17 @@ export function RevenueAnalyticsDashboard({
         })
       : undefined;
   const revenueExportPayload =
-    allocation && computeAllocation && hasCompute && end && !failedBays.length
+    allocation &&
+    computeAllocation &&
+    siteLicenseRevenue &&
+    (hasCompute || selectedChannels.has("site")) &&
+    end &&
+    !failedBays.length
       ? buildRevenueAnalyticsDailyExport({
           membershipRows: selectedRows,
           computeRevenueRows: selectedComputeRevenue,
           computeUsageRows: selectedComputeUsage,
+          siteLicenseRevenueRows: selectedSiteLicenseRevenue,
           membershipChannels: channels,
           computeProducts,
           tiers,
@@ -734,7 +821,7 @@ export function RevenueAnalyticsDashboard({
             }
           />
         </Space>
-        {hasCompute ? (
+        {hasCompute || selectedChannels.has("site") ? (
           <RevenueAnalyticsExport
             payload={revenueExportPayload}
             disabled={loading}
