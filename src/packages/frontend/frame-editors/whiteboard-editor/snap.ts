@@ -52,6 +52,15 @@ interface SnapTarget {
   position: number; // the coordinate value to snap to
 }
 
+function isSnapTarget(element: Element): boolean {
+  return (
+    isFinite(element.z) &&
+    element.type !== "edge" &&
+    !element.invisible &&
+    !element.hide?.frame
+  );
+}
+
 // Given a dragged element's current rect (after applying raw offset),
 // compute snap adjustments and guide lines.
 export function computeSnap({
@@ -247,8 +256,7 @@ function collectSnapTargets(
 
   // Element targets
   for (const el of elements) {
-    if (!isFinite(el.z)) continue; // skip slide base layers
-    if (el.type === "edge") continue; // edges don't have meaningful bounds
+    if (!isSnapTarget(el)) continue;
     const pos = getPosition(el);
 
     // Left, center, right
@@ -295,7 +303,7 @@ function getVerticalLineExtent(
   let end = snappedRect.y + snappedRect.h;
 
   for (const el of otherElements) {
-    if (!isFinite(el.z) || el.type === "edge") continue;
+    if (!isSnapTarget(el)) continue;
     const pos = getPosition(el);
     const elLeft = pos.x;
     const elCenter = pos.x + pos.w / 2;
@@ -337,7 +345,7 @@ function getHorizontalLineExtent(
   let end = snappedRect.x + snappedRect.w;
 
   for (const el of otherElements) {
-    if (!isFinite(el.z) || el.type === "edge") continue;
+    if (!isSnapTarget(el)) continue;
     const pos = getPosition(el);
     const elTop = pos.y;
     const elCenter = pos.y + pos.h / 2;

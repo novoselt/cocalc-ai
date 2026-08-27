@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useRef,
+  useState,
 } from "react";
 import { getElement } from "./tools/tool-panel";
 import Draggable from "react-draggable";
@@ -46,6 +47,14 @@ export default function NotFocused({
   const { id } = element;
   const nodeRef = useRef<any>({});
   const snapRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+  const [snapOffset, setSnapOffset] = useState({ dx: 0, dy: 0 });
+
+  const updateSnapOffset = useCallback((offset: { dx: number; dy: number }) => {
+    snapRef.current = offset;
+    setSnapOffset((current) =>
+      current.dx === offset.dx && current.dy === offset.dy ? current : offset,
+    );
+  }, []);
 
   // Clear snap lines if this component unmounts mid-drag, mirroring focused.tsx
   useEffect(() => {
@@ -58,7 +67,7 @@ export default function NotFocused({
   const computeSnapForDrag = useCallback(
     (data: { x: number; y: number }) => {
       if (!snapEnabled || !allElements || shiftKeyRef.current) {
-        snapRef.current = { dx: 0, dy: 0 };
+        updateSnapOffset({ dx: 0, dy: 0 });
         setSnapLines?.([]);
         return;
       }
@@ -80,10 +89,18 @@ export default function NotFocused({
         canvasScale,
         gridEnabled,
       });
-      snapRef.current = { dx: result.dx, dy: result.dy };
+      updateSnapOffset({ dx: result.dx, dy: result.dy });
       setSnapLines?.(result.lines);
     },
-    [element, allElements, snapEnabled, gridEnabled, setSnapLines, canvasScale],
+    [
+      element,
+      allElements,
+      snapEnabled,
+      gridEnabled,
+      setSnapLines,
+      canvasScale,
+      updateSnapOffset,
+    ],
   );
 
   // Right after dragging, we ignore the onClick so the object doesn't get selected:
@@ -126,6 +143,9 @@ export default function NotFocused({
           : undefined
       }
       style={{
+        position: "relative",
+        left: snapOffset.dx,
+        top: snapOffset.dy,
         width: "100%",
         height: "100%",
         cursor: selectable && isFinite(element.z) ? "pointer" : undefined,
@@ -152,7 +172,7 @@ export default function NotFocused({
       scale={canvasScale}
       disabled={disableDrag}
       onStart={(e) => {
-        snapRef.current = { dx: 0, dy: 0 };
+        updateSnapOffset({ dx: 0, dy: 0 });
         shiftKeyRef.current = !!(e as MouseEvent).shiftKey;
       }}
       onStop={(e, data) => {
@@ -173,6 +193,7 @@ export default function NotFocused({
         // Last, and in both branches: computeSnapForDrag above sets the guides
         // for its final position, so clearing any earlier would be undone by
         // it, and the null-drag branch would never clear them at all.
+        updateSnapOffset({ dx: 0, dy: 0 });
         setSnapLines?.([]);
       }}
       onDrag={(e, data) => {

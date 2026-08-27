@@ -147,6 +147,20 @@ describe("computeSnap alignment", () => {
     });
     expect(dx).toBe(-2);
   });
+
+  it("does not snap to elements hidden inside a frame", () => {
+    const hidden = {
+      ...elt(0, 200, 50, 50, "hidden"),
+      hide: { frame: "frame-1" },
+    };
+    const result = computeSnap({
+      movingRect: rect(3, 200),
+      otherElements: [hidden],
+      canvasScale: 1,
+    });
+    expect(result.dx).toBe(0);
+    expect(result.lines).toHaveLength(0);
+  });
 });
 
 describe("computeSnap grid transitions", () => {

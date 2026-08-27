@@ -104,7 +104,15 @@ export default function Focused({
   const hidden = isHidden(selectedElements);
   const nodeRef = useRef<any>({});
   const snapRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+  const [snapOffset, setSnapOffset] = useState({ dx: 0, dy: 0 });
   const shiftKeyRef = useRef<boolean>(false);
+
+  const updateSnapOffset = useCallback((offset: { dx: number; dy: number }) => {
+    snapRef.current = offset;
+    setSnapOffset((current) =>
+      current.dx === offset.dx && current.dy === offset.dy ? current : offset,
+    );
+  }, []);
 
   // Clear snap lines if this component unmounts mid-drag
   useEffect(() => {
@@ -116,7 +124,7 @@ export default function Focused({
   const computeSnapForDrag = useCallback(
     (data: { x: number; y: number }) => {
       if (!snapEnabled || shiftKeyRef.current) {
-        snapRef.current = { dx: 0, dy: 0 };
+        updateSnapOffset({ dx: 0, dy: 0 });
         setSnapLines?.([]);
         return;
       }
@@ -151,7 +159,7 @@ export default function Focused({
         gridEnabled,
       });
 
-      snapRef.current = { dx: result.dx, dy: result.dy };
+      updateSnapOffset({ dx: result.dx, dy: result.dy });
       setSnapLines?.(result.lines);
     },
     [
@@ -162,6 +170,7 @@ export default function Focused({
       gridEnabled,
       setSnapLines,
       canvasScale,
+      updateSnapOffset,
     ],
   );
 
@@ -392,7 +401,7 @@ export default function Focused({
         scale={canvasScale}
         onStart={(e) => {
           setDragging(true);
-          snapRef.current = { dx: 0, dy: 0 };
+          updateSnapOffset({ dx: 0, dy: 0 });
           shiftKeyRef.current = !!(e as MouseEvent).shiftKey;
         }}
         onDrag={(e, data) => {
@@ -405,6 +414,7 @@ export default function Focused({
           computeSnapForDrag(data);
           const snap = snapRef.current;
           setDragging(false);
+          updateSnapOffset({ dx: 0, dy: 0 });
           setSnapLines?.([]);
           frame.actions.moveElements(selectedElements, {
             x: data.x + snap.dx,
@@ -417,6 +427,8 @@ export default function Focused({
           style={{
             cursor: locked ? undefined : "grab",
             position: "relative",
+            left: snapOffset.dx,
+            top: snapOffset.dy,
             ...(rotating
               ? {
                   border: `${SELECTED_BORDER_WIDTH / canvasScale}px ${

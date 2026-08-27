@@ -93,12 +93,21 @@ describe("Arrow geometry", () => {
 
   it("exposes edge selection as a button with an accessible name", () => {
     render(
-      <Arrow start={{ x: 0, y: 0 }} end={{ x: 100, y: 0 }} onClick={() => {}} />,
+      <Arrow
+        start={{ x: 0, y: 0 }}
+        end={{ x: 100, y: 0 }}
+        onClick={() => {}}
+      />,
     );
     const button = screen.getByRole("button", { name: "Edge" });
     // a native button, so Enter/Space activate it without extra key handling
     expect(button.tagName).toBe("BUTTON");
     expect(button.getAttribute("type")).toBe("button");
+  });
+
+  it("keeps visible geometry from intercepting pointer selection", () => {
+    const { group } = draw({ onClick: () => {} });
+    expect(group.style.pointerEvents).toBe("none");
   });
 
   it("accepts a caller-supplied accessible name", () => {
@@ -110,7 +119,9 @@ describe("Arrow geometry", () => {
         ariaLabel="Edge from A to B"
       />,
     );
-    expect(screen.getByRole("button", { name: "Edge from A to B" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Edge from A to B" }),
+    ).toBeTruthy();
   });
 
   it("is focusable and activates from the keyboard path", () => {
@@ -129,7 +140,11 @@ describe("Arrow geometry", () => {
 
   it("does not suppress the focus ring", () => {
     render(
-      <Arrow start={{ x: 0, y: 0 }} end={{ x: 100, y: 0 }} onClick={() => {}} />,
+      <Arrow
+        start={{ x: 0, y: 0 }}
+        end={{ x: 100, y: 0 }}
+        onClick={() => {}}
+      />,
     );
     const button = screen.getByRole("button", { name: "Edge" });
     expect(button.style.outline).toBe("");

@@ -54,15 +54,27 @@ jest.mock("./style", () => ({
   default: () => ({}),
 }));
 
-let observerCallbacks: (() => void)[] = [];
+let observers: FakeResizeObserver[] = [];
 
 class FakeResizeObserver {
-  constructor(cb: () => void) {
-    observerCallbacks.push(cb);
+  private active = true;
+
+  constructor(private readonly callback: () => void) {
+    observers.push(this);
   }
   observe() {}
-  disconnect() {}
+  disconnect() {
+    this.active = false;
+  }
   unobserve() {}
+
+  trigger() {
+    if (this.active) this.callback();
+  }
+}
+
+function triggerResize() {
+  observers.forEach((observer) => observer.trigger());
 }
 
 function setScrollHeight(el: Element, value: number) {
@@ -107,7 +119,7 @@ function renderCell({
 describe("whiteboard Jupyter cell height sync", () => {
   beforeEach(() => {
     jest.useFakeTimers();
-    observerCallbacks = [];
+    observers = [];
     setElement.mockClear();
     (global as any).ResizeObserver = FakeResizeObserver;
   });
@@ -122,7 +134,7 @@ describe("whiteboard Jupyter cell height sync", () => {
     renderCell({ h: 200, outerScrollHeight: 200, innerScrollHeight: 100 });
 
     act(() => {
-      observerCallbacks.forEach((cb) => cb());
+      triggerResize();
       // shrink is debounced by 250ms
       jest.advanceTimersByTime(300);
     });
@@ -138,7 +150,7 @@ describe("whiteboard Jupyter cell height sync", () => {
     renderCell({ h: 200, outerScrollHeight: 200, innerScrollHeight: 100 });
 
     act(() => {
-      observerCallbacks.forEach((cb) => cb());
+      triggerResize();
       jest.advanceTimersByTime(300);
     });
 
@@ -151,7 +163,7 @@ describe("whiteboard Jupyter cell height sync", () => {
     renderCell({ h: 200, outerScrollHeight: 200, innerScrollHeight: 199 });
 
     act(() => {
-      observerCallbacks.forEach((cb) => cb());
+      triggerResize();
       jest.advanceTimersByTime(300);
     });
 
@@ -164,7 +176,7 @@ describe("whiteboard Jupyter cell height sync", () => {
     renderCell({ h: 200, outerScrollHeight: 202, innerScrollHeight: 202 });
 
     act(() => {
-      observerCallbacks.forEach((cb) => cb());
+      triggerResize();
       jest.advanceTimersByTime(300);
     });
 
@@ -175,7 +187,7 @@ describe("whiteboard Jupyter cell height sync", () => {
     renderCell({ h: 200, outerScrollHeight: 320, innerScrollHeight: 320 });
 
     act(() => {
-      observerCallbacks.forEach((cb) => cb());
+      triggerResize();
     });
 
     expect(setElement).toHaveBeenCalledWith(
@@ -189,11 +201,34 @@ describe("whiteboard Jupyter cell height sync", () => {
     renderCell({ h: 200, outerScrollHeight: 200, innerScrollHeight: 4 });
 
     act(() => {
-      observerCallbacks.forEach((cb) => cb());
+      triggerResize();
       jest.advanceTimersByTime(300);
     });
 
     const call = setElement.mock.calls.find((c) => c[0]?.obj?.h != null);
     expect(call?.[0].obj.h).toBe(78);
+  });
+
+  it("continues measuring completed unfocused cells after five seconds", () => {
+    const { outer, inner } = renderCell({
+      h: 200,
+      outerScrollHeight: 200,
+      innerScrollHeight: 200,
+    });
+
+    act(() => {
+      jest.advanceTimersByTime(6000);
+    });
+    setScrollHeight(outer, 320);
+    setScrollHeight(inner, 320);
+    act(() => {
+      triggerResize();
+    });
+
+    expect(setElement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        obj: expect.objectContaining({ id: "e1", h: 320 }),
+      }),
+    );
   });
 });

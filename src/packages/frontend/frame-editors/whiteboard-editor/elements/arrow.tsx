@@ -97,6 +97,7 @@ export default function Arrow({
           position: "relative",
           marginRight: `${tipLength}px`,
           opacity,
+          pointerEvents: "none",
         }}
       >
         <div

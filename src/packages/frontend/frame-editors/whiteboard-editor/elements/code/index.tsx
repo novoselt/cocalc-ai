@@ -192,31 +192,12 @@ export default function Code({
     // (e.g. CodeMirror editor, output rendering).
     const raf = requestAnimationFrame(sync);
 
-    // For unfocused cells, disconnect after 5s unless a computation is
-    // running (output may still be streaming in).
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    if (!focused) {
-      const isRunning =
-        element.data?.runState != null && element.data?.runState !== "done";
-      if (!isRunning) {
-        timeout = setTimeout(() => observer.disconnect(), 5000);
-      }
-    }
-
     return () => {
       observer.disconnect();
       shrink.cancel();
       cancelAnimationFrame(raf);
-      if (timeout != null) clearTimeout(timeout);
     };
-  }, [
-    focused,
-    element.id,
-    canvasScale,
-    editFocus,
-    readOnly,
-    element.data?.runState,
-  ]);
+  }, [focused, element.id, canvasScale, editFocus, readOnly]);
 
   return (
     <div

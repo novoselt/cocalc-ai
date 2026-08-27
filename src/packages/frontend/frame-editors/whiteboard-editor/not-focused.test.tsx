@@ -14,7 +14,7 @@ Two regressions are covered here:
     on screen.
 */
 
-import { render } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 
 import NotFocused from "./not-focused";
 
@@ -69,6 +69,29 @@ function mount({ snapEnabled = true }: { snapEnabled?: boolean } = {}) {
   );
 }
 
+function mountNearSnapTarget() {
+  jest.clearAllMocks();
+  draggableProps = {};
+  return render(
+    <NotFocused
+      element={element as any}
+      canvasScale={1}
+      frame={{ actions: { moveElements }, id: "frame-1" } as any}
+      allElements={
+        [
+          element,
+          { id: "e2", x: 150, y: 0, w: 100, h: 50, z: 0, type: "text" },
+        ] as any
+      }
+      setSnapLines={setSnapLines}
+      snapEnabled
+      selectable
+    >
+      <div>content</div>
+    </NotFocused>,
+  );
+}
+
 function lastSnapLinesCall() {
   const calls = setSnapLines.mock.calls;
   return calls.length ? calls[calls.length - 1][0] : undefined;
@@ -108,5 +131,26 @@ describe("NotFocused snap guide lifecycle", () => {
     setSnapLines.mockClear();
     unmount();
     expect(setSnapLines).toHaveBeenCalledWith([]);
+  });
+
+  it("previews the snap offset while dragging and clears it on drop", () => {
+    mountNearSnapTarget();
+    const body = screen.getByText("content").parentElement as HTMLElement;
+
+    act(() => {
+      draggableProps.onStart?.(evt());
+      // The moving right edge is x=143, seven units from e2's left edge.
+      draggableProps.onDrag?.(evt(), { x: 43, y: 0 });
+    });
+    expect(body.style.left).toBe("7px");
+
+    act(() => {
+      draggableProps.onStop?.(evt(), { x: 43, y: 0 });
+    });
+    expect(body.style.left).toBe("0px");
+    expect(moveElements).toHaveBeenCalledWith(
+      [element],
+      expect.objectContaining({ x: 50 }),
+    );
   });
 });
