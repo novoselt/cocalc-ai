@@ -178,6 +178,7 @@ import type {
   SiteLicenseExternalClaimKey,
   SiteLicenseExternalClaimPool,
   SiteLicenseExternalClaimSigningAlgorithm,
+  SiteLicenseRevenuePeriod,
   SiteLicenseManagerRole,
   SiteLicenseOverview,
   SiteLicensePoolConfig,
@@ -187,6 +188,11 @@ import type {
   SiteLicenseAccountDetails,
   SiteLicensePoolAccountSearchResult,
 } from "@cocalc/conat/hub/api/purchases";
+import {
+  deleteSiteLicenseRevenuePeriod as deleteSiteLicenseRevenuePeriod0,
+  listSiteLicenseRevenuePeriods as listSiteLicenseRevenuePeriods0,
+  saveSiteLicenseRevenuePeriod as saveSiteLicenseRevenuePeriod0,
+} from "@cocalc/server/membership/site-license-revenue-periods";
 import { searchClusterAccounts } from "@cocalc/server/inter-bay/accounts";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
 
@@ -2540,6 +2546,133 @@ export async function updateSiteLicense({
     return await getSeedSiteLicenseClient().updateSiteLicense(opts);
   }
   return await updateSiteLicense0(opts);
+}
+
+export async function listSiteLicenseRevenuePeriods({
+  account_id,
+  site_license_id,
+}: {
+  account_id?: string;
+  site_license_id?: string;
+} = {}): Promise<SiteLicenseRevenuePeriod[]> {
+  const actorId = requireAccount(account_id);
+  if (!(await isAdmin(actorId))) {
+    throw Error("must be an admin");
+  }
+  const siteLicenseId = `${site_license_id ?? ""}`.trim();
+  if (!siteLicenseId) throw Error("site_license_id required");
+  if (!isSeedBay()) {
+    return await getSeedSiteLicenseClient().listSiteLicenseRevenuePeriods({
+      actor_account_id: actorId,
+      site_license_id: siteLicenseId,
+      trusted_admin: true,
+    });
+  }
+  return await listSiteLicenseRevenuePeriods0({
+    actor_account_id: actorId,
+    site_license_id: siteLicenseId,
+  });
+}
+
+export async function saveSiteLicenseRevenuePeriod({
+  account_id,
+  browser_id,
+  session_hash,
+  site_license_id,
+  period_id,
+  starts_on,
+  ends_on,
+  amount_cents,
+  invoice_number,
+  notes,
+  metadata,
+}: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string | null;
+  site_license_id?: string;
+  period_id?: string;
+  starts_on?: Date | string;
+  ends_on?: Date | string;
+  amount_cents?: number;
+  invoice_number?: string | null;
+  notes?: string | null;
+  metadata?: Record<string, unknown> | null;
+} = {}): Promise<SiteLicenseRevenuePeriod> {
+  const actorId = requireAccount(account_id);
+  if (!(await isAdmin(actorId))) {
+    throw Error("must be an admin");
+  }
+  await validatePurchaseFreshAuth({
+    account_id: actorId,
+    browser_id,
+    session_hash,
+    allow_actor_impersonation: false,
+  });
+  const siteLicenseId = `${site_license_id ?? ""}`.trim();
+  if (!siteLicenseId) throw Error("site_license_id required");
+  if (starts_on == null) throw Error("starts_on required");
+  if (ends_on == null) throw Error("ends_on required");
+  if (amount_cents == null) throw Error("amount_cents required");
+  const opts = {
+    actor_account_id: actorId,
+    site_license_id: siteLicenseId,
+    period_id: `${period_id ?? ""}`.trim() || undefined,
+    starts_on,
+    ends_on,
+    amount_cents,
+    invoice_number,
+    notes,
+    metadata,
+  };
+  if (!isSeedBay()) {
+    return await getSeedSiteLicenseClient().saveSiteLicenseRevenuePeriod({
+      ...opts,
+      trusted_admin: true,
+    });
+  }
+  return await saveSiteLicenseRevenuePeriod0(opts);
+}
+
+export async function deleteSiteLicenseRevenuePeriod({
+  account_id,
+  browser_id,
+  session_hash,
+  site_license_id,
+  period_id,
+}: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string | null;
+  site_license_id?: string;
+  period_id?: string;
+} = {}): Promise<{ deleted: boolean }> {
+  const actorId = requireAccount(account_id);
+  if (!(await isAdmin(actorId))) {
+    throw Error("must be an admin");
+  }
+  await validatePurchaseFreshAuth({
+    account_id: actorId,
+    browser_id,
+    session_hash,
+    allow_actor_impersonation: false,
+  });
+  const siteLicenseId = `${site_license_id ?? ""}`.trim();
+  const periodId = `${period_id ?? ""}`.trim();
+  if (!siteLicenseId) throw Error("site_license_id required");
+  if (!periodId) throw Error("period_id required");
+  const opts = {
+    actor_account_id: actorId,
+    site_license_id: siteLicenseId,
+    period_id: periodId,
+  };
+  if (!isSeedBay()) {
+    return await getSeedSiteLicenseClient().deleteSiteLicenseRevenuePeriod({
+      ...opts,
+      trusted_admin: true,
+    });
+  }
+  return await deleteSiteLicenseRevenuePeriod0(opts);
 }
 
 export async function addSiteLicensePool({

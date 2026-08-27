@@ -791,6 +791,21 @@ export interface SiteLicenseRecord {
   updated?: Date;
 }
 
+export interface SiteLicenseRevenuePeriod {
+  id: string;
+  site_license_id: string;
+  starts_on: string;
+  ends_on: string;
+  amount_cents: number;
+  invoice_number?: string | null;
+  notes?: string | null;
+  metadata?: Record<string, unknown> | null;
+  created_by_account_id?: string | null;
+  updated_by_account_id?: string | null;
+  created?: Date;
+  updated?: Date;
+}
+
 export interface SiteLicenseManager {
   id: string;
   site_license_id: string;
@@ -1791,6 +1806,30 @@ export interface Purchases {
     starts_at?: Date | string | null;
     expires_at?: Date | string | null;
   }) => Promise<SiteLicenseOverview>;
+  listSiteLicenseRevenuePeriods: (opts?: {
+    account_id?: string;
+    site_license_id?: string;
+  }) => Promise<SiteLicenseRevenuePeriod[]>;
+  saveSiteLicenseRevenuePeriod: (opts?: {
+    account_id?: string;
+    browser_id?: string;
+    session_hash?: string | null;
+    site_license_id?: string;
+    period_id?: string;
+    starts_on?: Date | string;
+    ends_on?: Date | string;
+    amount_cents?: number;
+    invoice_number?: string | null;
+    notes?: string | null;
+    metadata?: Record<string, unknown> | null;
+  }) => Promise<SiteLicenseRevenuePeriod>;
+  deleteSiteLicenseRevenuePeriod: (opts?: {
+    account_id?: string;
+    browser_id?: string;
+    session_hash?: string | null;
+    site_license_id?: string;
+    period_id?: string;
+  }) => Promise<{ deleted: boolean }>;
   addSiteLicensePool: (opts?: {
     account_id?: string;
     browser_id?: string;
@@ -2006,6 +2045,9 @@ export const purchases = {
   listSiteLicenseOverviews: authFirst,
   getSiteLicenseOverview: authFirst,
   updateSiteLicense: authFirst,
+  listSiteLicenseRevenuePeriods: authFirst,
+  saveSiteLicenseRevenuePeriod: authFirst,
+  deleteSiteLicenseRevenuePeriod: authFirst,
   addSiteLicensePool: authFirst,
   createSiteLicenseExternalClaimPool: authFirst,
   addSiteLicenseExternalClaimKey: authFirst,

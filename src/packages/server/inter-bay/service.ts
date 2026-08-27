@@ -246,6 +246,11 @@ import {
   updateSiteLicensePool,
 } from "@cocalc/server/membership/site-licenses";
 import {
+  deleteSiteLicenseRevenuePeriod,
+  listSiteLicenseRevenuePeriods,
+  saveSiteLicenseRevenuePeriod,
+} from "@cocalc/server/membership/site-license-revenue-periods";
+import {
   addSiteLicenseExternalClaimKey,
   consumeSiteLicenseExternalClaimToken,
   createSiteLicenseExternalClaimPool,
@@ -1393,6 +1398,27 @@ async function startAccountLocalService(): Promise<void> {
       isSeedSiteLicenseBay()
         ? await updateSiteLicense(opts)
         : await getSeedSiteLicenseClient().updateSiteLicense(opts),
+    listSiteLicenseRevenuePeriods: async (opts) =>
+      isSeedSiteLicenseBay()
+        ? await listSiteLicenseRevenuePeriods({
+            ...opts,
+            trusted_admin: true,
+          })
+        : await getSeedSiteLicenseClient().listSiteLicenseRevenuePeriods(opts),
+    saveSiteLicenseRevenuePeriod: async (opts) =>
+      isSeedSiteLicenseBay()
+        ? await saveSiteLicenseRevenuePeriod({
+            ...opts,
+            trusted_admin: true,
+          })
+        : await getSeedSiteLicenseClient().saveSiteLicenseRevenuePeriod(opts),
+    deleteSiteLicenseRevenuePeriod: async (opts) =>
+      isSeedSiteLicenseBay()
+        ? await deleteSiteLicenseRevenuePeriod({
+            ...opts,
+            trusted_admin: true,
+          })
+        : await getSeedSiteLicenseClient().deleteSiteLicenseRevenuePeriod(opts),
     addSiteLicensePool: async (opts) =>
       isSeedSiteLicenseBay()
         ? await addSiteLicensePool(opts)

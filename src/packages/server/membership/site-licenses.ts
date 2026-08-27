@@ -414,6 +414,45 @@ async function ensureSiteLicenseSchemaWithClient(db: Queryable): Promise<void> {
     "CREATE INDEX IF NOT EXISTS site_license_audit_log_action_idx ON site_license_audit_log (action)",
   );
   await db.query(`
+    CREATE TABLE IF NOT EXISTS site_license_revenue_periods (
+      id UUID PRIMARY KEY,
+      site_license_id UUID NOT NULL REFERENCES site_licenses(id) ON DELETE CASCADE,
+      starts_on DATE NOT NULL,
+      ends_on DATE NOT NULL,
+      amount_cents BIGINT NOT NULL,
+      invoice_number TEXT,
+      notes TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_by_account_id UUID,
+      updated_by_account_id UUID,
+      created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (ends_on >= starts_on),
+      CHECK (amount_cents >= 0)
+    )
+  `);
+  await db.query(
+    "CREATE INDEX IF NOT EXISTS site_license_revenue_periods_license_idx ON site_license_revenue_periods (site_license_id, starts_on DESC, ends_on DESC)",
+  );
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS site_license_revenue_period_audit_log (
+      id UUID PRIMARY KEY,
+      site_license_id UUID NOT NULL,
+      period_id UUID NOT NULL,
+      action TEXT NOT NULL,
+      actor_account_id UUID,
+      before_value JSONB,
+      after_value JSONB,
+      created TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.query(
+    "CREATE INDEX IF NOT EXISTS site_license_revenue_period_audit_license_idx ON site_license_revenue_period_audit_log (site_license_id, created DESC)",
+  );
+  await db.query(
+    "CREATE INDEX IF NOT EXISTS site_license_revenue_period_audit_period_idx ON site_license_revenue_period_audit_log (period_id, created DESC)",
+  );
+  await db.query(`
     CREATE TABLE IF NOT EXISTS site_license_external_claim_pools (
       id UUID PRIMARY KEY,
       slug TEXT,

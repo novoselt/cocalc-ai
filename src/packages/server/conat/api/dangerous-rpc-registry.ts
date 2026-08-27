@@ -1278,6 +1278,18 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "site-license commercial terms and domain entitlement mutation",
   },
+  "purchases.listSiteLicenseRevenuePeriods": {
+    decision: "fresh-auth-not-required",
+    reason: "admin-only read of site-license revenue analytics configuration",
+  },
+  "purchases.saveSiteLicenseRevenuePeriod": {
+    decision: "fresh-auth-required",
+    reason: "admin mutation of site-license revenue analytics history",
+  },
+  "purchases.deleteSiteLicenseRevenuePeriod": {
+    decision: "fresh-auth-required",
+    reason: "admin deletion of site-license revenue analytics history",
+  },
   "software.createLicense": {
     decision: "fresh-auth-required",
     reason:
