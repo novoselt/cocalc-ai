@@ -58,6 +58,7 @@ export const SENDGRID_ASM_NEWSLETTER = 698;
 
 // This is the applications color scheme
 const MAIN_COLORS = {
+  WHITE: "#ffffff",
   BLUE_DDD: "#0E2B59",
   BLUE_DD: "#2A5AA6",
   BLUE_D: "#4474c0", // use this for the logo background, etc.

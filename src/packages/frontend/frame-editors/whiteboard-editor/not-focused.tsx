@@ -1,7 +1,16 @@
-import { CSSProperties, ReactNode, useCallback, useRef } from "react";
+import {
+  CSSProperties,
+  ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+} from "react";
 import { getElement } from "./tools/tool-panel";
 import Draggable from "react-draggable";
 import { delay } from "awaiting";
+import { Element } from "./types";
+import { computeSnap, getPageRect, type SnapLine } from "./snap";
+import { getPosition } from "./math";
 
 interface Props {
   children: ReactNode;
@@ -13,6 +22,10 @@ interface Props {
   canvasScale: number;
   readOnly?: boolean;
   onDrag?: () => void;
+  allElements?: Element[];
+  setSnapLines?: (lines: SnapLine[]) => void;
+  snapEnabled?: boolean;
+  gridEnabled?: boolean;
 }
 
 export default function NotFocused({
@@ -25,9 +38,53 @@ export default function NotFocused({
   canvasScale,
   readOnly,
   onDrag,
+  allElements,
+  setSnapLines,
+  snapEnabled,
+  gridEnabled,
 }: Props) {
   const { id } = element;
   const nodeRef = useRef<any>({});
+  const snapRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+
+  // Clear snap lines if this component unmounts mid-drag, mirroring focused.tsx
+  useEffect(() => {
+    return () => {
+      setSnapLines?.([]);
+    };
+  }, [setSnapLines]);
+  const shiftKeyRef = useRef<boolean>(false);
+
+  const computeSnapForDrag = useCallback(
+    (data: { x: number; y: number }) => {
+      if (!snapEnabled || !allElements || shiftKeyRef.current) {
+        snapRef.current = { dx: 0, dy: 0 };
+        setSnapLines?.([]);
+        return;
+      }
+      const pos = getPosition(element);
+      const movingRect = {
+        x: pos.x + data.x,
+        y: pos.y + data.y,
+        w: pos.w,
+        h: pos.h,
+      };
+      const otherElements = allElements.filter(
+        (e) => e.id !== element.id && e.type !== "selection",
+      );
+      const pageRect = getPageRect(allElements);
+      const result = computeSnap({
+        movingRect,
+        otherElements,
+        pageRect,
+        canvasScale,
+        gridEnabled,
+      });
+      snapRef.current = { dx: result.dx, dy: result.dy };
+      setSnapLines?.(result.lines);
+    },
+    [element, allElements, snapEnabled, gridEnabled, setSnapLines, canvasScale],
+  );
 
   // Right after dragging, we ignore the onClick so the object doesn't get selected:
   const ignoreNextClickRef = useRef<boolean>(false);
@@ -94,17 +151,35 @@ export default function NotFocused({
       cancel={".nodrag"}
       scale={canvasScale}
       disabled={disableDrag}
+      onStart={(e) => {
+        snapRef.current = { dx: 0, dy: 0 };
+        shiftKeyRef.current = !!(e as MouseEvent).shiftKey;
+      }}
       onStop={(e, data) => {
         if (data.x || data.y) {
-          frame.actions.moveElements([element], data);
+          shiftKeyRef.current = !!(e as MouseEvent).shiftKey;
+          computeSnapForDrag(data);
+          const snap = snapRef.current;
+          frame.actions.moveElements([element], {
+            x: data.x + snap.dx,
+            y: data.y + snap.dy,
+          });
           ignoreNextClickRef.current = true;
         } else {
           // Didn't move, so select it for edit. This is particular important on tablets, where
           // without this it would be really hard to select and edit anything.
           onClick(e);
         }
+        // Last, and in both branches: computeSnapForDrag above sets the guides
+        // for its final position, so clearing any earlier would be undone by
+        // it, and the null-drag branch would never clear them at all.
+        setSnapLines?.([]);
       }}
-      onDrag={onDrag}
+      onDrag={(e, data) => {
+        shiftKeyRef.current = !!(e as MouseEvent).shiftKey;
+        computeSnapForDrag(data);
+        onDrag?.();
+      }}
     >
       {body}
     </Draggable>

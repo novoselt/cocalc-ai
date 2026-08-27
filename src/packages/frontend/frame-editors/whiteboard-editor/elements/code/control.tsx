@@ -45,7 +45,9 @@ export default function CodeControlBar({ element }: Props) {
         gap: "10px",
         boxShadow: "1px 5px 7px rgb(33 33 33 / 70%)",
         position: "absolute",
-        top: "-34px",
+        // Anchor to the top edge of the cell rather than a hardcoded offset,
+        // so the bar can't overlap the cell when its own height changes.
+        bottom: "calc(100% + 10px)",
         right: "5px",
         zIndex: 2,
       }}
