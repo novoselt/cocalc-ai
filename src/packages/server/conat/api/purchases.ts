@@ -179,6 +179,8 @@ import type {
   SiteLicenseExternalClaimPool,
   SiteLicenseExternalClaimSigningAlgorithm,
   SiteLicenseRevenuePeriod,
+  SiteLicenseRevenueSeries,
+  SiteLicenseRevenueSeriesQuery,
   SiteLicenseManagerRole,
   SiteLicenseOverview,
   SiteLicensePoolConfig,
@@ -190,6 +192,7 @@ import type {
 } from "@cocalc/conat/hub/api/purchases";
 import {
   deleteSiteLicenseRevenuePeriod as deleteSiteLicenseRevenuePeriod0,
+  getSiteLicenseRevenueSeriesLocal,
   listSiteLicenseRevenuePeriods as listSiteLicenseRevenuePeriods0,
   saveSiteLicenseRevenuePeriod as saveSiteLicenseRevenuePeriod0,
 } from "@cocalc/server/membership/site-license-revenue-periods";
@@ -1249,6 +1252,23 @@ export async function getComputeRevenueSeries(
     bays,
     revenue: aggregateComputeRevenueRows(visibleReports),
     usage: aggregateComputeUsageRows(visibleReports),
+  };
+}
+
+export async function getSiteLicenseRevenueSeries(
+  query: SiteLicenseRevenueSeriesQuery = {},
+): Promise<SiteLicenseRevenueSeries> {
+  await requireAdmin(query.account_id);
+  const actorId = requireAccount(query.account_id);
+  if (!isSeedBay()) {
+    return await getSeedSiteLicenseClient().getSiteLicenseRevenueSeries({
+      ...query,
+      account_id: actorId,
+    });
+  }
+  return {
+    checked_at: new Date().toISOString(),
+    ...(await getSiteLicenseRevenueSeriesLocal({ query })),
   };
 }
 

@@ -247,6 +247,7 @@ import {
 } from "@cocalc/server/membership/site-licenses";
 import {
   deleteSiteLicenseRevenuePeriod,
+  getSiteLicenseRevenueSeriesLocal,
   listSiteLicenseRevenuePeriods,
   saveSiteLicenseRevenuePeriod,
 } from "@cocalc/server/membership/site-license-revenue-periods";
@@ -1419,6 +1420,13 @@ async function startAccountLocalService(): Promise<void> {
             trusted_admin: true,
           })
         : await getSeedSiteLicenseClient().deleteSiteLicenseRevenuePeriod(opts),
+    getSiteLicenseRevenueSeries: async (opts) =>
+      isSeedSiteLicenseBay()
+        ? {
+            checked_at: new Date().toISOString(),
+            ...(await getSiteLicenseRevenueSeriesLocal({ query: opts })),
+          }
+        : await getSeedSiteLicenseClient().getSiteLicenseRevenueSeries(opts),
     addSiteLicensePool: async (opts) =>
       isSeedSiteLicenseBay()
         ? await addSiteLicensePool(opts)

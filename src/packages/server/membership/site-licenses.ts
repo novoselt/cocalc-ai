@@ -435,6 +435,23 @@ async function ensureSiteLicenseSchemaWithClient(db: Queryable): Promise<void> {
     "CREATE INDEX IF NOT EXISTS site_license_revenue_periods_license_idx ON site_license_revenue_periods (site_license_id, starts_on DESC, ends_on DESC)",
   );
   await db.query(`
+    CREATE TABLE IF NOT EXISTS site_license_revenue_daily_allocations (
+      period_id UUID NOT NULL REFERENCES site_license_revenue_periods(id) ON DELETE CASCADE,
+      site_license_id UUID NOT NULL,
+      day DATE NOT NULL,
+      revenue_cents BIGINT NOT NULL,
+      created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (period_id, day)
+    )
+  `);
+  await db.query(
+    "CREATE INDEX IF NOT EXISTS site_license_revenue_daily_day_idx ON site_license_revenue_daily_allocations (day)",
+  );
+  await db.query(
+    "CREATE INDEX IF NOT EXISTS site_license_revenue_daily_license_idx ON site_license_revenue_daily_allocations (site_license_id, day)",
+  );
+  await db.query(`
     CREATE TABLE IF NOT EXISTS site_license_revenue_period_audit_log (
       id UUID PRIMARY KEY,
       site_license_id UUID NOT NULL,

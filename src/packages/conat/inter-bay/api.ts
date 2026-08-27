@@ -66,6 +66,8 @@ import type {
   SiteLicensePoolConfig,
   SiteLicensePoolRequest,
   SiteLicenseRevenuePeriod,
+  SiteLicenseRevenueSeries,
+  SiteLicenseRevenueSeriesQuery,
   TeamLicenseOverview,
   TeamLicenseQuote,
 } from "@cocalc/conat/hub/api/purchases";
@@ -1565,6 +1567,10 @@ export interface AccountLocalDeleteSiteLicenseRevenuePeriodRequest {
   trusted_admin?: boolean;
 }
 
+export interface AccountLocalGetSiteLicenseRevenueSeriesRequest extends SiteLicenseRevenueSeriesQuery {
+  account_id: string;
+}
+
 export interface AccountLocalAddSiteLicensePoolRequest {
   actor_account_id: string;
   site_license_id: string;
@@ -2717,6 +2723,7 @@ export type AccountLocalMethod =
   | "list-site-license-revenue-periods"
   | "save-site-license-revenue-period"
   | "delete-site-license-revenue-period"
+  | "get-site-license-revenue-series"
   | "add-site-license-pool"
   | "create-site-license-external-claim-pool"
   | "add-site-license-external-claim-key"
@@ -4254,6 +4261,9 @@ export interface InterBayAccountLocalApi {
   deleteSiteLicenseRevenuePeriod: (
     opts: AccountLocalDeleteSiteLicenseRevenuePeriodRequest,
   ) => Promise<{ deleted: boolean }>;
+  getSiteLicenseRevenueSeries: (
+    opts: AccountLocalGetSiteLicenseRevenueSeriesRequest,
+  ) => Promise<SiteLicenseRevenueSeries>;
   addSiteLicensePool: (
     opts: AccountLocalAddSiteLicensePoolRequest,
   ) => Promise<SiteLicenseOverview>;
@@ -7099,6 +7109,15 @@ export function createInterBayAccountLocalClient({
       method: "delete-site-license-revenue-period",
     }),
   });
+  const getSiteLicenseRevenueSeriesClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "getSiteLicenseRevenueSeries">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "get-site-license-revenue-series",
+    }),
+  });
   const addSiteLicensePoolClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "addSiteLicensePool">
   >({
@@ -7860,6 +7879,8 @@ export function createInterBayAccountLocalClient({
       await deleteSiteLicenseRevenuePeriodClient.deleteSiteLicenseRevenuePeriod(
         opts,
       ),
+    getSiteLicenseRevenueSeries: async (opts) =>
+      await getSiteLicenseRevenueSeriesClient.getSiteLicenseRevenueSeries(opts),
     addSiteLicensePool: async (opts) =>
       await addSiteLicensePoolClient.addSiteLicensePool(opts),
     createSiteLicenseExternalClaimPool: async (opts) =>
@@ -9044,6 +9065,20 @@ export function createInterBayAccountLocalHandler({
       impl: {
         deleteSiteLicenseRevenuePeriod: async (opts) =>
           await impl.deleteSiteLicenseRevenuePeriod(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "getSiteLicenseRevenueSeries">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "get-site-license-revenue-series",
+      }),
+      impl: {
+        getSiteLicenseRevenueSeries: async (opts) =>
+          await impl.getSiteLicenseRevenueSeries(opts),
       },
     }),
     createServiceHandler<Pick<InterBayAccountLocalApi, "addSiteLicensePool">>({

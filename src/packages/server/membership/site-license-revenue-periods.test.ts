@@ -14,6 +14,7 @@ import { uuid } from "@cocalc/util/misc";
 import { adminProvisionSiteLicense } from "./site-licenses";
 import {
   deleteSiteLicenseRevenuePeriod,
+  getSiteLicenseRevenueSeriesLocal,
   listSiteLicenseRevenuePeriods,
   saveSiteLicenseRevenuePeriod,
 } from "./site-license-revenue-periods";
@@ -186,5 +187,108 @@ describe("site-license revenue periods", () => {
         amount_cents: 100.5,
       }),
     ).rejects.toThrow("whole-cent amount");
+  });
+
+  it("projects every cent over inclusive days and replaces edited buckets", async () => {
+    async function revenueByDay() {
+      const { rows } = await getSiteLicenseRevenueSeriesLocal({
+        query: { start: "2030-01-01", end: "2030-01-04" },
+      });
+      return new Map(rows.map((row) => [`${row.day}`, row.revenue_cents]));
+    }
+    function incrementalRevenue(
+      current: Map<string, number>,
+      baseline: Map<string, number>,
+    ) {
+      return ["2030-01-01", "2030-01-02", "2030-01-03"].map(
+        (day) => (current.get(day) ?? 0) - (baseline.get(day) ?? 0),
+      );
+    }
+
+    const baseline = await revenueByDay();
+    const period = await saveSiteLicenseRevenuePeriod({
+      actor_account_id: adminAccountId,
+      site_license_id: siteLicenseId,
+      starts_on: "2030-01-01",
+      ends_on: "2030-01-03",
+      amount_cents: 10,
+    });
+    const initialProjection = await getPool().query<{
+      revenue_cents: number | string;
+    }>(
+      `SELECT revenue_cents
+         FROM site_license_revenue_daily_allocations
+        WHERE period_id=$1
+        ORDER BY day`,
+      [period.id],
+    );
+    expect(
+      initialProjection.rows.map(({ revenue_cents }) => Number(revenue_cents)),
+    ).toEqual([4, 3, 3]);
+    expect(incrementalRevenue(await revenueByDay(), baseline)).toEqual([
+      4, 3, 3,
+    ]);
+
+    const overlap = await saveSiteLicenseRevenuePeriod({
+      actor_account_id: adminAccountId,
+      site_license_id: siteLicenseId,
+      starts_on: "2030-01-01",
+      ends_on: "2030-01-03",
+      amount_cents: 6,
+    });
+    expect(incrementalRevenue(await revenueByDay(), baseline)).toEqual([
+      6, 5, 5,
+    ]);
+    await deleteSiteLicenseRevenuePeriod({
+      actor_account_id: adminAccountId,
+      site_license_id: siteLicenseId,
+      period_id: overlap.id,
+    });
+    expect(incrementalRevenue(await revenueByDay(), baseline)).toEqual([
+      4, 3, 3,
+    ]);
+
+    const edited = await saveSiteLicenseRevenuePeriod({
+      actor_account_id: adminAccountId,
+      site_license_id: siteLicenseId,
+      period_id: period.id,
+      starts_on: "2030-01-01",
+      ends_on: "2030-01-02",
+      amount_cents: 7,
+    });
+    expect(edited).toMatchObject({
+      starts_on: "2030-01-01",
+      ends_on: "2030-01-02",
+      amount_cents: 7,
+    });
+    const projected = await getPool().query<{
+      day: Date | string;
+      revenue_cents: number | string;
+    }>(
+      `SELECT day, revenue_cents
+         FROM site_license_revenue_daily_allocations
+        WHERE period_id=$1
+        ORDER BY day`,
+      [period.id],
+    );
+    expect(
+      projected.rows.map(({ day, revenue_cents }) => ({
+        day: new Date(day).toISOString().slice(0, 10),
+        revenue_cents: Number(revenue_cents),
+      })),
+    ).toEqual([
+      { day: "2030-01-01", revenue_cents: 4 },
+      { day: "2030-01-02", revenue_cents: 3 },
+    ]);
+    expect(incrementalRevenue(await revenueByDay(), baseline)).toEqual([
+      4, 3, 0,
+    ]);
+
+    await deleteSiteLicenseRevenuePeriod({
+      actor_account_id: adminAccountId,
+      site_license_id: siteLicenseId,
+      period_id: period.id,
+    });
+    expect(await revenueByDay()).toEqual(baseline);
   });
 });

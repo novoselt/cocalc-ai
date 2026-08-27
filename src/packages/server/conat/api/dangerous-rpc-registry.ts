@@ -1153,6 +1153,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     reason:
       "admin-only idempotent reconstruction of derived membership analytics events",
   },
+  "purchases.getSiteLicenseRevenueSeries": {
+    decision: "fresh-auth-not-required",
+    reason: "admin-only read of aggregate site-license revenue analytics",
+  },
   "purchases.adminCreateMembershipPackagePurchase": {
     decision: "fresh-auth-required",
     reason: "admin custom-price membership package and billing mutation",

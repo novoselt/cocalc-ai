@@ -806,6 +806,24 @@ export interface SiteLicenseRevenuePeriod {
   updated?: Date;
 }
 
+export interface SiteLicenseRevenueDailyRow {
+  day: Date | string;
+  revenue_cents: number;
+}
+
+export interface SiteLicenseRevenueSeriesQuery {
+  account_id?: string;
+  start?: Date | string;
+  end?: Date | string;
+}
+
+export interface SiteLicenseRevenueSeries {
+  checked_at: string;
+  start: Date | string;
+  end: Date | string;
+  rows: SiteLicenseRevenueDailyRow[];
+}
+
 export interface SiteLicenseManager {
   id: string;
   site_license_id: string;
@@ -1604,6 +1622,9 @@ export interface Purchases {
   getComputeRevenueSeries: (
     opts?: ComputeRevenueSeriesQuery,
   ) => Promise<ComputeRevenueSeries>;
+  getSiteLicenseRevenueSeries: (
+    opts?: SiteLicenseRevenueSeriesQuery,
+  ) => Promise<SiteLicenseRevenueSeries>;
   getMembershipAnalyticsEvents: (
     opts?: MembershipAnalyticsEventsQuery,
   ) => Promise<MembershipAnalyticsEventRow[]>;
@@ -2020,6 +2041,7 @@ export const purchases = {
   getMembershipAnalyticsOverview: authFirst,
   getMembershipAllocationSeries: authFirst,
   getComputeRevenueSeries: authFirst,
+  getSiteLicenseRevenueSeries: authFirst,
   getMembershipAnalyticsEvents: authFirst,
   backfillMembershipAnalyticsPurchases: authFirst,
   createMembershipTier: authFirst,

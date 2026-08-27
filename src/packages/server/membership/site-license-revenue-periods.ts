@@ -5,7 +5,12 @@
 
 import getPool, { type PoolClient } from "@cocalc/database/pool";
 import isAdmin from "@cocalc/server/accounts/is-admin";
-import type { SiteLicenseRevenuePeriod } from "@cocalc/conat/hub/api/purchases";
+import type {
+  SiteLicenseRevenueDailyRow,
+  SiteLicenseRevenuePeriod,
+  SiteLicenseRevenueSeriesQuery,
+} from "@cocalc/conat/hub/api/purchases";
+import { allocateWholeCentsByDay } from "@cocalc/server/membership/allocation-analytics";
 import { isValidUUID, uuid } from "@cocalc/util/misc";
 
 import { ensureSiteLicenseSchema } from "./site-licenses";
@@ -46,6 +51,12 @@ function utcDay(value: Date | string, name: string): string {
   if (!Number.isFinite(date.valueOf())) {
     throw Error(`${name} must be a valid date`);
   }
+  return date.toISOString().slice(0, 10);
+}
+
+function nextUtcDay(value: string): string {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
   return date.toISOString().slice(0, 10);
 }
 
@@ -174,6 +185,76 @@ async function recordAudit({
   );
 }
 
+export async function replaceSiteLicenseRevenuePeriodProjection({
+  period,
+  client,
+}: {
+  period: SiteLicenseRevenuePeriod;
+  client: PoolClient;
+}): Promise<void> {
+  const allocations = allocateWholeCentsByDay({
+    allocation_start: period.starts_on,
+    allocation_end: nextUtcDay(period.ends_on),
+    revenue_cents: period.amount_cents,
+  });
+  await client.query(
+    "DELETE FROM site_license_revenue_daily_allocations WHERE period_id=$1",
+    [period.id],
+  );
+  await client.query(
+    `INSERT INTO site_license_revenue_daily_allocations
+       (period_id, site_license_id, day, revenue_cents, created, updated)
+     SELECT $1, $2, day::date, revenue_cents, NOW(), NOW()
+       FROM UNNEST($3::text[], $4::bigint[]) AS rows(day, revenue_cents)`,
+    [
+      period.id,
+      period.site_license_id,
+      allocations.map(({ day }) => day),
+      allocations.map(({ revenue_cents }) => revenue_cents),
+    ],
+  );
+}
+
+async function projectMissingSiteLicenseRevenuePeriods(): Promise<void> {
+  await ensureSiteLicenseSchema();
+  const { rows } = await getPool().query<RevenuePeriodRow>(
+    `SELECT periods.*
+       FROM site_license_revenue_periods periods
+      WHERE NOT EXISTS (
+        SELECT 1
+          FROM site_license_revenue_daily_allocations daily
+         WHERE daily.period_id=periods.id
+      )
+      ORDER BY periods.created, periods.id`,
+  );
+  for (const row of rows) {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      const period = await getPeriodForUpdate({
+        site_license_id: row.site_license_id,
+        period_id: row.id,
+        client,
+      });
+      if (period) {
+        const { rows: existing } = await client.query(
+          "SELECT 1 FROM site_license_revenue_daily_allocations WHERE period_id=$1 LIMIT 1",
+          [period.id],
+        );
+        if (!existing[0]) {
+          await replaceSiteLicenseRevenuePeriodProjection({ period, client });
+        }
+      }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+}
+
 export async function listSiteLicenseRevenuePeriods({
   actor_account_id,
   site_license_id,
@@ -290,6 +371,10 @@ export async function saveSiteLicenseRevenuePeriod({
       after: snapshot(saved),
       client,
     });
+    await replaceSiteLicenseRevenuePeriodProjection({
+      period: saved,
+      client,
+    });
     await client.query("COMMIT");
     return saved;
   } catch (err) {
@@ -298,6 +383,57 @@ export async function saveSiteLicenseRevenuePeriod({
   } finally {
     client.release();
   }
+}
+
+export async function getSiteLicenseRevenueSeriesLocal({
+  query = {},
+}: {
+  query?: SiteLicenseRevenueSeriesQuery;
+} = {}): Promise<{
+  start: string;
+  end: string;
+  rows: SiteLicenseRevenueDailyRow[];
+}> {
+  const now = new Date();
+  const defaultEnd = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+  );
+  const end = query.end == null ? defaultEnd : new Date(query.end);
+  const start =
+    query.start == null
+      ? new Date(end.valueOf() - 365 * 24 * 60 * 60 * 1000)
+      : new Date(query.start);
+  if (
+    !Number.isFinite(start.valueOf()) ||
+    !Number.isFinite(end.valueOf()) ||
+    start >= end
+  ) {
+    throw Error("site-license revenue start must be before end");
+  }
+  const startDay = utcDay(start, "start");
+  const endDay = utcDay(end, "end");
+  await projectMissingSiteLicenseRevenuePeriods();
+  const { rows } = await getPool().query<{
+    day: Date | string;
+    revenue_cents: number | string;
+  }>(
+    `SELECT TO_CHAR(day, 'YYYY-MM-DD') AS day,
+            SUM(revenue_cents)::bigint AS revenue_cents
+       FROM site_license_revenue_daily_allocations
+      WHERE day >= $1::date AND day < $2::date
+      GROUP BY day
+     HAVING SUM(revenue_cents) <> 0
+      ORDER BY day`,
+    [startDay, endDay],
+  );
+  return {
+    start: `${startDay}T00:00:00.000Z`,
+    end: `${endDay}T00:00:00.000Z`,
+    rows: rows.map((row) => ({
+      day: utcDay(row.day, "day"),
+      revenue_cents: Number(row.revenue_cents),
+    })),
+  };
 }
 
 export async function deleteSiteLicenseRevenuePeriod({
