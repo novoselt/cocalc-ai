@@ -29,6 +29,7 @@ import {
   Typography,
   message,
 } from "antd";
+import dayjs from "dayjs";
 import { useEffect, useState } from "react";
 
 import type { AdminSupportTicketSummary } from "@cocalc/conat/hub/api/admin-support";
@@ -59,6 +60,7 @@ import {
   type CrmMutationResult,
   type CrmOrganizationSummary,
   type CrmPerson,
+  type CrmTask,
 } from "@cocalc/util/crm";
 import { COLORS } from "@cocalc/util/theme";
 import { AccountSelector } from "../receivables/account-selector";
@@ -73,6 +75,7 @@ import {
   safeExternalHttpUrl,
 } from "./helpers";
 import { CustomerSelector } from "./selector";
+import { CustomerTaskCard, type CustomerTaskTransition } from "./task-card";
 import { TimelineFilter } from "./timeline-filter";
 import {
   CustomerOutreachCard,
@@ -104,13 +107,20 @@ type ActionKind =
   | "edit-person"
   | "create-opportunity"
   | "create-task"
+  | "task-transition"
   | "add-note"
   | "link"
   | "create-order"
   | "merge"
   | "archive";
 
-type ActionState = { kind: ActionKind; title: string; person?: CrmPerson };
+type ActionState = {
+  kind: ActionKind;
+  title: string;
+  person?: CrmPerson;
+  task?: CrmTask;
+  transition?: CustomerTaskTransition;
+};
 
 type MutationPreview = Extract<CrmMutationResult<any>, { preview: true }>;
 
@@ -406,6 +416,9 @@ function CustomerActionModal({
             timezone: action.person.timezone,
           }
         : {}),
+      ...(action.kind === "task-transition" && action.task
+        ? { due_at: dayjs(action.task.due_at) }
+        : {}),
     });
   }, [action, customer?.organization.id]);
 
@@ -527,6 +540,19 @@ function CustomerActionModal({
           zendesk_ticket_id: values.zendesk_ticket_id
             ? Number(values.zendesk_ticket_id)
             : undefined,
+        });
+      case "task-transition":
+        if (!action.task || !action.transition) {
+          throw Error("a task and transition are required");
+        }
+        return await api.transitionTask({
+          ...common,
+          task: action.task.id,
+          action: action.transition,
+          due_at:
+            action.transition === "reschedule"
+              ? values.due_at?.toISOString()
+              : undefined,
         });
       case "add-note":
         return await api.addActivity({
@@ -939,6 +965,27 @@ function CustomerActionModal({
             </Form.Item>
           </>
         );
+      case "task-transition":
+        if (!action.task || !action.transition) return null;
+        return (
+          <>
+            <Alert
+              showIcon
+              type={action.transition === "cancel" ? "warning" : "info"}
+              title={`${humanize(action.transition)} task`}
+              description={action.task.subject}
+            />
+            {action.transition === "reschedule" ? (
+              <Form.Item
+                label="New due date"
+                name="due_at"
+                rules={[{ required: true }]}
+              >
+                <DatePicker showTime style={{ width: "100%" }} />
+              </Form.Item>
+            ) : null}
+          </>
+        );
       case "add-note":
         return (
           <>
@@ -1126,7 +1173,11 @@ function CustomerActionModal({
         title={action?.title}
         okText={preview ? "Confirm with fresh auth" : "Review change"}
         okButtonProps={{
-          danger: action?.kind === "archive" || action?.kind === "merge",
+          danger:
+            action?.kind === "archive" ||
+            action?.kind === "merge" ||
+            (action?.kind === "task-transition" &&
+              action.transition === "cancel"),
           loading: busy,
         }}
         cancelButtonProps={{ disabled: busy }}
@@ -1826,44 +1877,19 @@ function CustomerDetail({
               {customer.tasks
                 .filter((task) => ["open", "waiting"].includes(task.state))
                 .map((task) => (
-                  <Card key={task.id} size="small">
-                    <Flex align="start" justify="space-between" gap={12} wrap>
-                      <div>
-                        <Text strong>{task.subject}</Text>
-                        <br />
-                        <Text type="secondary">
-                          {humanize(task.type)} ·{" "}
-                          <AccountIdentity
-                            accountId={task.assignee_account_id}
-                            names={names}
-                          />
-                        </Text>
-                      </div>
-                      <div style={{ textAlign: "right" }}>
-                        <Tag
-                          color={
-                            task.priority === "urgent"
-                              ? "red"
-                              : task.priority === "high"
-                                ? "orange"
-                                : "default"
-                          }
-                        >
-                          {humanize(task.priority)}
-                        </Tag>
-                        <br />
-                        <Text
-                          type={
-                            new Date(task.due_at) < new Date()
-                              ? "danger"
-                              : "secondary"
-                          }
-                        >
-                          Due <TimeAgo date={task.due_at} />
-                        </Text>
-                      </div>
-                    </Flex>
-                  </Card>
+                  <CustomerTaskCard
+                    key={task.id}
+                    names={names}
+                    onTransition={(transition) =>
+                      onAction({
+                        kind: "task-transition",
+                        task,
+                        title: `${humanize(transition)} task`,
+                        transition,
+                      })
+                    }
+                    task={task}
+                  />
                 ))}
             </Flex>
             {!customer.tasks.some((task) =>
