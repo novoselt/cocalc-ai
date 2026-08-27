@@ -901,7 +901,7 @@ export default function Canvas({
     edgeStart &&
     edgePreview
   ) {
-    // Draw arrow from source element to where mouse is now.
+    // Draw a directed edge from the source element to the pointer.
     const element = getToolElement("edge");
     if (element.data == null) throw Error("bug");
     element.data = { ...element.data, from: edgeStart, previewTo: edgePreview };

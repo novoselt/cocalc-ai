@@ -3,14 +3,15 @@ Render an edge from one node to another.
 */
 
 import type { Element, ElementsMap, Point, Rect } from "../types";
-import Arrow from "./arrow";
+import DirectedEdgePath from "./edge-path";
 import {
-  closestMidpoint,
+  centerOfRect,
   getEdgeEndpoints,
   getPosition,
+  getRectAnchorToward,
+  type RectSide,
   Transforms,
 } from "../math";
-import { SELECTED_BORDER_COLOR, SELECTED_BORDER_WIDTH } from "./style";
 
 interface Props {
   element: Element;
@@ -44,29 +45,34 @@ export default function Edge({
   const thickness = (element.data?.radius ?? 0.5) * 2;
 
   return (
-    <Arrow
+    <DirectedEdgePath
       start={start}
       end={end}
+      startSide={endpoints.startSide}
+      endSide={endpoints.endSide}
       arrowSize={thickness * 5 + 14}
       thickness={thickness}
       color={previewMode ? "#9fc3ff" : element.data?.color}
       opacity={element.data?.opacity}
-      style={{
-        zIndex: endpoints.zIndex,
-        border: `${SELECTED_BORDER_WIDTH}px solid ${
-          selected ? SELECTED_BORDER_COLOR : "transparent"
-        }`,
-        background: previewMode ? "#9fc3ff" : undefined,
-      }}
+      zIndex={endpoints.zIndex}
       onClick={onClick}
       preview={element.data?.previewTo != null}
+      selected={selected}
+      ariaLabel="Select directed edge"
     />
   );
 }
 
-function toWindowRectNoScale(transforms, element): Rect {
+function toWindowRectNoScale(
+  transforms: Transforms,
+  element: Element,
+): { rect: Rect; zIndex: number } {
   const { x, y, z, w, h } = getPosition(element);
-  return { ...transforms.dataToWindowNoScale(x, y, z), w, h };
+  const transformed = transforms.dataToWindowNoScale(x, y, z);
+  return {
+    rect: { x: transformed.x, y: transformed.y, w, h },
+    zIndex: transformed.z,
+  };
 }
 
 function getEndpoints(
@@ -74,7 +80,13 @@ function getEndpoints(
   elementsMap,
   transforms,
   zIndex,
-): { start: Point; end: Point; zIndex: number } | null {
+): {
+  start: Point;
+  end: Point;
+  startSide: RectSide;
+  endSide: RectSide;
+  zIndex: number;
+} | null {
   const { from: fromId } = element.data ?? {};
   if (fromId == null) return null; // invalid data
   const fromElt = elementsMap.get(fromId)?.toJS();
@@ -88,17 +100,23 @@ function getEndpoints(
   // the closest edges.   TODO: Sometimes a longer path that avoids
   // overlapping exists... or maybe curve the line?
   const from = toWindowRectNoScale(transforms, fromElt);
-  if (zIndex == null) {
-    zIndex = transforms.zMap[element.z ?? 0] ?? 0;
-  }
 
   let start: Point;
   let end: Point;
+  let startSide: RectSide;
+  let endSide: RectSide;
   if (element.data?.previewTo != null) {
     const { x, y } = element.data?.previewTo;
-    end = transforms.dataToWindowNoScale(x, y, zIndex);
-    const to: Rect = { ...end, w: 1, h: 1 };
-    start = closestMidpoint(from, to);
+    end = transforms.dataToWindowNoScale(x, y);
+    const startAnchor = getRectAnchorToward(from.rect, end);
+    const endAnchor = getRectAnchorToward(
+      { x: end.x, y: end.y, w: 0, h: 0 },
+      centerOfRect(from.rect),
+    );
+    start = startAnchor.point;
+    startSide = startAnchor.side;
+    endSide = endAnchor.side;
+    zIndex ??= 0;
   } else {
     const { to: toId } = element.data ?? {};
     if (toId == null) return null; // invalid data
@@ -107,8 +125,9 @@ function getEndpoints(
       return null;
     }
     const to = toWindowRectNoScale(transforms, toElt);
-    ({ start, end } = getEdgeEndpoints(from, to));
+    ({ start, end, startSide, endSide } = getEdgeEndpoints(from.rect, to.rect));
+    zIndex ??= Math.max(0, Math.min(from.zIndex, to.zIndex) - 1);
   }
 
-  return { start, end, zIndex };
+  return { start, end, startSide, endSide, zIndex };
 }

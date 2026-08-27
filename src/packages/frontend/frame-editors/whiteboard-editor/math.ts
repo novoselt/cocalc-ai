@@ -640,6 +640,37 @@ export function closestMidpoint(rect1: Rect, rect2: Rect): Point {
   return closestPoint;
 }
 
+export type RectSide = "top" | "right" | "bottom" | "left";
+
+export interface RectAnchor {
+  point: Point;
+  side: RectSide;
+}
+
+export function getRectAnchorToward(rect: Rect, target: Point): RectAnchor {
+  const center = centerOfRect(rect);
+  const dx = target.x - center.x;
+  const dy = target.y - center.y;
+  const midpoints = midpointsOfRect(rect);
+
+  if (dx === 0 && dy === 0) {
+    return { point: midpoints.bottom, side: "bottom" };
+  }
+
+  const height = rect.h || 1;
+  const width = rect.w || 1;
+  const exitsHorizontally = Math.abs(dx) * height > Math.abs(dy) * width;
+  const side: RectSide = exitsHorizontally
+    ? dx > 0
+      ? "right"
+      : "left"
+    : dy > 0
+      ? "bottom"
+      : "top";
+
+  return { point: midpoints[side], side };
+}
+
 // Determines the best connection points between two rectangles for an edge.
 // Uses center-to-center ray analysis: the line from center1 to center2 determines
 // which side each rectangle connects on, accounting for aspect ratios.
@@ -647,45 +678,37 @@ export function closestMidpoint(rect1: Rect, rect2: Rect): Point {
 export function getEdgeEndpoints(
   rect1: Rect,
   rect2: Rect,
-): { start: Point; end: Point } {
+): {
+  start: Point;
+  end: Point;
+  startSide: RectSide;
+  endSide: RectSide;
+} {
   const c1 = centerOfRect(rect1);
   const c2 = centerOfRect(rect2);
-  const dx = c2.x - c1.x;
-  const dy = c2.y - c1.y;
-  const m1 = midpointsOfRect(rect1);
-  const m2 = midpointsOfRect(rect2);
-
-  if (dx === 0 && dy === 0) {
-    return { start: m1.bottom, end: m2.top };
+  if (c1.x === c2.x && c1.y === c2.y) {
+    const start = getRectAnchorToward(rect1, {
+      x: c2.x,
+      y: c2.y + Math.max(rect1.h, 1),
+    });
+    const end = getRectAnchorToward(rect2, {
+      x: c1.x,
+      y: c1.y - Math.max(rect2.h, 1),
+    });
+    return {
+      start: start.point,
+      end: end.point,
+      startSide: start.side,
+      endSide: end.side,
+    };
   }
 
-  // Which side does the center-to-center ray exit rect1?
-  // Ray hits x-boundary at t_x = (w/2)/|dx|, y-boundary at t_y = (h/2)/|dy|.
-  // Exits horizontally if t_x < t_y, i.e. |dx| * h > |dy| * w.
-  const h1 = rect1.h || 1;
-  const w1 = rect1.w || 1;
-  const h2 = rect2.h || 1;
-  const w2 = rect2.w || 1;
-
-  const exitHorizontal1 = Math.abs(dx) * h1 > Math.abs(dy) * w1;
-  const exitHorizontal2 = Math.abs(dx) * h2 > Math.abs(dy) * w2;
-
-  const start = exitHorizontal1
-    ? dx > 0
-      ? m1.right
-      : m1.left
-    : dy > 0
-      ? m1.bottom
-      : m1.top;
-
-  // Entry side is the opposite direction
-  const end = exitHorizontal2
-    ? dx > 0
-      ? m2.left
-      : m2.right
-    : dy > 0
-      ? m2.top
-      : m2.bottom;
-
-  return { start, end };
+  const start = getRectAnchorToward(rect1, c2);
+  const end = getRectAnchorToward(rect2, c1);
+  return {
+    start: start.point,
+    end: end.point,
+    startSide: start.side,
+    endSide: end.side,
+  };
 }
