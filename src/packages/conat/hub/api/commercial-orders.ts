@@ -201,6 +201,11 @@ export interface CommercialBillingDetailsUpdateRequest extends CommercialMutatio
   invoice_memo?: string | null;
 }
 
+export interface CommercialCollectionModeUpdateRequest extends CommercialMutationRequest {
+  id: string;
+  collection_mode: Exclude<CommercialCollectionMode, "complimentary">;
+}
+
 export interface CommercialOrderTransitionRequest extends CommercialMutationRequest {
   id: string;
 }
@@ -457,6 +462,9 @@ export interface CommercialOrdersApi {
   updateBillingDetails: (
     opts: CommercialBillingDetailsUpdateRequest,
   ) => Promise<CommercialOrder>;
+  updateCollectionMode: (
+    opts: CommercialCollectionModeUpdateRequest,
+  ) => Promise<CommercialOrder>;
   approve: (opts: CommercialOrderTransitionRequest) => Promise<CommercialOrder>;
   cancel: (opts: CommercialOrderTransitionRequest) => Promise<CommercialOrder>;
   quotePreview: (
@@ -550,6 +558,7 @@ export const commercialOrders = {
   assign: authFirstRequireAccount,
   addNote: authFirstRequireAccount,
   updateBillingDetails: authFirstRequireAccount,
+  updateCollectionMode: authFirstRequireAccount,
   approve: authFirstRequireAccount,
   cancel: authFirstRequireAccount,
   quotePreview: authFirstRequireAccount,

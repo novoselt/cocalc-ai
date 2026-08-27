@@ -641,6 +641,13 @@ export function customFields(order: CommercialOrder): Array<{
   ].filter(Boolean) as Array<{ name: string; value: string }>;
 }
 
+function invoiceDescription(order: CommercialOrder): string {
+  return (
+    approvedInvoiceTerms(order).memo ??
+    `${order.organization_name}: ${order.order_number}`
+  );
+}
+
 function expectedDueDate(invoice: CommercialInvoice): number {
   const dueAt = new Date(invoice.due_at ?? "").getTime();
   if (!Number.isFinite(dueAt)) {
@@ -713,10 +720,7 @@ function assertInvoiceDeliveryConfiguration(
   ) {
     throw Error("Stripe invoice custom fields do not match the approved order");
   }
-  if (
-    `${stripeInvoice.description ?? ""}` !==
-    `${order.organization_name}: ${order.order_number}`
-  ) {
+  if (`${stripeInvoice.description ?? ""}` !== invoiceDescription(order)) {
     throw Error("Stripe invoice description does not match the approved order");
   }
   if (stripeInvoice.metadata?.order_number !== order.order_number) {
@@ -942,9 +946,7 @@ export async function createStripeCommercialInvoiceDraft(
           due_date: expectedDueDate(invoice),
           currency: preview.currency,
           custom_fields: customFields(order),
-          description:
-            approvedInvoiceTerms(order).memo ??
-            `${order.organization_name}: ${order.order_number}`,
+          description: invoiceDescription(order),
           metadata: {
             ...preview.metadata,
             commercial_invoice_id: invoice.id,

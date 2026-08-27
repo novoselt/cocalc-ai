@@ -59,6 +59,7 @@ describe("commercial receivables action capabilities", () => {
         "stripeQuotePreview",
         "update",
         "updateBillingDetails",
+        "updateCollectionMode",
         "uploadDocument",
         "voidDocument",
         "voidInvoice",
