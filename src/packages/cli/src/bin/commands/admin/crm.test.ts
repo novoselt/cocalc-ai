@@ -6,6 +6,9 @@ import test from "node:test";
 
 import { Command } from "commander";
 
+import { getDocsEntry } from "@cocalc/docs";
+import { CRM_EXTERNAL_OBJECT_KINDS } from "@cocalc/util/crm";
+
 import { registerCrmCommand } from "./crm";
 
 const ACCOUNT_ID = "11111111-1111-4111-8111-111111111111";
@@ -31,6 +34,112 @@ function setup(adminCrm: Record<string, any>) {
       ),
   });
   return { program, output: () => output };
+}
+
+type CrmLeafBehavior =
+  | "read"
+  | "conditional write"
+  | "previewed mutation"
+  | "sensitive export";
+
+type CrmLeafInventoryEntry = {
+  path: string;
+  behavior: CrmLeafBehavior;
+};
+
+function crmCommandFrom(program: Command): Command {
+  const admin = program.commands.find((command) => command.name() === "admin");
+  const crm = admin?.commands.find((command) => command.name() === "crm");
+  assert.ok(crm);
+  return crm;
+}
+
+function registeredCrmLeafInventory(): CrmLeafInventoryEntry[] {
+  const crm = crmCommandFrom(setup({}).program);
+  const entries: CrmLeafInventoryEntry[] = [];
+  const walk = (command: Command, parents: string[]) => {
+    const path = [...parents, command.name()];
+    if (command.commands.length) {
+      for (const child of command.commands) walk(child, path);
+      return;
+    }
+    const fullPath = path.join(" ");
+    entries.push({
+      path: fullPath,
+      behavior: command.options.some((option) => option.long === "--commit")
+        ? "previewed mutation"
+        : command.options.some((option) => option.long === "--refresh")
+          ? "conditional write"
+          : fullPath === "crm export"
+            ? "sensitive export"
+            : "read",
+    });
+  };
+  for (const command of crm.commands) walk(command, ["crm"]);
+  return entries;
+}
+
+function adminDocsBody(id: "admin.crm" | "admin.crm-outreach"): string {
+  const entry = getDocsEntry(id, { includeAdmin: true });
+  assert.ok(entry);
+  return entry.body;
+}
+
+function documentedCrmLeafInventory(body: string): CrmLeafInventoryEntry[] {
+  const section = body.match(
+    /<!-- crm-cli-inventory:start -->([\s\S]*?)<!-- crm-cli-inventory:end -->/,
+  );
+  assert.ok(section, "admin CRM docs must contain the checked CLI inventory");
+  const entries: CrmLeafInventoryEntry[] = [];
+  for (const line of section[1].split("\n")) {
+    if (!line.trim()) continue;
+    const match = line
+      .replace(/\\`/g, "`")
+      .match(
+        /^- \*\*(read|conditional write|previewed mutation|sensitive export)\*\* — `cocalc admin (crm [^`]+)`$/,
+      );
+    assert.ok(match, `invalid CRM inventory line: ${line}`);
+    entries.push({
+      behavior: match[1] as CrmLeafBehavior,
+      path: match[2],
+    });
+  }
+  return entries;
+}
+
+type CrmShellExample = {
+  annotation: string;
+  command: string;
+};
+
+function crmShellExamples(body: string): CrmShellExample[] {
+  const lines = body.split("\n");
+  const examples: CrmShellExample[] = [];
+  let inShell = false;
+  let previousNonblank = "";
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i].trim();
+    if (line === "~~~sh") {
+      inShell = !inShell;
+      previousNonblank = "";
+      continue;
+    }
+    if (!inShell) continue;
+    if (line.startsWith("cocalc admin crm ")) {
+      const annotation = previousNonblank;
+      while (line.endsWith("\\")) {
+        line = `${line.slice(0, -1).trimEnd()} ${lines[++i].trim()}`;
+      }
+      examples.push({
+        annotation,
+        command: line.replace(/\s+/g, " ").trim(),
+      });
+      previousNonblank = line;
+      continue;
+    }
+    if (line) previousNonblank = line;
+  }
+  return examples;
 }
 
 test("CRM help exposes the packaged runbook and preview workflow", () => {
@@ -60,6 +169,252 @@ test("CRM help exposes the packaged runbook and preview workflow", () => {
   ]) {
     assert.ok(crm.commands.some((command) => command.name() === family));
   }
+});
+
+test("CRM docs inventory matches every registered CLI leaf", () => {
+  const registered = registeredCrmLeafInventory().sort((left, right) =>
+    left.path.localeCompare(right.path),
+  );
+  const documented = documentedCrmLeafInventory(
+    adminDocsBody("admin.crm"),
+  ).sort((left, right) => left.path.localeCompare(right.path));
+  assert.equal(
+    new Set(documented.map(({ path }) => path)).size,
+    documented.length,
+  );
+  assert.deepEqual(documented, registered);
+});
+
+test("CRM mutation examples identify preview and commit behavior", () => {
+  const inventory = registeredCrmLeafInventory().sort(
+    (left, right) => right.path.length - left.path.length,
+  );
+  const examples = [
+    ...crmShellExamples(adminDocsBody("admin.crm")),
+    ...crmShellExamples(adminDocsBody("admin.crm-outreach")),
+  ];
+  assert.ok(examples.length > 0);
+  for (const example of examples) {
+    const value = example.command.replace(/^cocalc admin /, "");
+    const leaf = inventory.find(
+      ({ path }) => value === path || value.startsWith(`${path} `),
+    );
+    if (!leaf) {
+      assert.match(
+        example.command,
+        / --help(?:\s|$)/,
+        `CRM docs reference an unknown leaf command: ${example.command}`,
+      );
+      continue;
+    }
+    if (leaf.behavior !== "previewed mutation") continue;
+    assert.match(
+      example.annotation,
+      example.command.includes(" --commit")
+        ? /^# COMMIT —/
+        : /^# PREVIEW ONLY —/,
+      `CRM mutation example has an ambiguous effect: ${example.command}`,
+    );
+  }
+});
+
+test("CRM links help exposes cursor-complete listing and person bindings", () => {
+  const { program } = setup({});
+  const admin = program.commands.find((command) => command.name() === "admin");
+  const crm = admin?.commands.find((command) => command.name() === "crm");
+  const links = crm?.commands.find((command) => command.name() === "links");
+  assert.ok(links);
+  for (const name of ["list", "add", "remove"]) {
+    assert.ok(links.commands.some((command) => command.name() === name));
+  }
+
+  const list = links.commands.find((command) => command.name() === "list");
+  assert.ok(list);
+  const listHelp = list.helpInformation();
+  for (const option of [
+    "--provider",
+    "--kind",
+    "--external-id",
+    "--external-id-prefix",
+    "--organization",
+    "--verification-state",
+    "--cursor",
+    "--limit",
+    "--max-bytes",
+  ]) {
+    assert.match(listHelp, new RegExp(option));
+  }
+
+  assert.ok(CRM_EXTERNAL_OBJECT_KINDS.includes("person"));
+  for (const name of ["add", "remove"]) {
+    const command = links.commands.find(
+      (candidate) => candidate.name() === name,
+    );
+    assert.ok(command);
+    let help = "";
+    command.configureOutput({ writeOut: (text) => (help += text) });
+    command.outputHelp();
+    for (const kind of CRM_EXTERNAL_OBJECT_KINDS) {
+      assert.match(help, new RegExp(kind.replace(/_/g, "-")));
+    }
+    assert.match(help, /--reject/);
+    assert.match(
+      help,
+      /--kind is person, --person is required when adding or verifying/,
+    );
+  }
+});
+
+test("CRM links add records an explicit reviewed rejection", async () => {
+  let captured: any;
+  const { program } = setup({
+    mutateExternalReference: async (opts: any) => {
+      captured = opts;
+      return { preview: true, expected_version: 0 };
+    },
+  });
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "links",
+    "add",
+    "example-customer",
+    "--provider",
+    "cocalc",
+    "--kind",
+    "organization",
+    "--external-id",
+    "source-system:organization-001",
+    "--reject",
+    "--reason",
+    "reviewed and rejected the source candidate",
+  ]);
+  assert.equal(captured.action, "reject");
+  assert.equal(captured.provider, "cocalc");
+  assert.equal(captured.object_kind, "organization");
+  assert.equal(captured.external_id, "source-system:organization-001");
+  assert.equal(captured.commit, false);
+});
+
+test("CRM links list forwards exact filters and bounded pagination", async () => {
+  let captured: any;
+  const response = {
+    external_references: [
+      {
+        reference: {
+          id: "33333333-3333-4333-8333-333333333333",
+          provider: "cocalc",
+          object_kind: "person",
+          external_id: "source-system:person-001",
+          verification_state: "verified",
+        },
+        organization: {
+          id: "44444444-4444-4444-8444-444444444444",
+          customer_number: "synthetic-customer-number",
+          display_name: "Example University",
+        },
+      },
+    ],
+    next_cursor: "next-page",
+    truncated: true,
+    result_bytes: 512,
+  };
+  const { program, output } = setup({
+    listExternalReferences: async (opts: any) => {
+      captured = opts;
+      return response;
+    },
+  });
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "links",
+    "list",
+    "--provider",
+    "CoCalc",
+    "--kind",
+    "person",
+    "--external-id",
+    "source-system:person-001",
+    "--organization",
+    "example-customer",
+    "--verification-state",
+    "verified",
+    "--cursor",
+    "current-page",
+    "--limit",
+    "25",
+    "--max-bytes",
+    "65536",
+    "--reason",
+    "Reconcile reviewed source bindings",
+  ]);
+  assert.equal(captured.provider, "cocalc");
+  assert.equal(captured.object_kind, "person");
+  assert.equal(captured.external_id, "source-system:person-001");
+  assert.equal(captured.external_id_prefix, undefined);
+  assert.equal(captured.organization, "example-customer");
+  assert.equal(captured.verification_state, "verified");
+  assert.equal(captured.cursor, "current-page");
+  assert.equal(captured.limit, 25);
+  assert.equal(captured.max_bytes, 65536);
+  assert.equal(captured.reason, "Reconcile reviewed source bindings");
+  assert.deepEqual((output() as any).data, response);
+});
+
+test("CRM links list preserves literal prefixes and rejects mixed selectors", async () => {
+  let captured: any;
+  const prefixRun = setup({
+    listExternalReferences: async (opts: any) => {
+      captured = opts;
+      return {
+        external_references: [],
+        truncated: false,
+        result_bytes: 2,
+      };
+    },
+  });
+  await prefixRun.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "links",
+    "list",
+    "--external-id-prefix",
+    "source-system:person_%",
+  ]);
+  assert.equal(captured.external_id, undefined);
+  assert.equal(captured.external_id_prefix, "source-system:person_%");
+  assert.equal(captured.reason, "Review CRM external references");
+
+  let called = false;
+  const mixedRun = setup({
+    listExternalReferences: async () => {
+      called = true;
+      return {};
+    },
+  });
+  await assert.rejects(
+    mixedRun.program.parseAsync([
+      "node",
+      "test",
+      "admin",
+      "crm",
+      "links",
+      "list",
+      "--external-id",
+      "source-system:person-001",
+      "--external-id-prefix",
+      "source-system:",
+    ]),
+    /--external-id and --external-id-prefix are mutually exclusive/,
+  );
+  assert.equal(called, false);
 });
 
 test("organization create previews with a stable idempotency key", async () => {
@@ -387,6 +742,45 @@ test("daily digest resolves assignees and forwards deterministic windows", async
     limit: 25,
     reason: "Review daily CRM work digest",
   });
+});
+
+test("CRM diagnostics preserves the seed runtime contract", async () => {
+  let captured: any;
+  const diagnostics = {
+    checked_at: "2026-08-27T12:00:00.000Z",
+    runtime_contract: {
+      crm_schema_contract_version: 1,
+      server_build: {
+        source: "package-metadata",
+        build_id: null,
+        package_version: "0.45.26",
+      },
+      feature_flags: {
+        crm_visible: true,
+        crm_mutations_enabled: false,
+      },
+    },
+  };
+  const { program, output } = setup({
+    getDiagnostics: async (opts: any) => {
+      captured = opts;
+      return diagnostics;
+    },
+  });
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "diagnostics",
+    "--limit",
+    "25",
+  ]);
+  assert.deepEqual(captured, {
+    limit: 25,
+    reason: "Review CRM diagnostics",
+  });
+  assert.deepEqual((output() as any).data, diagnostics);
 });
 
 test("CRM export writes sensitive data to the requested private file", async () => {

@@ -50,6 +50,8 @@ import {
   createOpportunity,
   createOrganization,
   getCustomerMetrics,
+  getDiagnostics,
+  listExternalReferences,
   listOrganizations,
   mutateExternalReference,
   searchOrganizations,
@@ -99,6 +101,71 @@ describe("CRM public Conat API", () => {
       payload: {
         reason: BASE.reason,
         limit: 25,
+        source: "admin-ui",
+      },
+    });
+  });
+
+  it("returns the seed server runtime contract used to bind import plans", async () => {
+    const result = {
+      checked_at: "2026-08-27T12:00:00.000Z",
+      runtime_contract: {
+        crm_schema_contract_version: 1,
+        server_build: {
+          source: "launchpad-environment",
+          build_id: "launchpad-build-1",
+        },
+        feature_flags: {
+          crm_visible: true,
+          crm_mutations_enabled: false,
+        },
+      },
+    };
+    mockDispatchCrmSeedRequest.mockResolvedValueOnce(result);
+
+    await expect(getDiagnostics({ ...BASE, limit: 25 })).resolves.toBe(result);
+    expect(mockRequireDangerousSessionAuth).not.toHaveBeenCalled();
+    expect(mockDispatchCrmSeedRequest).toHaveBeenCalledWith({
+      action: "getDiagnostics",
+      actor_account_id: "admin-1",
+      payload: {
+        reason: BASE.reason,
+        limit: 25,
+        source: "admin-ui",
+      },
+    });
+  });
+
+  it("routes bounded external-reference reconciliation as a read", async () => {
+    await listExternalReferences({
+      ...BASE,
+      provider: "cocalc",
+      object_kind: "person",
+      external_id_prefix: "source-system:",
+      organization: "example-customer",
+      verification_state: "verified",
+      cursor: "next-page",
+      limit: 25,
+      max_bytes: 65_536,
+    });
+    expect(mockRequireDangerousSessionAuth).not.toHaveBeenCalled();
+    expect(mockCrmActionCapabilities).toHaveBeenCalledWith(
+      "listExternalReferences",
+      expect.objectContaining({ object_kind: "person", limit: 25 }),
+    );
+    expect(mockDispatchCrmSeedRequest).toHaveBeenCalledWith({
+      action: "listExternalReferences",
+      actor_account_id: "admin-1",
+      payload: {
+        reason: BASE.reason,
+        provider: "cocalc",
+        object_kind: "person",
+        external_id_prefix: "source-system:",
+        organization: "example-customer",
+        verification_state: "verified",
+        cursor: "next-page",
+        limit: 25,
+        max_bytes: 65_536,
         source: "admin-ui",
       },
     });

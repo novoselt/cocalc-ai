@@ -132,6 +132,7 @@ export const searchOrganizations = read("searchOrganizations");
 export const getSupportContext = read("getSupportContext");
 export const getOrganization = read("getOrganization");
 export const getCustomerTimeline = read("getCustomerTimeline");
+export const listExternalReferences = read("listExternalReferences");
 export const listPeople = read("listPeople");
 export const searchPeople = read("searchPeople");
 export const getPerson = read("getPerson");

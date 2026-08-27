@@ -198,7 +198,7 @@ export const ADMIN_ENTRIES: DocsEntry[] = [
       "/public/docs/collaborators-8ce1955f.webp",
       "A reviewed CRM outreach queue connected to Zendesk and internal follow-up",
     ),
-    lastReviewed: "2026-08-26",
+    lastReviewed: "2026-08-27",
     noActionReason:
       "Admin operations runbook; use cocalc admin crm outreach or Admin -> Customers -> Outreach.",
     searchKeywords:
@@ -240,7 +240,7 @@ export const ADMIN_ENTRIES: DocsEntry[] = [
       "/public/docs/collaborators-8ce1955f.webp",
       "A customer relationship overview joining contacts, opportunities, tasks, and commercial systems",
     ),
-    lastReviewed: "2026-08-24",
+    lastReviewed: "2026-08-27",
     noActionReason:
       "Admin operations runbook; use cocalc admin crm or Admin -> Customers.",
     searchKeywords:
