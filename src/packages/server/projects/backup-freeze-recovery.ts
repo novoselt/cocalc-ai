@@ -174,8 +174,29 @@ export function createBackupFreezeRecovery({
       if (!enabled || handedOff) return;
       return operation.then(
         async (backup) => await release(backup, reason),
-        () => {
-          // Host-side backup failure releases the freeze in its failure path.
+        async (err) => {
+          if (
+            classifyArchiveBackupFreezeFailure({
+              enabled,
+              hostOperationStarted: true,
+              error: err,
+            }) !== "released"
+          ) {
+            return;
+          }
+          if (handedOff || cleanupStarted) return;
+          cleanupStarted = true;
+          try {
+            await attestReleased(op_id);
+          } catch (attestErr) {
+            logger.error("unable to attest failed host backup release", {
+              op_id,
+              project_id,
+              host_id,
+              reason,
+              err: `${attestErr}`,
+            });
+          }
         },
       );
     },

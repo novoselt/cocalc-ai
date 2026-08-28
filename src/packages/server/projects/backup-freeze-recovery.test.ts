@@ -90,6 +90,30 @@ describe("backup freeze recovery", () => {
     expect(releaseArchiveFreeze).not.toHaveBeenCalled();
   });
 
+  it("attests a late host failure that confirms its source was released", async () => {
+    const releaseArchiveFreeze = jest.fn(async () => ({
+      status: "released" as const,
+    }));
+    const attestReleased = jest.fn(async () => undefined);
+    const recovery = createBackupFreezeRecovery({
+      ...options,
+      releaseArchiveFreeze,
+      attestReleased,
+    });
+
+    await recovery.watch(
+      Promise.reject(
+        Object.assign(new Error("host backup failed after cleanup"), {
+          code: ARCHIVE_BACKUP_SOURCE_RELEASED_ERROR_CODE,
+        }),
+      ),
+      "failed late",
+    );
+
+    expect(releaseArchiveFreeze).not.toHaveBeenCalled();
+    expect(attestReleased).toHaveBeenCalledWith(options.op_id);
+  });
+
   it("attests only failures that never reached the host or were explicitly released", () => {
     const notStarted = archiveBackupFreezeFailureResult({
       enabled: true,
