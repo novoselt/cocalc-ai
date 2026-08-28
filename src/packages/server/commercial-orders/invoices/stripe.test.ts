@@ -377,6 +377,32 @@ describe("commercial Stripe invoices", () => {
     );
   });
 
+  it("uses the approved invoice memo as the Stripe draft description", async () => {
+    const memo = "University PO 5874860; campus adoption pilot.";
+    const order = orderFixture({
+      terms_snapshot: { invoice: { memo } },
+    });
+    const invoice = invoiceFixture();
+    const stripeInvoice = stripeInvoiceFixture({ description: memo });
+    mockGetCommercialOrder.mockResolvedValue(order);
+    mockCreateCommercialInvoiceIntent.mockResolvedValue({ order, invoice });
+    stripe.invoices.create.mockResolvedValue(stripeInvoice);
+    stripe.invoices.retrieve.mockResolvedValue(stripeInvoice);
+    stripe.invoices.listLineItems.mockResolvedValueOnce({ data: [] });
+
+    await createStripeCommercialInvoiceDraft({
+      id: "co_1",
+      account_id: "admin-1",
+      expected_version: 4,
+      reason: "Create invoice with approved procurement memo",
+    });
+
+    expect(stripe.invoices.create).toHaveBeenCalledWith(
+      expect.objectContaining({ description: memo }),
+      expect.anything(),
+    );
+  });
+
   it("reports only unlinked invoices from the exact commercial Stripe flow", async () => {
     stripe.invoices.search.mockResolvedValue({
       data: [
@@ -824,6 +850,46 @@ describe("commercial Stripe invoices", () => {
         event_type: "invoice-sent",
       }),
     );
+  });
+
+  it("finalizes an invoice whose description is the approved invoice memo", async () => {
+    const memo = "University PO 5874860; campus adoption pilot.";
+    const invoice = invoiceFixture({ status: "draft" });
+    const order = orderFixture({
+      invoices: [invoice],
+      terms_snapshot: { invoice: { memo } },
+    });
+    const draft = stripeInvoiceFixture({ description: memo });
+    const finalized = stripeInvoiceFixture({
+      description: memo,
+      status: "open",
+    });
+    const sent = stripeInvoiceFixture({
+      description: memo,
+      status: "open",
+      hosted_invoice_url: "https://invoice.test/in_1",
+      status_transitions: { finalized_at: 1787529600 },
+    });
+    mockGetCommercialOrder.mockResolvedValue(order);
+    mockGetCommercialInvoice.mockResolvedValue(invoice);
+    stripe.invoices.retrieve.mockResolvedValue(draft);
+    stripe.invoices.finalizeInvoice.mockResolvedValue(finalized);
+    stripe.invoices.sendInvoice.mockResolvedValue(sent);
+
+    await sendStripeCommercialInvoice({
+      id: "co_1",
+      commercial_invoice_id: "ci_1",
+      account_id: "admin-1",
+      expected_version: 4,
+      reason: "Send approved invoice with procurement memo",
+    });
+
+    expect(stripe.invoices.finalizeInvoice).toHaveBeenCalledWith(
+      "in_1",
+      expect.objectContaining({ auto_advance: false }),
+      expect.anything(),
+    );
+    expect(stripe.invoices.sendInvoice).toHaveBeenCalled();
   });
 
   it("rejects finalization when the Stripe recipient no longer matches", async () => {

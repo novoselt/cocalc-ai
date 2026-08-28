@@ -908,6 +908,224 @@ describePglite("commercial order store", () => {
     ).rejects.toThrow("billing details are locked after an invoice");
   });
 
+  it("changes the approved collection route after fulfillment but before invoicing", async () => {
+    const created = await store.createCommercialOrder(request());
+    await expect(
+      store.updateCommercialCollectionMode({
+        account_id: actor,
+        id: created.id,
+        expected_version: created.version,
+        reason: "attempt collection change before approval",
+        collection_mode: "stripe_invoice",
+      }),
+    ).rejects.toThrow("must be approved");
+
+    const approved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: created.id,
+      expected_version: created.version,
+      reason: "approve collection transition fixture",
+    });
+    const provisioned = await store.setCommercialFulfillment({
+      account_id: actor,
+      id: approved.id,
+      expected_version: approved.version,
+      reason: "provision before selecting Stripe collection",
+      fulfillment_state: "provisioned",
+    });
+    const transitioned = await store.updateCommercialCollectionMode({
+      account_id: actor,
+      id: provisioned.id,
+      expected_version: provisioned.version,
+      reason: "collect the approved order with a hosted Stripe invoice",
+      idempotency_key: `collection-mode-${randomUUID()}`,
+      collection_mode: "stripe_invoice",
+    });
+
+    expect(transitioned.collection_mode).toBe("stripe_invoice");
+    expect(transitioned.collection_state).toBe("not_invoiced");
+    expect(transitioned.approved_at).toBe(approved.approved_at);
+    expect(transitioned.fulfillment_state).toBe("provisioned");
+    expect(transitioned.workflow_state).toBe("ready_to_invoice");
+    const events = await store.listCommercialOrderEvents({
+      id: transitioned.id,
+      reason: "verify collection transition audit event",
+    });
+    expect(events.events[0]).toMatchObject({
+      event_type: "collection-mode-updated",
+      metadata: {
+        previous_collection_mode: "manual_invoice",
+        collection_mode: "stripe_invoice",
+      },
+    });
+  });
+
+  it("locks collection routing after invoice history and for complimentary orders", async () => {
+    const created = await store.createCommercialOrder(request());
+    const approved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: created.id,
+      expected_version: created.version,
+      reason: "approve invoice history fixture",
+    });
+    const invoiced = await store.issueManualCommercialInvoice({
+      account_id: actor,
+      id: approved.id,
+      expected_version: approved.version,
+      reason: "create invoice history before collection transition",
+      invoice_reference: "LOCK-COLLECTION-MODE",
+    });
+    await expect(
+      store.updateCommercialCollectionMode({
+        account_id: actor,
+        id: invoiced.id,
+        expected_version: invoiced.version,
+        reason: "attempt collection transition after invoicing",
+        collection_mode: "stripe_invoice",
+      }),
+    ).rejects.toThrow("collection has started");
+
+    const complimentary = await store.createCommercialOrder(
+      request({ collection_mode: "complimentary" }),
+    );
+    const complimentaryApproved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: complimentary.id,
+      expected_version: complimentary.version,
+      reason: "approve complimentary fixture",
+    });
+    await expect(
+      store.updateCommercialCollectionMode({
+        account_id: actor,
+        id: complimentaryApproved.id,
+        expected_version: complimentaryApproved.version,
+        reason: "attempt to convert complimentary terms",
+        collection_mode: "stripe_invoice",
+      }),
+    ).rejects.toThrow("only transition between");
+  });
+
+  it("fails closed when collection routing is no longer safe to change", async () => {
+    const staleCreated = await store.createCommercialOrder(request());
+    const staleApproved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: staleCreated.id,
+      expected_version: staleCreated.version,
+      reason: "approve stale-version collection fixture",
+    });
+    await expect(
+      store.updateCommercialCollectionMode({
+        account_id: actor,
+        id: staleApproved.id,
+        expected_version: staleApproved.version - 1,
+        reason: "attempt collection transition from stale state",
+        collection_mode: "stripe_invoice",
+      }),
+    ).rejects.toThrow("current version");
+
+    const paidCreated = await store.createCommercialOrder(request());
+    const paidApproved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: paidCreated.id,
+      expected_version: paidCreated.version,
+      reason: "approve paid collection fixture",
+    });
+    const paid = await store.recordManualCommercialPayment({
+      account_id: actor,
+      id: paidApproved.id,
+      expected_version: paidApproved.version,
+      reason: "record paid collection fixture",
+      amount: "3900",
+      currency: "usd",
+      method: "wire",
+      evidence_reference: `paid-collection-${randomUUID()}`,
+    });
+    await expect(
+      store.updateCommercialCollectionMode({
+        account_id: actor,
+        id: paid.id,
+        expected_version: paid.version,
+        reason: "attempt collection transition after payment",
+        collection_mode: "stripe_invoice",
+      }),
+    ).rejects.toThrow("collection has started");
+
+    const terminalCreated = await store.createCommercialOrder(request());
+    const terminalApproved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: terminalCreated.id,
+      expected_version: terminalCreated.version,
+      reason: "approve terminal collection fixture",
+    });
+    const cancelled = await store.cancelCommercialOrder({
+      account_id: actor,
+      id: terminalApproved.id,
+      expected_version: terminalApproved.version,
+      reason: "cancel terminal collection fixture",
+    });
+    await expect(
+      store.updateCommercialCollectionMode({
+        account_id: actor,
+        id: cancelled.id,
+        expected_version: cancelled.version,
+        reason: "attempt collection transition on cancelled order",
+        collection_mode: "stripe_invoice",
+      }),
+    ).rejects.toThrow("not allowed on a cancelled order");
+
+    const providerCreated = await store.createCommercialOrder(request());
+    const providerApproved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: providerCreated.id,
+      expected_version: providerCreated.version,
+      reason: "approve provider-operation collection fixture",
+    });
+    const reservation = await store.reserveCommercialProviderOperation({
+      order_id: providerApproved.id,
+      operation: "collection-mode-fixture",
+      expected_version: providerApproved.version,
+      idempotency_key: `collection-provider-${randomUUID()}`,
+    });
+    await expect(
+      store.updateCommercialCollectionMode({
+        account_id: actor,
+        id: providerApproved.id,
+        expected_version: providerApproved.version,
+        reason: "attempt collection transition during provider work",
+        collection_mode: "stripe_invoice",
+      }),
+    ).rejects.toThrow("provider operation collection-mode-fixture");
+    await store.setCommercialProviderOperationStatus({
+      id: reservation.operation.id,
+      status: "failed",
+    });
+
+    const quoteCreated = await store.createCommercialOrder(request());
+    const quoteIntent = await store.createCommercialStripeQuoteIntent({
+      account_id: actor,
+      id: quoteCreated.id,
+      expected_version: quoteCreated.version,
+      reason: "create active quote collection fixture",
+      idempotency_key: `collection-quote-${randomUUID()}`,
+      valid_until: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+    });
+    const quoteApproved = await store.approveCommercialOrder({
+      account_id: actor,
+      id: quoteCreated.id,
+      expected_version: quoteIntent.order.version,
+      reason: "approve active quote collection fixture",
+    });
+    await expect(
+      store.updateCommercialCollectionMode({
+        account_id: actor,
+        id: quoteApproved.id,
+        expected_version: quoteApproved.version,
+        reason: "attempt collection transition with active quote",
+        collection_mode: "stripe_invoice",
+      }),
+    ).rejects.toThrow("cancel it first");
+  });
+
   it("blocks cancellation during provider work and after collection", async () => {
     const created = await store.createCommercialOrder(request());
     const approved = await store.approveCommercialOrder({

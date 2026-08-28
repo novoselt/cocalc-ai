@@ -431,6 +431,26 @@ The JSON file must contain exactly one \`billing\` contact in
 \`billing_contacts\`. It may also contain \`procurement_contacts\`,
 \`billing_address\`, and \`invoice_memo\`.
 
+## Collection-mode corrections
+
+Use the dedicated collection-mode action when an approved order was configured
+for a manual invoice but should instead use a Stripe-hosted invoice, or the
+reverse. This is an operational payment-route correction: it preserves the
+approved agreement, price, workflow, and fulfillment state.
+
+The transition is limited to \`manual_invoice\` and \`stripe_invoice\`. It
+requires fresh auth and is rejected for complimentary agreements, active Stripe
+quotes, unresolved provider operations, or after any invoice or payment history
+exists.
+
+~~~sh
+cocalc admin receivables collection mode AR-2026-000123 \
+  --mode stripe_invoice --reason "use Stripe hosted invoicing" --json
+cocalc admin receivables collection mode AR-2026-000123 \
+  --mode stripe_invoice --reason "use Stripe hosted invoicing" \
+  --expected-version 8 --commit --json
+~~~
+
 ## Recovery and idempotency
 
 Stripe calls and database commits cannot form one transaction. Provider

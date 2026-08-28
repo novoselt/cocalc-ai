@@ -24,6 +24,7 @@ import {
   retryCommercialStripeEvent,
   updateCommercialOrder,
   updateCommercialBillingDetails,
+  updateCommercialCollectionMode,
   uploadCommercialOrderDocument,
   voidCommercialQuote,
   voidCommercialOrderDocument,
@@ -113,6 +114,8 @@ export async function dispatchCommercialSeedRequest(
       return await addCommercialOrderNote(opts);
     case "updateBillingDetails":
       return await updateCommercialBillingDetails(opts);
+    case "updateCollectionMode":
+      return await updateCommercialCollectionMode(opts);
     case "approve":
       return await approveCommercialOrder(opts);
     case "cancel":

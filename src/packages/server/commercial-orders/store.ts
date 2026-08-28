@@ -12,6 +12,7 @@ import type {
   CommercialBackfillRequest,
   CommercialBackfillResponse,
   CommercialBillingDetailsUpdateRequest,
+  CommercialCollectionModeUpdateRequest,
   CommercialInvoiceMutationRequest,
   CommercialManualInvoiceIssueRequest,
   CommercialManualPaymentRequest,
@@ -1356,6 +1357,59 @@ export async function updateCommercialBillingDetails(
         metadata: {
           billing_email: billingContacts[0].email_snapshot,
           procurement_contact_count: procurementContacts.length,
+        },
+      };
+    },
+  );
+}
+
+export async function updateCommercialCollectionMode(
+  opts: CommercialCollectionModeUpdateRequest,
+): Promise<CommercialOrder> {
+  return await mutateOrder(
+    "collection-mode-updated",
+    opts,
+    async (client, before) => {
+      assertOrderNotTerminal(before, "collection-mode update");
+      await assertNoUnresolvedProviderOperations(
+        client,
+        before.id,
+        "collection-mode update",
+      );
+      if (!before.approved_at || !before.approved_by_account_id) {
+        throw Error(
+          "the commercial order must be approved before changing collection mode",
+        );
+      }
+      const allowed = new Set(["stripe_invoice", "manual_invoice"]);
+      if (
+        !allowed.has(before.collection_mode) ||
+        !allowed.has(opts.collection_mode)
+      ) {
+        throw Error(
+          "collection mode may only transition between stripe_invoice and manual_invoice",
+        );
+      }
+      if (before.collection_mode === opts.collection_mode) {
+        throw Error(`collection mode is already ${opts.collection_mode}`);
+      }
+      if (before.collection_state !== "not_invoiced") {
+        throw Error(
+          "collection mode is locked after invoice collection has started",
+        );
+      }
+      if (before.invoices.length) {
+        throw Error("collection mode is locked after any invoice is created");
+      }
+      if (before.payments.length) {
+        throw Error("collection mode is locked after any payment is recorded");
+      }
+      assertNoActiveStripeQuote(before, "collection-mode update");
+      return {
+        changes: { collection_mode: opts.collection_mode },
+        metadata: {
+          previous_collection_mode: before.collection_mode,
+          collection_mode: opts.collection_mode,
         },
       };
     },

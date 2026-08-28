@@ -11,6 +11,7 @@ import { Command } from "commander";
 import type {
   CommercialBackfillRequest,
   CommercialBillingDetailsUpdateRequest,
+  CommercialCollectionModeUpdateRequest,
   CommercialInvoiceLinkRequest,
   CommercialManualInvoiceIssueRequest,
   CommercialInvoiceMutationRequest,
@@ -37,6 +38,7 @@ import {
   COMMERCIAL_PAYMENT_METHODS,
   COMMERCIAL_WORKFLOW_STATES,
   type CommercialCollectionState,
+  type CommercialCollectionMode,
   type CommercialFulfillmentState,
   type CommercialNextAction,
   type CommercialOrder,
@@ -59,6 +61,17 @@ type MutationOptions = {
 };
 
 type JsonObject = Record<string, unknown>;
+
+type InvoiceCollectionMode = Exclude<CommercialCollectionMode, "complimentary">;
+
+function normalizeInvoiceCollectionMode(value: unknown): InvoiceCollectionMode {
+  const mode = `${value ?? ""}`.trim();
+  const allowed: readonly string[] = ["stripe_invoice", "manual_invoice"];
+  if (!allowed.includes(mode)) {
+    throw Error("--mode must be stripe_invoice or manual_invoice");
+  }
+  return mode as InvoiceCollectionMode;
+}
 
 function normalizeNextAction(value: unknown): CommercialNextAction {
   const action = `${value ?? ""}`.trim();
@@ -736,6 +749,49 @@ function registerOrderMutationCommands(
       );
     },
   );
+
+  const collection = receivables
+    .command("collection")
+    .description("commercial payment collection configuration");
+  mutationOptions(
+    collection
+      .command("mode <order>")
+      .description(
+        "change Stripe/manual collection before any invoice or payment exists",
+      )
+      .requiredOption("--mode <mode>", "stripe_invoice or manual_invoice"),
+    "change the commercial order collection mode",
+  ).action(async (orderRef: string, opts: any, command: Command) => {
+    await deps.withContext(
+      command,
+      "admin receivables collection mode",
+      async (ctx) => {
+        const reason = requireReason(opts.reason);
+        const order = await ctx.hub.commercialOrders.get({
+          id: normalizeOrderReference(orderRef),
+          reason,
+        });
+        const request = {
+          id: order.id,
+          ...commonMutationRequest("collection-mode", order, opts, {
+            collection_mode: normalizeInvoiceCollectionMode(opts.mode),
+          }),
+        } as CommercialCollectionModeUpdateRequest;
+        if (!opts.commit) {
+          return preview(
+            "collection-mode-update",
+            order,
+            request as unknown as JsonObject,
+            {
+              safety:
+                "This preserves approval and fulfillment and is rejected after any invoice, payment, complimentary agreement, or provider work exists.",
+            },
+          );
+        }
+        return await ctx.hub.commercialOrders.updateCollectionMode(request);
+      },
+    );
+  });
 
   mutationOptions(
     receivables
@@ -1939,6 +1995,8 @@ Examples:
   cocalc admin receivables quote stripe create AR-2026-000123 --reason "draft Stripe quote"
   cocalc admin receivables document upload AR-2026-000123 --file PO.pdf \
     --reference PO-123 --reason "attach received purchase order"
+  cocalc admin receivables collection mode AR-2026-000123 \
+    --mode stripe_invoice --reason "use Stripe hosted invoicing"
   cocalc admin receivables invoice preview AR-2026-000123
   cocalc admin receivables payment record AR-2026-000123 --amount 3900 \\
     --method check --reference CHECK-123 --reason "check deposited"
