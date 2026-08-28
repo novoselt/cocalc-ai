@@ -32,7 +32,11 @@ export type CrmFeatureFlagName = (typeof CRM_FEATURE_FLAGS)[CrmCapability];
 export type CrmFeatureFlagSnapshot = Record<CrmFeatureFlagName, boolean>;
 
 export type CrmServerBuildIdentity = {
-  source: "launchpad-environment" | "star-environment" | "package-metadata";
+  source:
+    | "launchpad-environment"
+    | "star-release-metadata"
+    | "star-environment"
+    | "package-metadata";
 } & {
   [Key in keyof BuildIdentity]-?: NonNullable<BuildIdentity[Key]> | null;
 };

@@ -1216,7 +1216,7 @@ function registerLinks(crm: Command, deps: CrmCommandDeps): void {
         .option("--reject", "mark the reviewed link rejected")
         .addHelpText(
           "after",
-          "\nWhen --kind is person, --person is required when adding or verifying and must belong to <organization>; remove may omit it.\n",
+          "\nWhen --kind is person, --person is required when adding or verifying and must belong to <organization>; reject always stores an unbound identity, and remove may omit it.\n",
         ),
     ).action(async (organization: string, opts: any, cmd: Command) =>
       deps.withContext(cmd, `admin crm links ${commandName}`, async (ctx) => {

@@ -1254,14 +1254,71 @@ describePglite("integrated CRM store", () => {
         ({ reference }) => reference.external_id,
       ),
     ).toEqual([literalExternalId]);
+
+    const rejectBoundPreview = await store.mutateExternalReference({
+      account_id: actor,
+      organization: organizationId,
+      action: "reject",
+      provider: "cocalc",
+      object_kind: "person",
+      external_id: personExternalId,
+      reason: "reject and unbind a previously reviewed person source",
+    });
+    if (!rejectBoundPreview.preview) throw Error("expected preview");
+    expect(rejectBoundPreview.proposed).toMatchObject({
+      person_id: null,
+      verification_state: "rejected",
+    });
+    expect(
+      committed(
+        await store.mutateExternalReference({
+          account_id: actor,
+          organization: organizationId,
+          action: "reject",
+          provider: "cocalc",
+          object_kind: "person",
+          external_id: personExternalId,
+          reason: "reject and unbind a previously reviewed person source",
+          commit: true,
+          expected_version: rejectBoundPreview.expected_version,
+          idempotency_key: rejectBoundPreview.idempotency_key,
+        }),
+      ),
+    ).toMatchObject({ person_id: null, verification_state: "rejected" });
+
     const rejectedExternalId = `${sourcePrefix}rejected-person`;
-    await pool.query(
-      `INSERT INTO crm_external_references
-         (id,organization_id,person_id,provider,object_kind,external_id,
-          verification_state,created_by_account_id,updated_by_account_id)
-       VALUES($1,$2,$3,'cocalc','person',$4,'rejected',$5,$5)`,
-      [randomUUID(), organizationId, personId, rejectedExternalId, actor],
+    const rejectedPreview = await store.mutateExternalReference({
+      account_id: actor,
+      organization: organizationId,
+      action: "reject",
+      provider: "cocalc",
+      object_kind: "person",
+      external_id: rejectedExternalId,
+      reason: "reject an unbound synthetic person source",
+    });
+    if (!rejectedPreview.preview) throw Error("expected preview");
+    expect(rejectedPreview.proposed).toMatchObject({
+      person_id: null,
+      verification_state: "rejected",
+    });
+    const rejectedReference = committed(
+      await store.mutateExternalReference({
+        account_id: actor,
+        organization: organizationId,
+        action: "reject",
+        provider: "cocalc",
+        object_kind: "person",
+        external_id: rejectedExternalId,
+        reason: "reject an unbound synthetic person source",
+        commit: true,
+        expected_version: rejectedPreview.expected_version,
+        idempotency_key: rejectedPreview.idempotency_key,
+      }),
     );
+    expect(rejectedReference).toMatchObject({
+      person_id: null,
+      verification_state: "rejected",
+    });
     const rejectedPeople = await store.listPeople({
       reason: "do not treat a rejected source identity as authoritative",
       search: rejectedExternalId,
@@ -1291,11 +1348,6 @@ describePglite("integrated CRM store", () => {
         expected_version: removePreview.expected_version,
         idempotency_key: removePreview.idempotency_key,
       }),
-    );
-    await pool.query(
-      `DELETE FROM crm_external_references
-        WHERE provider='cocalc' AND object_kind='person' AND external_id=$1`,
-      [rejectedExternalId],
     );
     const unlinkPreview = await store.mutateOrganizationPerson({
       account_id: actor,

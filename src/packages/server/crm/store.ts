@@ -3270,9 +3270,13 @@ export async function mutateExternalReference(
     getPool(),
     opts.organization,
   );
-  const personId = opts.person
+  const resolvedPersonId = opts.person
     ? await resolvePersonId(getPool(), opts.person)
     : null;
+  const personId =
+    opts.object_kind === "person" && opts.action === "reject"
+      ? null
+      : resolvedPersonId;
   if (opts.object_kind === "person" && opts.opportunity) {
     throw Error("opportunity is not allowed for a person external reference");
   }
@@ -3295,7 +3299,11 @@ export async function mutateExternalReference(
       opportunityId,
     );
   }
-  if (opts.object_kind === "person" && opts.action !== "remove") {
+  if (
+    opts.object_kind === "person" &&
+    opts.action !== "reject" &&
+    opts.action !== "remove"
+  ) {
     if (!personId) {
       throw Error("person is required for a person external reference");
     }
@@ -3369,6 +3377,7 @@ export async function mutateExternalReference(
   }
   if (
     opts.object_kind === "person" &&
+    opts.action !== "reject" &&
     opts.action !== "remove" &&
     current?.person_id != null &&
     current.person_id !== personId
@@ -3484,7 +3493,8 @@ export async function mutateExternalReference(
            version=crm_external_references.version+1
          WHERE crm_external_references.organization_id=EXCLUDED.organization_id
            AND crm_external_references.version=$12
-           AND (crm_external_references.object_kind<>'person'
+           AND (EXCLUDED.verification_state='rejected'
+             OR crm_external_references.object_kind<>'person'
              OR crm_external_references.person_id IS NULL
              OR crm_external_references.person_id=EXCLUDED.person_id)
          RETURNING *`,

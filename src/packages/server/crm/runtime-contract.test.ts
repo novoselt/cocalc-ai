@@ -59,6 +59,41 @@ describe("CRM runtime contract", () => {
     });
   });
 
+  it("uses canonical Star release metadata ahead of Star environment", () => {
+    expect(
+      getCrmServerBuildIdentity(
+        {
+          COCALC_STAR_RELEASE_ID: "stale-environment-release",
+          COCALC_STAR_GIT_REVISION: "stale-environment-commit",
+        },
+        "0.45.26",
+        {
+          detected: true,
+          checked_at: "2026-08-28T00:00:00.000Z",
+          product: "cocalc-star",
+          release_id: "installed-star-release",
+          git_revision: "0123456789abcdef0123456789abcdef01234567",
+          git_dirty: false,
+          built_at: "2026-08-27T23:00:00.000Z",
+          hostname: "star.example",
+          architecture: "x64",
+          platform: "linux",
+          os_release: "test",
+        },
+      ),
+    ).toEqual({
+      source: "star-release-metadata",
+      build_id: "installed-star-release",
+      built_at: "2026-08-27T23:00:00.000Z",
+      git_commit: "0123456789abcdef0123456789abcdef01234567",
+      git_commit_short: "0123456789ab",
+      git_dirty: false,
+      git_diff_hash: null,
+      package_version: "0.45.26",
+      artifact_kind: "cocalc-star",
+    });
+  });
+
   it("binds the schema version, server build, and exact flag snapshot", () => {
     const featureFlags = {
       ...disabledFeatureFlags(),

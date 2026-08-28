@@ -260,7 +260,7 @@ test("CRM links help exposes cursor-complete listing and person bindings", () =>
     assert.match(help, /--reject/);
     assert.match(
       help,
-      /--kind is person, --person is required when adding or verifying/,
+      /--kind is person, --person is required when adding or verifying.*reject always stores an unbound identity.*remove may omit it/,
     );
   }
 });
@@ -284,17 +284,18 @@ test("CRM links add records an explicit reviewed rejection", async () => {
     "--provider",
     "cocalc",
     "--kind",
-    "organization",
+    "person",
     "--external-id",
-    "source-system:organization-001",
+    "source-system:person-001",
     "--reject",
     "--reason",
     "reviewed and rejected the source candidate",
   ]);
   assert.equal(captured.action, "reject");
   assert.equal(captured.provider, "cocalc");
-  assert.equal(captured.object_kind, "organization");
-  assert.equal(captured.external_id, "source-system:organization-001");
+  assert.equal(captured.object_kind, "person");
+  assert.equal(captured.external_id, "source-system:person-001");
+  assert.equal(captured.person, undefined);
   assert.equal(captured.commit, false);
 });
 

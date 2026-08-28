@@ -656,8 +656,8 @@ cocalc admin crm links add example-customer \
   --reason "reviewed source-person binding"
 # PREVIEW ONLY — this command makes no change.
 cocalc admin crm links add example-customer \
-  --provider cocalc --kind organization \
-  --external-id source-system:organization-789 --reject \
+  --provider cocalc --kind person \
+  --external-id source-system:person-789 --reject \
   --reason "reviewed and rejected source candidate"
 # PREVIEW ONLY — this command makes no change.
 cocalc admin crm opportunities create CRM-2026-000123 \
