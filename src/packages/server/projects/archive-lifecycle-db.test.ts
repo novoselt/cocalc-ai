@@ -17,6 +17,8 @@ jest.mock("./archive-lifecycle-schema", () => ({
 
 import {
   createProjectArchiveLifecycleJob,
+  getProjectArchiveLifecycleFinalBackup,
+  recordProjectArchiveLifecycleFinalBackup,
   updateProjectArchiveLifecycleJob,
 } from "./archive-lifecycle-db";
 import type { ArchiveLifecycleProjectSnapshot } from "./archive-lifecycle-types";
@@ -74,5 +76,51 @@ describe("project archive lifecycle job persistence", () => {
     expect(sql.match(/\$2::VARCHAR\(32\)/g)).toHaveLength(3);
     expect(sql).not.toMatch(/\$2(?!::VARCHAR\(32\))/);
     expect(parameters[1]).toBe("completed");
+  });
+
+  it("persists the validated final backup before host cleanup", async () => {
+    query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    await recordProjectArchiveLifecycleFinalBackup({
+      job_id: "66666666-6666-4666-8666-666666666666",
+      backup_id: "final-backup-id",
+      backup_generation: 42,
+      backup_time: "2026-08-28T04:00:00.000Z",
+      expected_previous_backup_id: null,
+    });
+
+    const [sql, parameters] = query.mock.calls[0];
+    expect(sql).toContain("final_backup_id = $2");
+    expect(sql).toContain("status = 'running'");
+    expect(sql).toContain("final_backup_id IS NOT DISTINCT FROM $5");
+    expect(parameters).toEqual([
+      "66666666-6666-4666-8666-666666666666",
+      "final-backup-id",
+      42,
+      "2026-08-28T04:00:00.000Z",
+      null,
+    ]);
+  });
+
+  it("loads a durable final backup marker for cleanup retries", async () => {
+    query.mockResolvedValueOnce({
+      rows: [
+        {
+          final_backup_id: "final-backup-id",
+          backup_generation: "42",
+          backup_time: new Date("2026-08-28T04:00:00.000Z"),
+        },
+      ],
+    });
+
+    await expect(
+      getProjectArchiveLifecycleFinalBackup(
+        "66666666-6666-4666-8666-666666666666",
+      ),
+    ).resolves.toEqual({
+      id: "final-backup-id",
+      generation: "42",
+      time: new Date("2026-08-28T04:00:00.000Z"),
+    });
   });
 });

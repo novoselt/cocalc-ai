@@ -18,6 +18,9 @@ import { deleteProjectDataOnHost } from "@cocalc/server/project-host/control";
 import { BACKUP_TIMEOUT_MS } from "@cocalc/server/projects/backup-lro";
 import {
   createProjectArchiveLifecycleJob,
+  getProjectArchiveLifecycleFinalBackup,
+  recordProjectArchiveLifecycleFinalBackup,
+  type ProjectArchiveLifecycleFinalBackup,
   updateProjectArchiveLifecycleJob,
 } from "./archive-lifecycle-db";
 import { isProjectArchiveBackupCurrent } from "./archive-lifecycle-policy";
@@ -127,7 +130,7 @@ async function createFinalAutomaticArchiveBackup({
 }: {
   project_id: string;
   job_id: string;
-}): Promise<void> {
+}): Promise<ProjectArchiveLifecycleFinalBackup> {
   const op = await createBackup(
     {
       project_id,
@@ -136,6 +139,7 @@ async function createFinalAutomaticArchiveBackup({
     {
       skip_collab_check: true,
       skip_rootfs_portability_check: true,
+      replace_oldest_at_limit: true,
       dedupe_key: `${FINAL_ARCHIVE_BACKUP_TAG}:${job_id}`,
     },
   );
@@ -152,9 +156,49 @@ async function createFinalAutomaticArchiveBackup({
     );
   }
   const result = summary.result ?? {};
-  if (!result.id && !result.backup_id) {
+  const id = `${result.id ?? result.backup_id ?? ""}`.trim();
+  if (!id) {
     throw new Error(
       "final automatic archive backup completed without a snapshot id",
+    );
+  }
+  const generation = Number(result.generation);
+  if (!Number.isFinite(generation) || generation <= 0) {
+    throw new Error(
+      "final automatic archive backup completed without a filesystem generation",
+    );
+  }
+  return {
+    id,
+    generation,
+    time: result.time ?? result.backup_time ?? null,
+  };
+}
+
+function finalBackupCoversProject({
+  backup,
+  row,
+}: {
+  backup: ProjectArchiveLifecycleFinalBackup;
+  row: ArchiveRow;
+}): boolean {
+  const backupGeneration = Number(backup.generation);
+  const changedGeneration = Number(row.last_changed_generation);
+  return !(
+    !Number.isFinite(backupGeneration) ||
+    backupGeneration <= 0 ||
+    (Number.isFinite(changedGeneration) &&
+      changedGeneration > 0 &&
+      backupGeneration < changedGeneration)
+  );
+}
+
+function assertFinalBackupCoversProject(
+  opts: Parameters<typeof finalBackupCoversProject>[0],
+): void {
+  if (!finalBackupCoversProject(opts)) {
+    throw new Error(
+      "final automatic archive backup does not cover the current filesystem generation",
     );
   }
 }
@@ -291,19 +335,38 @@ export async function archiveProjectStorage({
     }
 
     if (automatic) {
-      await createFinalAutomaticArchiveBackup({ project_id, job_id: jobId });
-      row = await loadArchiveRow(project_id);
-      hostStatus = `${row.host_status ?? ""}`.trim().toLowerCase();
-      if (!row.backup_repo_id) {
-        throw new Error(
-          "project backup repository disappeared during automatic archive",
-        );
+      let finalBackup = await getProjectArchiveLifecycleFinalBackup(jobId);
+      if (
+        !finalBackup ||
+        !finalBackupCoversProject({ backup: finalBackup, row })
+      ) {
+        const previousFinalBackupId = finalBackup?.id ?? null;
+        finalBackup = await createFinalAutomaticArchiveBackup({
+          project_id,
+          job_id: jobId,
+        });
+        row = await loadArchiveRow(project_id);
+        hostStatus = `${row.host_status ?? ""}`.trim().toLowerCase();
+        if (!row.backup_repo_id) {
+          throw new Error(
+            "project backup repository disappeared during automatic archive",
+          );
+        }
+        assertAutomaticArchiveReady({
+          row,
+          job_id: jobId,
+          expected_host_id,
+        });
+        assertFinalBackupCoversProject({ backup: finalBackup, row });
+        await recordProjectArchiveLifecycleFinalBackup({
+          job_id: jobId,
+          backup_id: finalBackup.id,
+          backup_generation: Number(finalBackup.generation),
+          backup_time: finalBackup.time,
+          expected_previous_backup_id: previousFinalBackupId,
+        });
       }
-      assertAutomaticArchiveReady({
-        row,
-        job_id: jobId,
-        expected_host_id,
-      });
+      assertFinalBackupCoversProject({ backup: finalBackup, row });
     }
 
     const refreshedHostCanRunMutations =

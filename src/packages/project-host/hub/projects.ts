@@ -3495,6 +3495,7 @@ export async function createBackup({
               backup.time instanceof Date
                 ? backup.time.toISOString()
                 : backup.time,
+            generation: backup.generation,
             duration_ms,
           },
           progress_summary: {

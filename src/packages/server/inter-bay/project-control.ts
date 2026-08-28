@@ -539,6 +539,7 @@ export async function handleProjectControlBackup(
       skip_collab_check: true,
       skip_owner_route: true,
       managed_egress_override: req.managed_egress_override,
+      replace_oldest_at_limit: req.replace_oldest_at_limit,
     },
   );
   const deadline = Date.now() + BACKUP_TIMEOUT_MS + 60_000;

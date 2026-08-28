@@ -163,6 +163,7 @@ import { INTERNAL_SSH_CONFIG } from "@cocalc/conat/project/runner/constants";
 import { ensureSshpiperdKey } from "./ssh/sshpiperd-key";
 import { requireManagedSshKeyAccount } from "./ssh/managed-key-account";
 import { managedProjectEgressResidualTracker } from "./managed-egress-residual";
+import { planBackupRetention } from "./backup-retention";
 import { getLocalHostId } from "./sqlite/hosts";
 import { setContainerFileIO } from "@cocalc/lite/hub/acp/executor/container";
 import {
@@ -3977,18 +3978,15 @@ async function createBackup({
   tags,
   lro,
   managed_egress_override,
+  replace_oldest_at_limit,
 }: {
   project_id: string;
   limit?: number;
   tags?: string[];
   lro?: LroRef;
   managed_egress_override?: ManagedBackupEgressOverride;
-}): Promise<{ time: Date; id: string }> {
-  if (limit != null && limit <= 0) {
-    throw new ConatError(`there is a limit of ${limit} backups`, {
-      code: 507,
-    });
-  }
+  replace_oldest_at_limit?: boolean;
+}): Promise<{ time: Date; id: string; generation: number | null }> {
   const progress = createLroRusticReporter(lro, "backup");
   const managedBackupPolicy = await checkManagedBackupAllowedBestEffort({
     project_id,
@@ -4005,24 +4003,29 @@ async function createBackup({
         project_id,
         op: "createBackup",
         run: async () => {
-          if (limit != null) {
-            const backupCount = (
-              await getBackups({
-                project_id,
-                indexed_only: true,
-              })
-            ).length;
-            if (backupCount >= limit) {
-              throw new ConatError(`there is a limit of ${limit} backups`, {
-                code: 507,
-              });
-            }
+          const existingBackups =
+            limit == null
+              ? []
+              : await getBackups({
+                  project_id,
+                  indexed_only: true,
+                });
+          const retention = planBackupRetention({
+            backups: existingBackups,
+            limit,
+            replaceOldestAtLimit: replace_oldest_at_limit,
+          });
+          if (!retention.allowed) {
+            throw new ConatError(`there is a limit of ${limit} backups`, {
+              code: 507,
+            });
           }
           const vol = await getVolume(project_id);
           vol.fs.rusticRepo = await resolveRusticRepo(project_id);
           const parent = await getLatestKnownBackupId(project_id);
+          let backupResult: Awaited<ReturnType<(typeof vol.rustic)["backup"]>>;
           try {
-            return await vol.rustic.backup({
+            backupResult = await vol.rustic.backup({
               tags,
               parent,
               progress,
@@ -4048,12 +4051,28 @@ async function createBackup({
                 err: `${err}`,
               },
             );
-            return await vol.rustic.backup({
+            backupResult = await vol.rustic.backup({
               tags,
               parent,
               progress,
             });
           }
+          // The replacement is intentionally pruned only after the new
+          // snapshot exists. A pruning failure may temporarily exceed the
+          // entitlement, but must never invalidate the recovery barrier.
+          for (const backup of retention.replace) {
+            try {
+              await deleteBackup({ project_id, id: backup.id });
+            } catch (err) {
+              logger.warn("unable to prune replaced backup", {
+                project_id,
+                backup_id: backup.id,
+                replacement_backup_id: backupResult.id,
+                err: `${err}`,
+              });
+            }
+          }
+          return backupResult;
         },
       }),
   });
@@ -4068,15 +4087,15 @@ async function createBackup({
   if (managed_egress_override === LEGACY_MIGRATION_INITIAL_BACKUP_OVERRIDE) {
     legacyProjectInitialBackupEgressExempt.delete(project_id);
   }
+  const generation = await getGeneration(projectMountpoint(project_id)).catch(
+    () => null,
+  );
   try {
-    const generation = await getGeneration(projectMountpoint(project_id)).catch(
-      () => null,
-    );
     await reportBackupSuccess(project_id, result.time, generation);
   } catch (err) {
     logger.warn("backup success report failed", { project_id, err });
   }
-  return result;
+  return { ...result, generation };
 }
 
 async function restoreBackup({

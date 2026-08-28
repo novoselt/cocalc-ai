@@ -30,6 +30,15 @@ export type ProjectArchiveLifecycleJob = {
   report_only: boolean;
   attempts: number;
   thresholds: Record<string, unknown>;
+  final_backup_id: string | null;
+  backup_generation: number | string | null;
+  backup_time: Date | string | null;
+};
+
+export type ProjectArchiveLifecycleFinalBackup = {
+  id: string;
+  generation: number | string;
+  time: Date | string | null;
 };
 
 function boundedError(error: unknown): string {
@@ -148,7 +157,8 @@ export async function createProjectArchiveLifecycleJob({
      )
      ON CONFLICT DO NOTHING
      RETURNING id, project_id, owning_bay_id, host_id, reason,
-               policy_version, status, report_only, attempts, thresholds`,
+               policy_version, status, report_only, attempts, thresholds,
+               final_backup_id, backup_generation, backup_time`,
     [
       id,
       project.project_id,
@@ -168,6 +178,66 @@ export async function createProjectArchiveLifecycleJob({
     ],
   );
   return rows[0];
+}
+
+export async function getProjectArchiveLifecycleFinalBackup(
+  job_id: string,
+): Promise<ProjectArchiveLifecycleFinalBackup | undefined> {
+  await ensureProjectArchiveLifecycleSchema();
+  const { rows } = await getPool().query<{
+    final_backup_id: string | null;
+    backup_generation: number | string | null;
+    backup_time: Date | string | null;
+  }>(
+    `SELECT final_backup_id, backup_generation, backup_time
+       FROM ${PROJECT_ARCHIVE_LIFECYCLE_TABLE}
+      WHERE id = $1
+      LIMIT 1`,
+    [job_id],
+  );
+  const row = rows[0];
+  if (!row?.final_backup_id || row.backup_generation == null) return;
+  return {
+    id: row.final_backup_id,
+    generation: row.backup_generation,
+    time: row.backup_time,
+  };
+}
+
+export async function recordProjectArchiveLifecycleFinalBackup({
+  job_id,
+  backup_id,
+  backup_generation,
+  backup_time,
+  expected_previous_backup_id,
+}: {
+  job_id: string;
+  backup_id: string;
+  backup_generation: number;
+  backup_time?: Date | string | null;
+  expected_previous_backup_id?: string | null;
+}): Promise<void> {
+  await ensureProjectArchiveLifecycleSchema();
+  const result = await getPool().query(
+    `UPDATE ${PROJECT_ARCHIVE_LIFECYCLE_TABLE}
+        SET final_backup_id = $2,
+            backup_generation = $3,
+            backup_time = $4,
+            updated_at = NOW()
+      WHERE id = $1
+        AND status = 'running'
+        AND final_backup_id IS NOT DISTINCT FROM $5`,
+    [
+      job_id,
+      backup_id,
+      backup_generation,
+      backup_time ?? null,
+      expected_previous_backup_id ?? null,
+    ],
+  );
+  if ((result.rowCount ?? 0) !== 1) {
+    throw new Error("archive lifecycle job no longer accepts a final backup");
+  }
 }
 
 export async function updateProjectArchiveLifecycleJob({
@@ -257,7 +327,8 @@ export async function listQueuedProjectArchiveLifecycleJobs(
   await ensureProjectArchiveLifecycleSchema();
   const { rows } = await getPool().query<ProjectArchiveLifecycleJob>(
     `SELECT id, project_id, owning_bay_id, host_id, reason,
-            policy_version, status, report_only, attempts, thresholds
+            policy_version, status, report_only, attempts, thresholds,
+            final_backup_id, backup_generation, backup_time
        FROM ${PROJECT_ARCHIVE_LIFECYCLE_TABLE}
       WHERE reason <> 'manual'
         AND report_only IS FALSE

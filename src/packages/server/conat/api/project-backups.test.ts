@@ -342,6 +342,31 @@ describe("project-backups.createBackup", () => {
     );
   });
 
+  it("allows trusted internal callers to replace the oldest backup at quota", async () => {
+    const { createBackup } = await import("./project-backups");
+
+    await createBackup(
+      {
+        account_id: "acct-1",
+        project_id: "proj-1",
+      },
+      {
+        skip_rootfs_portability_check: true,
+        replace_oldest_at_limit: true,
+      },
+    );
+
+    expect(createLroMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          project_id: "proj-1",
+          limit: 5,
+          replace_oldest_at_limit: true,
+        }),
+      }),
+    );
+  });
+
   it("returns a local waitable LRO and delegates execution for remote-owner projects", async () => {
     resolveProjectBayMock.mockResolvedValue({ bay_id: "bay-1", epoch: 7 });
     const { createBackup } = await import("./project-backups");

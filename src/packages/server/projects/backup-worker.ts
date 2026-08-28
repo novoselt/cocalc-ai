@@ -163,6 +163,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
   const limit = Number.isFinite(Number(input.limit))
     ? Math.max(0, Math.floor(Number(input.limit)))
     : DEFAULT_MAX_BACKUPS_PER_PROJECT;
+  const replace_oldest_at_limit = input.replace_oldest_at_limit === true;
 
   if (!project_id) {
     const updated = await updateLro({
@@ -318,6 +319,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
             tags,
             lro,
             managed_egress_override,
+            replace_oldest_at_limit,
           });
         })(),
         BACKUP_TIMEOUT_MS,
@@ -350,6 +352,9 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
       time: backup_time,
       duration_ms,
     };
+    if ("generation" in backup) {
+      result.generation = backup.generation;
+    }
     if (externalMigration) {
       result.migration_id = externalMigration.migration_id;
       result.destination_project_id = externalMigration.destination_project_id;

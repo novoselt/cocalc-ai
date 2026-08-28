@@ -356,6 +356,7 @@ export interface ProjectControlBackupRequest {
   account_id?: string;
   tags?: string[];
   managed_egress_override?: ManagedProjectEgressOverride;
+  replace_oldest_at_limit?: boolean;
   epoch?: number;
 }
 
