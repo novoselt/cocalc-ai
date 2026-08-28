@@ -608,6 +608,47 @@ describe("projects.archiveProject", () => {
     });
   });
 
+  it("does not recover an older success across a newer uncertain attempt", async () => {
+    listLrosByDedupeMock.mockResolvedValueOnce([
+      {
+        op_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        scope_type: "project",
+        scope_id: AUTOMATIC_PROJECT_ID,
+        status: "failed",
+        result: { archive_freeze_recovery: "uncertain" },
+      },
+      {
+        op_id: "88888888-8888-4888-8888-888888888888",
+        scope_type: "project",
+        scope_id: AUTOMATIC_PROJECT_ID,
+        status: "succeeded",
+        result: {
+          id: "possibly-pruned-backup-id",
+          time: "2026-06-15T05:15:00.000Z",
+          generation: 10,
+        },
+      },
+    ]);
+    poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: AUTOMATIC_PROJECT_ID,
+        mode: "automatic",
+        job_id: AUTOMATIC_JOB_ID,
+        reason: "free-inactive",
+        expected_host_id: AUTOMATIC_HOST_ID,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(createBackupMock).toHaveBeenCalledTimes(1);
+    expect(recordProjectArchiveLifecycleFinalBackupMock).toHaveBeenCalledWith(
+      expect.objectContaining({ backup_id: "final-backup-id" }),
+    );
+  });
+
   it.each([
     ["uncertain", { archive_freeze_recovery: "uncertain" }, false],
     ["released", { archive_freeze_recovery: "released" }, true],

@@ -181,7 +181,14 @@ async function createFinalAutomaticArchiveBackup({
   const active = history.find(({ status }) =>
     ["queued", "running"].includes(status),
   );
-  const succeeded = history.find(({ status }) => status === "succeeded");
+  // An unresolved newer attempt may have replaced and pruned an older backup.
+  const succeeded = history.find(
+    ({ status }, index) =>
+      status === "succeeded" &&
+      history
+        .slice(0, index)
+        .every(({ result }) => isArchiveBackupFailureReopenSafe(result)),
+  );
   if (active) {
     onBackupBarrierMayExist?.();
     summary = await waitForDurableLroCompletion({
