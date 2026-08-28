@@ -3,6 +3,7 @@ import {
   archiveBackupFreezeFailureResult,
   createBackupFreezeRecovery,
   isArchiveBackupFailureReopenSafe,
+  retireStaleFreezeBackupAttempts,
 } from "./backup-freeze-recovery";
 
 function deferred<T>() {
@@ -133,6 +134,65 @@ describe("backup freeze recovery", () => {
     expect(attestNotStarted).toHaveBeenCalledWith(options.op_id);
   });
 
+  it("does not let a replacement attempt clear inherited uncertainty", async () => {
+    const releaseArchiveFreeze = jest.fn(async () => ({
+      status: "released" as const,
+    }));
+    const attestReleased = jest.fn(async () => undefined);
+    const attestNotStarted = jest.fn(async () => undefined);
+    const recovery = createBackupFreezeRecovery({
+      ...options,
+      preservePriorUncertainty: true,
+      releaseArchiveFreeze,
+      attestReleased,
+      attestNotStarted,
+    });
+
+    await recovery.release(
+      { id: "replacement-backup", generation: 42 },
+      "replacement lost result",
+    );
+
+    expect(releaseArchiveFreeze).toHaveBeenCalled();
+    expect(attestReleased).not.toHaveBeenCalled();
+    expect(attestNotStarted).not.toHaveBeenCalled();
+
+    const preHostRecovery = createBackupFreezeRecovery({
+      ...options,
+      preservePriorUncertainty: true,
+      releaseArchiveFreeze,
+      attestReleased,
+      attestNotStarted,
+    });
+    await preHostRecovery.watch(
+      Promise.reject(new Error("replacement never reached host")),
+      "replacement failed",
+      () => false,
+    );
+    expect(attestReleased).not.toHaveBeenCalled();
+    expect(attestNotStarted).not.toHaveBeenCalled();
+  });
+
+  it("retires a stale freeze-capable attempt instead of reclaiming its row", async () => {
+    const retired = { op_id: "backup-op-1", status: "failed" };
+    const query = jest.fn(async () => ({ rows: [retired] }));
+
+    await expect(
+      retireStaleFreezeBackupAttempts({
+        client: { query },
+        kind: "project-backup",
+        lease_ms: 120_000,
+      }),
+    ).resolves.toEqual([retired]);
+
+    const [sql, parameters] = query.mock.calls[0];
+    expect(sql).toContain("status = 'failed'");
+    expect(sql).toContain('archive_freeze_recovery":"uncertain');
+    expect(sql).toContain("input ->> 'freeze_source' = 'true'");
+    expect(sql).toContain("heartbeat_at < NOW()");
+    expect(parameters).toEqual(["project-backup", 120_000]);
+  });
+
   it("attests only failures that never reached the host or were explicitly released", () => {
     const notStarted = archiveBackupFreezeFailureResult({
       enabled: true,
@@ -157,11 +217,21 @@ describe("backup freeze recovery", () => {
       operationSettled: false,
       error: new Error("host watch won"),
     });
+    const inheritedUncertainty = archiveBackupFreezeFailureResult({
+      enabled: true,
+      hostOperationStarted: false,
+      operationSettled: true,
+      error: new Error("replacement never reached host"),
+      previousResult: { archive_freeze_recovery: "uncertain" },
+    });
 
     expect(notStarted).toEqual({ archive_freeze_recovery: "not-started" });
     expect(released).toEqual({ archive_freeze_recovery: "released" });
     expect(uncertain).toEqual({ archive_freeze_recovery: "uncertain" });
     expect(unresolvedPreHost).toEqual({
+      archive_freeze_recovery: "uncertain",
+    });
+    expect(inheritedUncertainty).toEqual({
       archive_freeze_recovery: "uncertain",
     });
     expect(isArchiveBackupFailureReopenSafe(notStarted)).toBe(true);

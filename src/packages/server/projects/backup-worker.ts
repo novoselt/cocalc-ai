@@ -26,6 +26,8 @@ import {
 import {
   archiveBackupFreezeFailureResult,
   createBackupFreezeRecovery,
+  getArchiveBackupFreezeRecoveryStatus,
+  retireStaleFreezeBackupAttempts,
 } from "./backup-freeze-recovery";
 import {
   BACKUP_LRO_KIND,
@@ -179,6 +181,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
         enabled: freeze_source,
         hostOperationStarted: false,
         error: undefined,
+        previousResult: op.result,
       }),
     });
     if (updated) {
@@ -196,6 +199,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
         enabled: freeze_source,
         hostOperationStarted: false,
         error: undefined,
+        previousResult: op.result,
       }),
     });
     if (updated) {
@@ -241,6 +245,8 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
     op_id,
     project_id,
     host_id: targetHostId,
+    preservePriorUncertainty:
+      getArchiveBackupFreezeRecoveryStatus(op.result) === "uncertain",
   });
 
   let lastProgressKey: string | null = null;
@@ -467,6 +473,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
           // pre-RPC promise will not proceed to freeze the project later.
           operationSettled: backupOperation == null || backupOperationSettled,
           error: err,
+          previousResult: op.result,
         }),
       });
       watchLateBackup();
@@ -546,6 +553,16 @@ async function claimBackupLroOps({
     }
     claimLockHeld = true;
 
+    await ensureLroSchema();
+    const retired = await retireStaleFreezeBackupAttempts({
+      client,
+      kind: BACKUP_LRO_KIND,
+      lease_ms,
+    });
+    for (const op of retired) {
+      await publishSummarySafe(op, "retire-stale-freeze-attempt");
+    }
+
     const hostStatuses = await listHostLocalBackupStatuses();
     const freshRunningCounts = await listFreshRunningBackupCountsByHost({
       lease_ms,
@@ -595,7 +612,6 @@ async function claimBackupLroOps({
       return [];
     }
 
-    await ensureLroSchema();
     await client.query("BEGIN");
     inTransaction = true;
     const { rows } = await client.query<BackupClaimCandidateRow>(
@@ -611,6 +627,7 @@ async function claimBackupLroOps({
             l.status = 'queued'
             OR (
               l.status = 'running'
+              AND l.input ->> 'freeze_source' IS DISTINCT FROM 'true'
               AND (l.heartbeat_at IS NULL OR l.heartbeat_at < now() - ($2::text || ' milliseconds')::interval)
             )
           )
@@ -736,6 +753,7 @@ export function startBackupLroWorker({
               enabled: op.input?.freeze_source === true,
               hostOperationStarted: false,
               error: err,
+              previousResult: op.result,
             }),
           });
           if (updated) {
