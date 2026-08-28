@@ -3,15 +3,19 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
+import { conat } from "@cocalc/backend/conat";
 import getLogger from "@cocalc/backend/logger";
 import getPool from "@cocalc/database/pool";
 import { appendProjectOutboxEventForProject } from "@cocalc/database/postgres/project-events-outbox";
 import { assertProjectNotRehoming } from "@cocalc/database/postgres/project-rehome-fence";
 import { publishProjectAccountFeedEventsBestEffort } from "@cocalc/server/account/project-feed";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
+import { createBackup } from "@cocalc/server/conat/api/project-backups";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { resolveProjectBay } from "@cocalc/server/inter-bay/directory";
+import { waitForDurableLroCompletion } from "@cocalc/server/lro/wait";
 import { deleteProjectDataOnHost } from "@cocalc/server/project-host/control";
+import { BACKUP_TIMEOUT_MS } from "@cocalc/server/projects/backup-lro";
 import {
   createProjectArchiveLifecycleJob,
   updateProjectArchiveLifecycleJob,
@@ -48,6 +52,8 @@ type ArchiveRow = Omit<
   "active_published_path"
 >;
 
+const FINAL_ARCHIVE_BACKUP_TAG = "automatic-project-archive-final";
+
 async function loadArchiveRow(project_id: string): Promise<ArchiveRow> {
   const { rows } = await getPool().query<ArchiveRow>(
     `SELECT p.project_id,
@@ -83,6 +89,74 @@ async function publishState(project_id: string): Promise<void> {
     project_id,
     default_bay_id: getConfiguredBayId(),
   });
+}
+
+function assertAutomaticArchiveReady({
+  row,
+  job_id,
+  expected_host_id,
+}: {
+  row: ArchiveRow;
+  job_id: string;
+  expected_host_id?: string | null;
+}): void {
+  const state = `${row.state?.state ?? ""}`.trim();
+  const hostStatus = `${row.host_status ?? ""}`.trim().toLowerCase();
+  if (state !== "archiving" || row.archive_lifecycle_job_id !== job_id) {
+    throw new Error("automatic archive project claim is no longer current");
+  }
+  if (!row.host_id || !["active", "running"].includes(hostStatus)) {
+    throw new Error("automatic archive requires a reachable live host");
+  }
+  if (expected_host_id && row.host_id !== expected_host_id) {
+    throw new Error("automatic archive placement changed before cleanup");
+  }
+  if (
+    !isProjectArchiveBackupCurrent({
+      ...row,
+      active_published_path: false,
+    })
+  ) {
+    throw new Error("automatic archive backup is missing or stale");
+  }
+}
+
+async function createFinalAutomaticArchiveBackup({
+  project_id,
+  job_id,
+}: {
+  project_id: string;
+  job_id: string;
+}): Promise<void> {
+  const op = await createBackup(
+    {
+      project_id,
+      tags: [FINAL_ARCHIVE_BACKUP_TAG],
+    },
+    {
+      skip_collab_check: true,
+      skip_rootfs_portability_check: true,
+      dedupe_key: `${FINAL_ARCHIVE_BACKUP_TAG}:${job_id}`,
+    },
+  );
+  const summary = await waitForDurableLroCompletion({
+    op_id: op.op_id,
+    scope_type: op.scope_type,
+    scope_id: op.scope_id,
+    client: conat(),
+    timeout_ms: BACKUP_TIMEOUT_MS + 60_000,
+  });
+  if (summary.status !== "succeeded") {
+    throw new Error(
+      `final automatic archive backup failed: ${summary.error ?? summary.status}`,
+    );
+  }
+  const result = summary.result ?? {};
+  if (!result.id && !result.backup_id) {
+    throw new Error(
+      "final automatic archive backup completed without a snapshot id",
+    );
+  }
 }
 
 async function setArchivedState({
@@ -159,7 +233,7 @@ export async function archiveProjectStorage({
   reason: providedReason,
   expected_host_id,
 }: ArchiveProjectStorageOptions): Promise<void> {
-  const row = await loadArchiveRow(project_id);
+  let row = await loadArchiveRow(project_id);
   const currentState = `${row.state?.state ?? ""}`.trim();
   if (currentState === "archived" && row.provisioned === false) return;
 
@@ -186,32 +260,17 @@ export async function archiveProjectStorage({
         "project must have a configured backup repository before it can be archived",
       );
     }
-    const hostStatus = `${row.host_status ?? ""}`.trim().toLowerCase();
+    let hostStatus = `${row.host_status ?? ""}`.trim().toLowerCase();
     const hostDeprovisioned = hostStatus === "deprovisioned";
     const hostCanRunMutations =
       !hostStatus || hostStatus === "active" || hostStatus === "running";
 
     if (automatic) {
-      if (
-        currentState !== "archiving" ||
-        row.archive_lifecycle_job_id !== jobId
-      ) {
-        throw new Error("automatic archive project claim is no longer current");
-      }
-      if (!row.host_id || !["active", "running"].includes(hostStatus)) {
-        throw new Error("automatic archive requires a reachable live host");
-      }
-      if (expected_host_id && row.host_id !== expected_host_id) {
-        throw new Error("automatic archive placement changed before cleanup");
-      }
-      if (
-        !isProjectArchiveBackupCurrent({
-          ...row,
-          active_published_path: false,
-        })
-      ) {
-        throw new Error("automatic archive backup is missing or stale");
-      }
+      assertAutomaticArchiveReady({
+        row,
+        job_id: jobId,
+        expected_host_id,
+      });
     } else if (!hostDeprovisioned && row.last_backup == null) {
       throw new Error(
         "project must have at least one backup before it can be archived",
@@ -231,7 +290,26 @@ export async function archiveProjectStorage({
       });
     }
 
-    if (row.provisioned !== false && hostCanRunMutations) {
+    if (automatic) {
+      await createFinalAutomaticArchiveBackup({ project_id, job_id: jobId });
+      row = await loadArchiveRow(project_id);
+      hostStatus = `${row.host_status ?? ""}`.trim().toLowerCase();
+      if (!row.backup_repo_id) {
+        throw new Error(
+          "project backup repository disappeared during automatic archive",
+        );
+      }
+      assertAutomaticArchiveReady({
+        row,
+        job_id: jobId,
+        expected_host_id,
+      });
+    }
+
+    const refreshedHostCanRunMutations =
+      !hostStatus || hostStatus === "active" || hostStatus === "running";
+
+    if (row.provisioned !== false && refreshedHostCanRunMutations) {
       if (!row.host_id) {
         throw new Error("project has no assigned host to archive from");
       }
