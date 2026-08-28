@@ -4571,7 +4571,7 @@ async function deleteBackupForRetention({
   });
 }
 
-async function updateBackups({
+async function updateBackupsUnlocked({
   project_id,
   counts,
   limit,
@@ -4671,6 +4671,81 @@ async function updateBackups({
   }
 }
 
+async function updateBackupsIfVolumeCurrent({
+  project_id,
+  counts,
+  limit,
+  expectedLifecycleGeneration,
+}: {
+  project_id: string;
+  counts?: Partial<SnapshotCounts>;
+  limit?: number;
+  expectedLifecycleGeneration: number;
+}): Promise<void> {
+  const result = await withCurrentProjectVolumeLifecycleLock(
+    project_id,
+    expectedLifecycleGeneration,
+    async () => {
+      const volume = await getVolumeUnchecked(project_id);
+      if (!(await exists(volume.path))) {
+        logger.info(
+          "skipping backup maintenance because project data is unavailable",
+          { project_id },
+        );
+        return true;
+      }
+      if (await isSubvolumeReadonly(volume.path)) {
+        logger.info(
+          "skipping backup maintenance because project archival is in progress",
+          { project_id },
+        );
+        return true;
+      }
+      await updateBackupsUnlocked({
+        project_id,
+        counts,
+        limit,
+      });
+      return true;
+    },
+  );
+  if (result === undefined) {
+    logger.info(
+      "skipping stale backup maintenance after project volume lifecycle changed",
+      {
+        project_id,
+        expected_lifecycle_generation: expectedLifecycleGeneration,
+        current_lifecycle_generation:
+          currentProjectVolumeLifecycleGeneration(project_id),
+      },
+    );
+  }
+}
+
+async function updateBackups({
+  project_id,
+  counts,
+  limit,
+}: {
+  project_id: string;
+  counts?: Partial<SnapshotCounts>;
+  limit?: number;
+}): Promise<void> {
+  const expectedLifecycleGeneration =
+    currentProjectVolumeLifecycleGeneration(project_id);
+  await withBackupParallelLimit({
+    project_id,
+    op: "updateBackups",
+    run: async () =>
+      await updateBackupsIfVolumeCurrent({
+        project_id,
+        counts,
+        limit,
+        expectedLifecycleGeneration,
+      }),
+  });
+}
+
 export async function runScheduledBackupMaintenance({
   project_id,
   counts,
@@ -4686,46 +4761,13 @@ export async function runScheduledBackupMaintenance({
     project_id,
     op: "runScheduledBackupMaintenance",
     queue_if_busy: false,
-    run: async () => {
-      const result = await withCurrentProjectVolumeLifecycleLock(
+    run: async () =>
+      await updateBackupsIfVolumeCurrent({
         project_id,
+        counts,
+        limit,
         expectedLifecycleGeneration,
-        async () => {
-          const volume = await getVolumeUnchecked(project_id);
-          if (!(await exists(volume.path))) {
-            logger.info(
-              "skipping scheduled backup because project data is unavailable",
-              { project_id },
-            );
-            return true;
-          }
-          if (await isSubvolumeReadonly(volume.path)) {
-            logger.info(
-              "skipping scheduled backup because project archival is in progress",
-              { project_id },
-            );
-            return true;
-          }
-          await updateBackups({
-            project_id,
-            counts,
-            limit,
-          });
-          return true;
-        },
-      );
-      if (result === undefined) {
-        logger.info(
-          "skipping stale scheduled backup after project volume lifecycle changed",
-          {
-            project_id,
-            expected_lifecycle_generation: expectedLifecycleGeneration,
-            current_lifecycle_generation:
-              currentProjectVolumeLifecycleGeneration(project_id),
-          },
-        );
-      }
-    },
+      }),
   });
 }
 
