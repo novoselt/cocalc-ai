@@ -133,6 +133,35 @@ export function activeUsersMapDrawerTitle(
   return `${location}: ${count} active ${count === 1 ? "user" : "users"}`;
 }
 
+export function activeUsersMapHistoryFallbackCountries(
+  locations: ActiveUserMapOverview["countries"],
+): ActiveUserMapOverview["countries"] {
+  const countries = new Map<
+    string,
+    ActiveUserMapOverview["countries"][number]
+  >();
+  for (const location of locations) {
+    const existing = countries.get(location.country_code);
+    if (existing) {
+      existing.count += location.count;
+      existing.users.push(...location.users);
+      continue;
+    }
+    countries.set(location.country_code, {
+      ...location,
+      group_id: location.country_code,
+      granularity: "country",
+      region_code: null,
+      region: null,
+      city: null,
+      users: [...location.users],
+    });
+  }
+  return [...countries.values()].sort(
+    (a, b) => b.count - a.count || a.country_code.localeCompare(b.country_code),
+  );
+}
+
 function UserList({
   users,
   onSelect,
@@ -418,11 +447,14 @@ export function ActiveUsersMapAdmin() {
     ? dayjs.utc(historySnapshot.snapshot_hour)
     : undefined;
   const pendingHistoryFallback = snapshotLoading ? overview : undefined;
+  const pendingHistoryCountries = pendingHistoryFallback
+    ? activeUsersMapHistoryFallbackCountries(pendingHistoryFallback.countries)
+    : undefined;
   const displaySummary =
     view === "history" ? (historySnapshot ?? pendingHistoryFallback) : overview;
   const displayCountries =
     view === "history"
-      ? (historySnapshot?.countries ?? pendingHistoryFallback?.countries)
+      ? (historySnapshot?.countries ?? pendingHistoryCountries)
       : overview?.countries;
 
   function selectHistoryDate(value: Dayjs | null) {

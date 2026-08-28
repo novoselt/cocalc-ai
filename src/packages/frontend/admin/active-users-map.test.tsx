@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   ActiveUsersMapAdmin,
   activeUsersMapDrawerTitle,
+  activeUsersMapHistoryFallbackCountries,
 } from "./active-users-map";
 import { ActiveUsersMapSummary } from "./active-users-map-summary";
 
@@ -137,5 +138,48 @@ describe("activeUsersMapDrawerTitle", () => {
     expect(activeUsersMapDrawerTitle("Location unavailable", 1)).toBe(
       "Location unavailable: 1 active user",
     );
+  });
+});
+
+describe("activeUsersMapHistoryFallbackCountries", () => {
+  it("combines live city groups into country-only history groups", () => {
+    const countries = activeUsersMapHistoryFallbackCountries([
+      {
+        group_id: "city:ca:ab:calgary",
+        granularity: "city",
+        country_code: "CA",
+        region_code: "AB",
+        region: "Alberta",
+        city: "Calgary",
+        latitude: 51.0447,
+        longitude: -114.0719,
+        count: 2,
+        users: [],
+      },
+      {
+        group_id: "city:ca:on:toronto",
+        granularity: "city",
+        country_code: "CA",
+        region_code: "ON",
+        region: "Ontario",
+        city: "Toronto",
+        latitude: 43.6532,
+        longitude: -79.3832,
+        count: 3,
+        users: [],
+      },
+    ]);
+
+    expect(countries).toEqual([
+      expect.objectContaining({
+        group_id: "CA",
+        granularity: "country",
+        country_code: "CA",
+        region_code: null,
+        region: null,
+        city: null,
+        count: 5,
+      }),
+    ]);
   });
 });
