@@ -1,9 +1,16 @@
+jest.mock("./app-framework/project-runtime", () => ({
+  ensureProjectReduxRuntime: jest.fn(async () => {}),
+}));
+
+import { ensureProjectReduxRuntime } from "./app-framework/project-runtime";
 import {
   getOpenFilesForSessionClose,
   getSessionState,
   projectsReadyForSessionRestore,
   restoreSessionState,
 } from "./session";
+
+const mockEnsureProjectReduxRuntime = jest.mocked(ensureProjectReduxRuntime);
 
 function makeStore(values: Record<string, unknown>) {
   return {
@@ -98,6 +105,9 @@ describe("getSessionState", () => {
 describe("restoreSessionState", () => {
   it("awaits project restore work and keeps restore opens out of browser history", async () => {
     const events: string[] = [];
+    mockEnsureProjectReduxRuntime.mockImplementationOnce(async () => {
+      events.push("runtime_ready");
+    });
     let allowProjectOpenResolve!: () => void;
     const projectOpenGate = new Promise<void>((resolve) => {
       allowProjectOpenResolve = resolve;
@@ -154,8 +164,10 @@ describe("restoreSessionState", () => {
     expect(events).toEqual([
       "open_project:project-1",
       "open_project_done:project-1",
+      "runtime_ready",
       "open_file:a.txt",
       "open_file:b.txt",
     ]);
+    expect(mockEnsureProjectReduxRuntime).toHaveBeenCalledTimes(1);
   });
 });
