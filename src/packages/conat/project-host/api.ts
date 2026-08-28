@@ -726,6 +726,7 @@ export interface HostControlApi {
   // archive barrier instead of silently ignoring expected_generation.
   deleteProjectDataAfterBackup: (opts: {
     project_id: string;
+    expected_backup_id: string;
     expected_generation: number;
   }) => Promise<void>;
   releaseProjectDataArchiveFreeze: (opts: {

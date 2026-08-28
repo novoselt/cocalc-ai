@@ -643,11 +643,16 @@ export async function archiveProjectStorage({
         if (!expectedArchiveGeneration) {
           throw new Error("automatic archive backup generation is missing");
         }
+        if (!expectedArchiveBackupId) {
+          throw new Error("automatic archive backup snapshot id is missing");
+        }
         const cleanupGeneration = expectedArchiveGeneration;
+        const cleanupBackupId = expectedArchiveBackupId;
         cleanupHostData = async () => {
           await deleteProjectDataOnHostAfterBackup({
             project_id,
             host_id: cleanupHostId,
+            expected_backup_id: cleanupBackupId,
             expected_generation: cleanupGeneration,
           });
           hostCleanupCompleted = true;

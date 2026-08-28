@@ -171,6 +171,7 @@ import {
   deleteStagedArchiveSnapshots,
   freezeVolumeForArchiveBackup,
   getFrozenVolumeGeneration,
+  isSubvolumeReadonly,
   listStagedArchiveVolumeNames,
   releaseArchiveVolumeFreeze,
   releaseArchiveVolumeFreezeIfGenerationMatches,
@@ -1362,6 +1363,7 @@ export async function deleteVolume(
   project_id: string,
   opts: {
     reportProvisioned?: boolean;
+    expected_archive_backup_id?: string;
     expected_archive_generation?: number;
   } = {},
 ) {
@@ -1422,6 +1424,11 @@ export async function deleteVolume(
         volume_kind: "scratch",
       });
     } else {
+      const expectedBackupId =
+        `${opts.expected_archive_backup_id ?? ""}`.trim();
+      if (!expectedBackupId) {
+        throw new Error("an archive backup snapshot id is required");
+      }
       const expectedGeneration = Number(opts.expected_archive_generation);
       if (
         !Number.isSafeInteger(expectedGeneration) ||
@@ -1429,18 +1436,23 @@ export async function deleteVolume(
       ) {
         throw new Error("a valid archive backup generation is required");
       }
-      // Scratch is ephemeral. Delete it before the durable home volume so a
-      // scratch cleanup failure can never reopen a project after home data was
-      // already removed.
-      await deleteIfExists({
-        name: scratchVolName(project_id),
-        volume_kind: "scratch",
-      });
-      const volume = await fs!.subvolumes.get(volName(project_id));
+      const volume = await getVolumeForBackup(project_id);
       try {
+        if (!(await volume.rustic.snapshotExists({ id: expectedBackupId }))) {
+          throw new Error(
+            `refusing to archive project because final backup ${expectedBackupId} no longer exists`,
+          );
+        }
         const status = await assertFrozenVolumeMatchesBackup({
           volume,
           expectedGeneration,
+        });
+        // Scratch is ephemeral. Delete it before the durable home volume so a
+        // scratch cleanup failure can never reopen a project after home data
+        // was already removed. The durable backup was verified first.
+        await deleteIfExists({
+          name: scratchVolName(project_id),
+          volume_kind: "scratch",
         });
         if (status === "present") {
           await fs!.subvolumes.delete(volName(project_id));
@@ -4210,7 +4222,11 @@ async function createBackup({
             // entitlement, but must never invalidate the recovery barrier.
             for (const backup of retention.replace) {
               try {
-                await deleteBackup({ project_id, id: backup.id });
+                await deleteBackup({
+                  project_id,
+                  id: backup.id,
+                  allow_archive_frozen: freeze_source === true,
+                });
               } catch (err) {
                 logger.warn("unable to prune replaced backup", {
                   project_id,
@@ -4472,41 +4488,57 @@ async function cleanupRestoreStaging(opts?: { root?: string }): Promise<void> {
 async function deleteBackup({
   project_id,
   id,
+  allow_archive_frozen = false,
 }: {
   project_id: string;
   id: string;
+  allow_archive_frozen?: boolean;
 }): Promise<void> {
-  const vol = await getVolumeForBackup(project_id);
-  await vol.rustic.forget({ id });
-  await rusticBackupBrowser.markStale(vol.fs.rusticRepo);
-  const directIndexStore = await getBackupIndexStoreConfig(project_id).catch(
-    () => null,
-  );
-  if (directIndexStore) {
-    try {
-      await deleteRemoteProjectBackupIndex({
-        project_id,
-        backup_id: id,
-      });
-    } catch (err) {
-      logger.warn("backup index delete failed", { project_id, id, err });
+  await withProjectVolumeLifecycleLock(project_id, async () => {
+    const vol = await getVolumeForBackup(project_id);
+    if (!allow_archive_frozen) {
+      if (!(await exists(vol.path))) {
+        throw new Error(
+          "cannot delete backups while project data is archived or unavailable",
+        );
+      }
+      if (await isSubvolumeReadonly(vol.path)) {
+        throw new Error(
+          "cannot delete backups while project archival is in progress",
+        );
+      }
     }
-  } else {
-    try {
-      await rustic(
-        ["forget", "--filter-label", `${BACKUP_INDEX_LABEL_PREFIX}${id}`],
-        {
-          repo: vol.fs.rusticRepo,
-          host: backupIndexHost(project_id),
-          timeout: 30 * 60 * 1000,
-        },
-      );
-    } catch (err) {
-      logger.warn("backup index delete failed", { project_id, id, err });
+    await vol.rustic.forget({ id });
+    await rusticBackupBrowser.markStale(vol.fs.rusticRepo);
+    const directIndexStore = await getBackupIndexStoreConfig(project_id).catch(
+      () => null,
+    );
+    if (directIndexStore) {
+      try {
+        await deleteRemoteProjectBackupIndex({
+          project_id,
+          backup_id: id,
+        });
+      } catch (err) {
+        logger.warn("backup index delete failed", { project_id, id, err });
+      }
+    } else {
+      try {
+        await rustic(
+          ["forget", "--filter-label", `${BACKUP_INDEX_LABEL_PREFIX}${id}`],
+          {
+            repo: vol.fs.rusticRepo,
+            host: backupIndexHost(project_id),
+            timeout: 30 * 60 * 1000,
+          },
+        );
+      } catch (err) {
+        logger.warn("backup index delete failed", { project_id, id, err });
+      }
     }
-  }
-  await removeBackupIndexLocal(project_id, id).catch((err) => {
-    logger.warn("backup index cache cleanup failed", { project_id, id, err });
+    await removeBackupIndexLocal(project_id, id).catch((err) => {
+      logger.warn("backup index cache cleanup failed", { project_id, id, err });
+    });
   });
 }
 

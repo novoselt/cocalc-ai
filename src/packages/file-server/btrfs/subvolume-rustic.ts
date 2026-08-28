@@ -375,11 +375,7 @@ export class SubvolumeRustic {
 
   // returns list of backups, sorted from oldest to newest
   private snapshotsCache: Snapshot[] | null = null;
-  snapshots = reuseInFlight(async (): Promise<Snapshot[]> => {
-    if (this.snapshotsCache) {
-      // potentially very expensive to get list -- we clear this on delete or create
-      return this.snapshotsCache;
-    }
+  private listSnapshotsFresh = async (): Promise<Snapshot[]> => {
     const { stdout, truncated } = parseOutput(
       await this.rusticHost(["snapshots", "--json"], {
         timeout: DEFAULT_SNAPSHOTS_TIMEOUT_MS,
@@ -447,7 +443,23 @@ export class SubvolumeRustic {
     });
     this.snapshotsCache = v;
     return v;
+  };
+
+  snapshots = reuseInFlight(async (): Promise<Snapshot[]> => {
+    if (this.snapshotsCache) {
+      // potentially very expensive to get list -- we clear this on delete or create
+      return this.snapshotsCache;
+    }
+    return await this.listSnapshotsFresh();
   });
+
+  // Archive deletion must not trust a cache that may predate a concurrent
+  // forget operation for the only durable copy of the project.
+  snapshotExists = async ({ id }: { id: string }): Promise<boolean> => {
+    return (await this.listSnapshotsFresh()).some(
+      (snapshot) => snapshot.id === id,
+    );
+  };
 
   // Delete this backup.  It's genuinely not accessible anymore, though
   // this doesn't actually clean up disk space -- purge must be done separately

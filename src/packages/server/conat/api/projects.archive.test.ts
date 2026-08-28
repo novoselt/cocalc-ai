@@ -527,6 +527,7 @@ describe("projects.archiveProject", () => {
     expect(deleteProjectDataOnHostAfterBackupMock).toHaveBeenCalledWith({
       project_id: "11111111-1111-4111-8111-111111111111",
       host_id: "22222222-2222-4222-8222-222222222222",
+      expected_backup_id: "final-backup-id",
       expected_generation: 10,
     });
     expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
@@ -763,6 +764,7 @@ describe("projects.archiveProject", () => {
     expect(deleteProjectDataOnHostAfterBackupMock).toHaveBeenCalledWith({
       project_id: AUTOMATIC_PROJECT_ID,
       host_id: AUTOMATIC_HOST_ID,
+      expected_backup_id: "final-backup-id",
       expected_generation: 10,
     });
   });

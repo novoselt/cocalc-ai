@@ -149,6 +149,42 @@ describe("SubvolumeRustic.backup", () => {
     expect(rusticHostMock.mock.calls[0][1].maxSize).toBeGreaterThan(10_000_000);
   });
 
+  it("checks archive snapshot existence without trusting the list cache", async () => {
+    const groupedSnapshots = (ids: string[]) => ({
+      stdout: Buffer.from(
+        JSON.stringify([
+          {
+            group_key: { hostname: "project-1" },
+            snapshots: ids.map((id) => ({
+              id,
+              time: "2026-04-30T21:00:00.000Z",
+              summary: {},
+            })),
+          },
+        ]),
+      ),
+      stderr: Buffer.alloc(0),
+      code: 0,
+      truncated: false,
+    });
+    rusticHostMock
+      .mockResolvedValueOnce(groupedSnapshots(["archive-backup"]))
+      .mockResolvedValueOnce(groupedSnapshots([]));
+    const rustic = new SubvolumeRustic({
+      name: "project-1",
+      path: "/mnt/test/project-1",
+      filesystem: { opts: { mount: "/mnt/test" } },
+      fs: { rusticRepo: "/repo", rustic: jest.fn() },
+    } as any);
+
+    await expect(rustic.snapshots()).resolves.toHaveLength(1);
+    await expect(rustic.snapshotExists({ id: "archive-backup" })).resolves.toBe(
+      false,
+    );
+
+    expect(rusticHostMock).toHaveBeenCalledTimes(2);
+  });
+
   it("excludes .snapshots from future backups", async () => {
     const subvolumeFsRusticMock = jest.fn();
     const rustic = new SubvolumeRustic({

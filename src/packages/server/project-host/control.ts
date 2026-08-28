@@ -1483,15 +1483,18 @@ export async function deleteProjectDataOnHost({
 export async function deleteProjectDataOnHostAfterBackup({
   project_id,
   host_id,
+  expected_backup_id,
   expected_generation,
 }: {
   project_id: string;
   host_id: string;
+  expected_backup_id: string;
   expected_generation: number;
 }): Promise<void> {
   const client = await getRoutedHostControlClient({ host_id });
   await client.deleteProjectDataAfterBackup({
     project_id,
+    expected_backup_id,
     expected_generation,
   });
 }

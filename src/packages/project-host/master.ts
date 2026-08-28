@@ -1662,12 +1662,17 @@ export async function startMasterRegistration({
       clearLocalAcpAutomationsForProject(project_id);
       deleteProjectLocal(project_id);
     },
-    async deleteProjectDataAfterBackup({ project_id, expected_generation }) {
+    async deleteProjectDataAfterBackup({
+      project_id,
+      expected_backup_id,
+      expected_generation,
+    }) {
       await awaitReadyForControl(
         "deleteProjectDataAfterBackup",
         waitUntilReady,
       );
       await deleteVolume(project_id, {
+        expected_archive_backup_id: expected_backup_id,
         expected_archive_generation: expected_generation,
       });
       clearLocalAcpAutomationsForProject(project_id);
