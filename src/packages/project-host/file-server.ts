@@ -4656,11 +4656,15 @@ export async function runScheduledBackupMaintenance({
     op: "runScheduledBackupMaintenance",
     queue_if_busy: false,
     run: async () =>
-      await updateBackups({
+      await withProjectVolumeLifecycleLock(
         project_id,
-        counts,
-        limit,
-      }),
+        async () =>
+          await updateBackups({
+            project_id,
+            counts,
+            limit,
+          }),
+      ),
   });
 }
 
