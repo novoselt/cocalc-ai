@@ -611,47 +611,68 @@ describe("projects.archiveProject", () => {
     expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
   });
 
-  it("treats an absent volume after a lost deletion response as cleaned up", async () => {
-    const jobId = "77777777-7777-4777-8777-777777777777";
-    const row = {
-      project_id: "11111111-1111-4111-8111-111111111111",
-      owning_bay_id: "bay-1",
-      host_id: "22222222-2222-4222-8222-222222222222",
-      backup_repo_id: "33333333-3333-4333-8333-333333333333",
-      provisioned: true,
-      state: { state: "archiving" },
-      host_status: "active",
-      last_changed: new Date("2026-06-15T04:00:00.000Z"),
-      last_changed_generation: 10,
-      last_backup: new Date("2026-06-15T05:00:00.000Z"),
-      last_backup_generation: 10,
-      archive_lifecycle_job_id: jobId,
-    };
-    poolQueryMock
-      .mockResolvedValueOnce({ rows: [row] })
-      .mockResolvedValueOnce({ rows: [row] });
-    deleteProjectDataOnHostAfterBackupMock.mockRejectedValueOnce(
-      new Error("host response lost"),
-    );
-    releaseProjectDataArchiveFreezeOnHostMock.mockResolvedValueOnce({
-      status: "absent",
-    });
+  it.each([
+    ["absent", true, false, false, false],
+    ["released", false, true, true, false],
+    ["already-writable", false, true, true, false],
+    ["released with marker-clear failure", false, false, true, true],
+  ])(
+    "handles a %s volume after a lost deletion response",
+    async (
+      status,
+      hostCleanupCompleted,
+      reopenSafe,
+      markerClearCalled,
+      markerClearFails,
+    ) => {
+      const jobId = "77777777-7777-4777-8777-777777777777";
+      const row = {
+        project_id: "11111111-1111-4111-8111-111111111111",
+        owning_bay_id: "bay-1",
+        host_id: "22222222-2222-4222-8222-222222222222",
+        backup_repo_id: "33333333-3333-4333-8333-333333333333",
+        provisioned: true,
+        state: { state: "archiving" },
+        host_status: "active",
+        last_changed: new Date("2026-06-15T04:00:00.000Z"),
+        last_changed_generation: 10,
+        last_backup: new Date("2026-06-15T05:00:00.000Z"),
+        last_backup_generation: 10,
+        archive_lifecycle_job_id: jobId,
+      };
+      poolQueryMock
+        .mockResolvedValueOnce({ rows: [row] })
+        .mockResolvedValueOnce({ rows: [row] });
+      deleteProjectDataOnHostAfterBackupMock.mockRejectedValueOnce(
+        new Error("host response lost"),
+      );
+      releaseProjectDataArchiveFreezeOnHostMock.mockResolvedValueOnce({
+        status: status.startsWith("released") ? "released" : status,
+      });
+      if (markerClearFails) {
+        clearProjectArchiveLifecycleFinalBackupMock.mockRejectedValueOnce(
+          new Error("marker clear failed"),
+        );
+      }
 
-    const { archiveProjectStorage, ProjectArchiveStorageError } =
-      await import("@cocalc/server/projects/archive");
-    const error = await archiveProjectStorage({
-      project_id: row.project_id,
-      mode: "automatic",
-      job_id: jobId,
-      reason: "free-inactive",
-      expected_host_id: row.host_id,
-    }).catch((err) => err);
+      const { archiveProjectStorage, ProjectArchiveStorageError } =
+        await import("@cocalc/server/projects/archive");
+      const error = await archiveProjectStorage({
+        project_id: row.project_id,
+        mode: "automatic",
+        job_id: jobId,
+        reason: "free-inactive",
+        expected_host_id: row.host_id,
+      }).catch((err) => err);
 
-    expect(error).toBeInstanceOf(ProjectArchiveStorageError);
-    expect(error.hostCleanupCompleted).toBe(true);
-    expect(error.reopenSafe).toBe(false);
-    expect(clearProjectArchiveLifecycleFinalBackupMock).not.toHaveBeenCalled();
-  });
+      expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+      expect(error.hostCleanupCompleted).toBe(hostCleanupCompleted);
+      expect(error.reopenSafe).toBe(reopenSafe);
+      expect(clearProjectArchiveLifecycleFinalBackupMock).toHaveBeenCalledTimes(
+        markerClearCalled ? 1 : 0,
+      );
+    },
+  );
 
   it("automatic archive replaces a stale final-backup marker after reopening", async () => {
     const jobId = "77777777-7777-4777-8777-777777777777";
@@ -784,19 +805,21 @@ describe("projects.archiveProject", () => {
       ],
     });
 
-    const { archiveProjectStorage } =
+    const { archiveProjectStorage, ProjectArchiveStorageError } =
       await import("@cocalc/server/projects/archive");
-    await expect(
-      archiveProjectStorage({
-        project_id: "11111111-1111-4111-8111-111111111111",
-        mode: "automatic",
-        job_id: jobId,
-        reason: "free-inactive",
-        expected_host_id: "22222222-2222-4222-8222-222222222222",
-      }),
-    ).rejects.toThrow(
+    const error = await archiveProjectStorage({
+      project_id: "11111111-1111-4111-8111-111111111111",
+      mode: "automatic",
+      job_id: jobId,
+      reason: "free-inactive",
+      expected_host_id: "22222222-2222-4222-8222-222222222222",
+    }).catch((err) => err);
+
+    expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+    expect(error.message).toContain(
       "final automatic archive backup does not cover the current filesystem generation",
     );
+    expect(error.reopenSafe).toBe(true);
 
     expect(recordProjectArchiveLifecycleFinalBackupMock).not.toHaveBeenCalled();
     expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();

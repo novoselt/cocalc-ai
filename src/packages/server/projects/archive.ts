@@ -493,12 +493,17 @@ export async function archiveProjectStorage({
           // The checked deletion completed but its response was lost. Retain
           // the durable marker and retry only database finalization.
           hostCleanupCompleted = true;
-        } else if (expectedArchiveBackupId) {
-          await clearProjectArchiveLifecycleFinalBackup({
-            job_id: jobId,
-            backup_id: expectedArchiveBackupId,
-            backup_generation: expectedArchiveGeneration,
-          });
+        } else {
+          if (expectedArchiveBackupId) {
+            await clearProjectArchiveLifecycleFinalBackup({
+              job_id: jobId,
+              backup_id: expectedArchiveBackupId,
+              backup_generation: expectedArchiveGeneration,
+            });
+          }
+          // The generation-checked host RPC restored the source and local
+          // snapshots. Reopen only after any durable deletion marker is gone.
+          reopenSafe = true;
         }
       } catch (releaseErr) {
         log.warn("unable to release automatic archive volume freeze", {
