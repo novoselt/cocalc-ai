@@ -60,6 +60,17 @@ describe("receivables account selector", () => {
     );
   });
 
+  it("uses the caller's relationship-owner label", async () => {
+    render(
+      <AccountSelector accountKind="admin" ariaLabel="Relationship owner" />,
+    );
+
+    expect(
+      screen.getByRole("combobox", { name: "Relationship owner" }),
+    ).toBeVisible();
+    await waitFor(() => expect(listAssignees).toHaveBeenCalledTimes(1));
+  });
+
   it("searches all accounts for the customer selector", async () => {
     const onChange = jest.fn();
     userSearch.mockResolvedValue([

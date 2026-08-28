@@ -79,10 +79,10 @@ import { CustomerTaskCard, type CustomerTaskTransition } from "./task-card";
 import { TimelineFilter } from "./timeline-filter";
 import {
   emptyViewDescription,
+  queueFilterRequest,
   type CustomerView,
   VIEW_OPTIONS,
   viewDescription,
-  viewRequest,
 } from "./views";
 import {
   CustomerOutreachCard,
@@ -1165,6 +1165,7 @@ function CustomerQueue({
   const api = webapp_client.conat_client.hub.adminCrm;
   const [customers, setCustomers] = useState<CrmOrganizationSummary[]>([]);
   const [view, setView] = useState<CustomerView>("active");
+  const [owner, setOwner] = useState<string>();
   const [search, setSearch] = useState("");
   const [draftSearch, setDraftSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -1187,13 +1188,13 @@ function CustomerQueue({
       const result = search
         ? await api.searchOrganizations({
             query: search,
-            ...viewRequest(view),
+            ...queueFilterRequest(view, owner),
             reason: "Search CRM customer queue",
             limit: 100,
             cursor: append ? nextCursor : undefined,
           })
         : await api.listOrganizations({
-            ...viewRequest(view),
+            ...queueFilterRequest(view, owner),
             reason: "Review CRM customer queue",
             limit: 100,
             cursor: append ? nextCursor : undefined,
@@ -1215,7 +1216,7 @@ function CustomerQueue({
 
   useEffect(() => {
     void load();
-  }, [view, search]);
+  }, [view, owner, search]);
 
   async function loadDiagnostics() {
     try {
@@ -1295,8 +1296,8 @@ function CustomerQueue({
       </div>
 
       <div className="crm-filter-panel">
-        <Flex align="end" gap={12} wrap>
-          <div style={{ flex: "0 1 230px" }}>
+        <div className="crm-filter-grid">
+          <div className="crm-filter-field">
             <label htmlFor="crm-view">
               <Text strong>Views</Text>
             </label>
@@ -1308,11 +1309,15 @@ function CustomerQueue({
               style={{ width: "100%" }}
               value={view}
             />
-            <Text id="crm-view-description" type="secondary">
+            <Text
+              className="crm-filter-help"
+              id="crm-view-description"
+              type="secondary"
+            >
               {viewDescription(view)}
             </Text>
           </div>
-          <div style={{ flex: "1 1 280px" }}>
+          <div className="crm-filter-field crm-filter-field-search">
             <label htmlFor="crm-search">
               <Text strong>Search customers</Text>
             </label>
@@ -1325,11 +1330,28 @@ function CustomerQueue({
               placeholder="Name, alias, domain, contact, customer number"
               value={draftSearch}
             />
+            <Text className="crm-filter-help" type="secondary">
+              Search within the selected view and owner.
+            </Text>
           </div>
-          <Button icon={<Icon name="refresh" />} onClick={() => void load()}>
-            Refresh
-          </Button>
-        </Flex>
+          <div className="crm-filter-field">
+            <Text strong>Relationship owner</Text>
+            <AccountSelector
+              accountKind="admin"
+              ariaLabel="Relationship owner"
+              onChange={setOwner}
+              value={owner}
+            />
+            <Text className="crm-filter-help" type="secondary">
+              Clear the selection to include every owner.
+            </Text>
+          </div>
+          <div className="crm-filter-action">
+            <Button icon={<Icon name="refresh" />} onClick={() => void load()}>
+              Refresh
+            </Button>
+          </div>
+        </div>
       </div>
 
       {error ? (

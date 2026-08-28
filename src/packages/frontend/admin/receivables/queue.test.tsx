@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { message } from "antd";
 
 import type { CommercialOrderDiagnostics } from "@cocalc/util/commercial-orders";
-import { ReceivablesQueue } from "./queue";
+import { ReceivablesQueue, savedViewRequest } from "./queue";
 
 const listOrders = jest.fn();
 const getDiagnostics = jest.fn();
@@ -108,6 +108,15 @@ describe("receivables queue", () => {
     });
     getNames.mockResolvedValue({});
     listAssignees.mockResolvedValue([]);
+  });
+
+  it("separates staff work from orders awaiting the customer", () => {
+    expect(savedViewRequest("needs-action")).toEqual({
+      workflow_states: ["draft", "ready_to_invoice"],
+    });
+    expect(savedViewRequest("awaiting-customer")).toEqual({
+      workflow_states: ["awaiting_customer", "awaiting_payment"],
+    });
   });
 
   it("presents the queue with commercial context and primary actions", async () => {
