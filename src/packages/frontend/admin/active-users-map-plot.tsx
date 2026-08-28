@@ -23,7 +23,12 @@ import { activeUsersMapCountryName } from "./active-users-map-country";
 const { Text } = Typography;
 
 export interface ActiveUsersMapCountryCount {
+  group_id?: string;
+  granularity?: "country" | "region" | "city";
   country_code: string;
+  region_code?: string | null;
+  region?: string | null;
+  city?: string | null;
   count: number;
   latitude?: number;
   longitude?: number;
@@ -54,10 +59,33 @@ export function activeUsersMapCountryPosition(
   left: number;
   top: number;
 } {
+  if (country.granularity && country.granularity !== "country") {
+    return projectActiveUserMapPosition({
+      latitude: country.latitude ?? 0,
+      longitude: country.longitude ?? 0,
+    });
+  }
   const [longitude, latitude] = ACTIVE_USERS_MAP_COUNTRY_LABELS[
     country.country_code
   ] ?? [country.longitude ?? 0, country.latitude ?? 0];
   return projectActiveUserMapPosition({ latitude, longitude });
+}
+
+export function activeUsersMapLocationName(
+  location: ActiveUsersMapCountryCount,
+): string {
+  const country = activeUsersMapCountryName(location.country_code);
+  if (location.granularity === "city" && location.city) {
+    return [location.city, location.region ?? location.region_code, country]
+      .filter(Boolean)
+      .join(", ");
+  }
+  if (location.granularity === "region") {
+    return [location.region ?? location.region_code, country]
+      .filter(Boolean)
+      .join(", ");
+  }
+  return country;
 }
 
 export function ActiveUsersMapPlot({
@@ -104,19 +132,20 @@ export function ActiveUsersMapPlot({
       />
       {countries.map((country) => {
         const size = bubbleSize(country.count);
-        const name = activeUsersMapCountryName(country.country_code);
-        const selected = selectedCountryCode === country.country_code;
+        const groupId = country.group_id ?? country.country_code;
+        const name = activeUsersMapLocationName(country);
+        const selected = selectedCountryCode === groupId;
         const label = `${name}: ${country.count} active user${country.count === 1 ? "" : "s"}`;
         const position = transformActiveUsersMapPosition(
           activeUsersMapCountryPosition(country),
           transform,
         );
         return (
-          <Tooltip key={country.country_code} title={label}>
+          <Tooltip key={groupId} title={label}>
             <button
               aria-label={label}
               aria-pressed={selected}
-              onClick={() => onSelect(country.country_code)}
+              onClick={() => onSelect(groupId)}
               style={{
                 alignItems: "center",
                 background: selected ? COLORS.BLUE_D : COLORS.BLUE_L,

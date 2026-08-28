@@ -679,8 +679,8 @@ async function startBayOpsService(): Promise<void> {
       seed_bay_id: getConfiguredClusterSeedBayId(),
       bays: [{ bay_id, ok: true }],
     }),
-    getActiveUserMap: async ({ active_minutes }) =>
-      await getActiveUserMapOverview({ active_minutes }),
+    getActiveUserMap: async ({ active_minutes, group_by }) =>
+      await getActiveUserMapOverview({ active_minutes, group_by }),
     getActiveUserMapHistoryReport: async (opts) =>
       await getActiveUserMapHistoryReport(opts),
     getActiveUserMapHistorySeries: async (opts) => {
