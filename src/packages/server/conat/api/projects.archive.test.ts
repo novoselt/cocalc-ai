@@ -11,6 +11,7 @@ let deleteProjectDataOnHostAfterBackupMock: jest.Mock;
 let releaseProjectDataArchiveFreezeOnHostMock: jest.Mock;
 let appendProjectOutboxEventForProjectMock: jest.Mock;
 let assertProjectNotRehomingMock: jest.Mock;
+let withProjectRehomeWriteFenceMock: jest.Mock;
 let publishProjectAccountFeedEventsBestEffortMock: jest.Mock;
 let routedClientCloseMock: jest.Mock;
 let getExplicitProjectRoutedClientMock: jest.Mock;
@@ -101,6 +102,11 @@ jest.mock("@cocalc/backend/logger", () => ({
 jest.mock("@cocalc/server/accounts/is-admin", () => ({
   __esModule: true,
   default: (...args: any[]) => isAdminMock(...args),
+}));
+
+jest.mock("@cocalc/server/bay-config", () => ({
+  __esModule: true,
+  getConfiguredBayId: jest.fn(() => "bay-1"),
 }));
 
 jest.mock("@cocalc/server/projects/collaborators", () => ({
@@ -214,7 +220,8 @@ jest.mock("@cocalc/database/postgres/project-rehome-fence", () => ({
   __esModule: true,
   assertProjectNotRehoming: (...args: any[]) =>
     assertProjectNotRehomingMock(...args),
-  withProjectRehomeWriteFence: jest.fn(),
+  withProjectRehomeWriteFence: (...args: any[]) =>
+    withProjectRehomeWriteFenceMock(...args),
 }));
 
 jest.mock("@cocalc/server/account/project-feed", () => ({
@@ -264,6 +271,12 @@ describe("projects.archiveProject", () => {
     }));
     appendProjectOutboxEventForProjectMock = jest.fn(async () => undefined);
     assertProjectNotRehomingMock = jest.fn(async () => undefined);
+    withProjectRehomeWriteFenceMock = jest.fn(
+      async ({ fn }) =>
+        await fn({
+          query: jest.fn(async () => ({ rowCount: 1, rows: [{ exists: 1 }] })),
+        }),
+    );
     publishProjectAccountFeedEventsBestEffortMock = jest.fn(
       async () => undefined,
     );
@@ -517,6 +530,113 @@ describe("projects.archiveProject", () => {
       expected_generation: 10,
     });
     expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
+  });
+
+  it("releases the final backup freeze when ownership changes during backup", async () => {
+    const localOwnership = { bay_id: "bay-1", epoch: 7 };
+    resolveProjectBayMock
+      .mockResolvedValueOnce(localOwnership)
+      .mockResolvedValueOnce(localOwnership)
+      .mockResolvedValueOnce(localOwnership)
+      .mockResolvedValueOnce({ bay_id: "bay-2", epoch: 8 });
+    poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+
+    const { archiveProjectStorage, ProjectArchiveStorageError } =
+      await import("@cocalc/server/projects/archive");
+    const error = await archiveProjectStorage({
+      project_id: AUTOMATIC_PROJECT_ID,
+      mode: "automatic",
+      job_id: AUTOMATIC_JOB_ID,
+      reason: "free-inactive",
+      expected_host_id: AUTOMATIC_HOST_ID,
+    }).catch((err) => err);
+
+    expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+    expect(error.message).toContain(
+      "automatic archive ownership changed for project",
+    );
+    expect(error.hostCleanupCompleted).toBe(false);
+    expect(error.reopenSafe).toBe(true);
+    expect(recordProjectArchiveLifecycleFinalBackupMock).not.toHaveBeenCalled();
+    expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+    expect(releaseProjectDataArchiveFreezeOnHostMock).toHaveBeenCalledWith({
+      project_id: AUTOMATIC_PROJECT_ID,
+      host_id: AUTOMATIC_HOST_ID,
+      expected_generation: 10,
+    });
+    expect(clearProjectArchiveLifecycleFinalBackupMock).toHaveBeenCalledWith({
+      job_id: AUTOMATIC_JOB_ID,
+      backup_id: "final-backup-id",
+      backup_generation: 10,
+    });
+  });
+
+  it("holds the rehome fence across checked host deletion and finalization", async () => {
+    poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+    let rehomeFenceHeld = false;
+    assertProjectNotRehomingMock.mockImplementationOnce(async () => {
+      rehomeFenceHeld = true;
+    });
+    deleteProjectDataOnHostAfterBackupMock.mockImplementationOnce(async () => {
+      expect(rehomeFenceHeld).toBe(true);
+    });
+    poolConnectQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === "BEGIN") return { rowCount: 0, rows: [] };
+      if (sql === "COMMIT" || sql === "ROLLBACK") {
+        rehomeFenceHeld = false;
+        return { rowCount: 0, rows: [] };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: AUTOMATIC_PROJECT_ID,
+        mode: "automatic",
+        job_id: AUTOMATIC_JOB_ID,
+        reason: "free-inactive",
+        expected_host_id: AUTOMATIC_HOST_ID,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(deleteProjectDataOnHostAfterBackupMock).toHaveBeenCalledTimes(1);
+    expect(rehomeFenceHeld).toBe(false);
+  });
+
+  it("does not delete after the fenced ownership claim becomes stale", async () => {
+    poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+    poolConnectQueryMock.mockImplementation(async (sql: string) => {
+      if (sql.includes("SELECT 1") && sql.includes("FOR UPDATE")) {
+        return { rowCount: 0, rows: [] };
+      }
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
+        return { rowCount: 0, rows: [] };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+
+    const { archiveProjectStorage, ProjectArchiveStorageError } =
+      await import("@cocalc/server/projects/archive");
+    const error = await archiveProjectStorage({
+      project_id: AUTOMATIC_PROJECT_ID,
+      mode: "automatic",
+      job_id: AUTOMATIC_JOB_ID,
+      reason: "free-inactive",
+      expected_host_id: AUTOMATIC_HOST_ID,
+    }).catch((err) => err);
+
+    expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+    expect(error.message).toContain(
+      "automatic archive ownership, claim, or placement changed before cleanup",
+    );
+    expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+    expect(releaseProjectDataArchiveFreezeOnHostMock).toHaveBeenCalledWith({
+      project_id: AUTOMATIC_PROJECT_ID,
+      host_id: AUTOMATIC_HOST_ID,
+      expected_generation: 10,
+    });
   });
 
   it("recovers a succeeded final-backup LRO before fresh admission checks", async () => {

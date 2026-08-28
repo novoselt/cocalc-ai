@@ -7,7 +7,11 @@ import { conat } from "@cocalc/backend/conat";
 import getLogger from "@cocalc/backend/logger";
 import getPool from "@cocalc/database/pool";
 import { appendProjectOutboxEventForProject } from "@cocalc/database/postgres/project-events-outbox";
-import { assertProjectNotRehoming } from "@cocalc/database/postgres/project-rehome-fence";
+import {
+  assertProjectNotRehoming,
+  withProjectRehomeWriteFence,
+} from "@cocalc/database/postgres/project-rehome-fence";
+import type { BayOwnership } from "@cocalc/conat/inter-bay/api";
 import type { LroSummary } from "@cocalc/conat/hub/api/lro";
 import { publishProjectAccountFeedEventsBestEffort } from "@cocalc/server/account/project-feed";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
@@ -141,6 +145,105 @@ function assertAutomaticArchiveClaimCurrent({
   if (expected_host_id && row.host_id !== expected_host_id) {
     throw new Error("automatic archive placement changed before cleanup");
   }
+}
+
+async function assertAutomaticArchiveOwnershipCurrent({
+  project_id,
+  expected,
+}: {
+  project_id: string;
+  expected: BayOwnership;
+}): Promise<void> {
+  const current = await resolveProjectBay(project_id);
+  const localBayId = getConfiguredBayId();
+  if (
+    expected.bay_id !== localBayId ||
+    current == null ||
+    current.bay_id !== expected.bay_id ||
+    current.epoch !== expected.epoch
+  ) {
+    throw new Error(
+      `automatic archive ownership changed for project ${project_id}: expected bay=${expected.bay_id}, epoch=${expected.epoch}; current bay=${current?.bay_id ?? "missing"}, epoch=${current?.epoch ?? "missing"}`,
+    );
+  }
+}
+
+async function lockCurrentAutomaticArchiveClaim({
+  db,
+  project_id,
+  job_id,
+  expected_host_id,
+}: {
+  db: {
+    query: (
+      sql: string,
+      params?: any[],
+    ) => Promise<{ rows: any[]; rowCount?: number | null }>;
+  };
+  project_id: string;
+  job_id: string;
+  expected_host_id: string | null;
+}): Promise<void> {
+  const localBayId = getConfiguredBayId();
+  const result = await db.query(
+    `SELECT 1
+       FROM projects
+      WHERE project_id = $1
+        AND deleted IS NULL
+        AND COALESCE(NULLIF(BTRIM(owning_bay_id), ''), $4) = $4
+        AND state ->> 'state' = 'archiving'
+        AND archive_lifecycle_job_id = $2
+        AND host_id IS NOT DISTINCT FROM $3::uuid
+      FOR UPDATE`,
+    [project_id, job_id, expected_host_id, localBayId],
+  );
+  if ((result.rowCount ?? 0) !== 1) {
+    throw new Error(
+      "automatic archive ownership, claim, or placement changed before cleanup",
+    );
+  }
+}
+
+async function recordFinalAutomaticArchiveBackup({
+  project_id,
+  job_id,
+  expected_host_id,
+  expected_ownership,
+  backup,
+  expected_previous_backup_id,
+}: {
+  project_id: string;
+  job_id: string;
+  expected_host_id: string | null;
+  expected_ownership: BayOwnership;
+  backup: ProjectArchiveLifecycleFinalBackup;
+  expected_previous_backup_id: string | null;
+}): Promise<void> {
+  // Catch a completed rehome first, then hold the source bay's rehome fence
+  // while persisting the marker so an in-progress move cannot pass unnoticed.
+  await assertAutomaticArchiveOwnershipCurrent({
+    project_id,
+    expected: expected_ownership,
+  });
+  await withProjectRehomeWriteFence({
+    project_id,
+    action: "record final automatic archive backup",
+    fn: async (db) => {
+      await lockCurrentAutomaticArchiveClaim({
+        db,
+        project_id,
+        job_id,
+        expected_host_id,
+      });
+      await recordProjectArchiveLifecycleFinalBackup({
+        job_id,
+        backup_id: backup.id,
+        backup_generation: Number(backup.generation),
+        backup_time: backup.time,
+        expected_previous_backup_id,
+      });
+    },
+  });
 }
 
 function assertAutomaticArchiveCanCreateBackup(row: ArchiveRow): void {
@@ -307,12 +410,14 @@ async function setArchivedState({
   job_id,
   automatic,
   expected_host_id,
+  cleanupHostData,
 }: {
   project_id: string;
   reason: ProjectArchiveReason;
   job_id: string;
   automatic: boolean;
   expected_host_id?: string | null;
+  cleanupHostData?: () => Promise<void>;
 }): Promise<void> {
   const checkedAt = new Date();
   const client = await getPool().connect();
@@ -323,6 +428,17 @@ async function setArchivedState({
       project_id,
       action: "archive project",
     });
+    if (automatic) {
+      await lockCurrentAutomaticArchiveClaim({
+        db: client,
+        project_id,
+        job_id,
+        expected_host_id: expected_host_id ?? null,
+      });
+    }
+    // The advisory rehome fence remains held until the archived state commits,
+    // closing the authority-check-to-host-deletion race.
+    await cleanupHostData?.();
     const result = await client.query(
       `UPDATE projects
           SET state = $2::jsonb,
@@ -432,6 +548,12 @@ export async function archiveProjectStorage({
 
     const ownership = await resolveProjectBay(project_id);
     if (!ownership) throw new Error(`project ${project_id} not found`);
+    if (automatic) {
+      await assertAutomaticArchiveOwnershipCurrent({
+        project_id,
+        expected: ownership,
+      });
+    }
     if (
       !automatic &&
       hostCanRunMutations &&
@@ -461,6 +583,10 @@ export async function archiveProjectStorage({
               expected_host_id,
             });
             assertAutomaticArchiveCanCreateBackup(row);
+            await assertAutomaticArchiveOwnershipCurrent({
+              project_id,
+              expected: ownership,
+            });
           },
           onBackupBarrierMayExist: () => {
             finalBackupBarrierMayExist = true;
@@ -481,11 +607,12 @@ export async function archiveProjectStorage({
           expected_host_id,
         });
         assertFinalBackupCoversProject({ backup: finalBackup, row });
-        await recordProjectArchiveLifecycleFinalBackup({
+        await recordFinalAutomaticArchiveBackup({
+          project_id,
           job_id: jobId,
-          backup_id: finalBackup.id,
-          backup_generation: Number(finalBackup.generation),
-          backup_time: finalBackup.time,
+          expected_host_id: expected_host_id ?? row.host_id,
+          expected_ownership: ownership,
+          backup: finalBackup,
           expected_previous_backup_id: previousFinalBackupId,
         });
       }
@@ -506,23 +633,34 @@ export async function archiveProjectStorage({
     const refreshedHostCanRunMutations =
       !hostStatus || hostStatus === "active" || hostStatus === "running";
 
+    let cleanupHostData: (() => Promise<void>) | undefined;
     if (row.provisioned !== false && refreshedHostCanRunMutations) {
       if (!row.host_id) {
         throw new Error("project has no assigned host to archive from");
       }
+      const cleanupHostId = row.host_id;
       if (automatic) {
         if (!expectedArchiveGeneration) {
           throw new Error("automatic archive backup generation is missing");
         }
-        await deleteProjectDataOnHostAfterBackup({
-          project_id,
-          host_id: row.host_id,
-          expected_generation: expectedArchiveGeneration,
-        });
+        const cleanupGeneration = expectedArchiveGeneration;
+        cleanupHostData = async () => {
+          await deleteProjectDataOnHostAfterBackup({
+            project_id,
+            host_id: cleanupHostId,
+            expected_generation: cleanupGeneration,
+          });
+          hostCleanupCompleted = true;
+        };
       } else {
-        await deleteProjectDataOnHost({ project_id, host_id: row.host_id });
+        cleanupHostData = async () => {
+          await deleteProjectDataOnHost({
+            project_id,
+            host_id: cleanupHostId,
+          });
+          hostCleanupCompleted = true;
+        };
       }
-      hostCleanupCompleted = true;
     } else if (row.provisioned !== false) {
       log.info("archive finalized from backup without host mutation", {
         project_id,
@@ -538,6 +676,7 @@ export async function archiveProjectStorage({
       job_id: jobId,
       automatic,
       expected_host_id: expected_host_id ?? row.host_id,
+      cleanupHostData,
     });
     await updateProjectArchiveLifecycleJob({
       job_id: jobId,
