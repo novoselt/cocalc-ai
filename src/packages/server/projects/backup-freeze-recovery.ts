@@ -17,6 +17,7 @@ type FrozenBackupResult = {
 
 type ReleaseArchiveFreeze = typeof releaseProjectDataArchiveFreezeOnHost;
 type AttestArchiveFreezeReleased = (op_id: string) => Promise<void>;
+type AttestArchiveFreezeNotStarted = (op_id: string) => Promise<void>;
 
 export type ArchiveBackupFreezeFailure =
   | "not-started"
@@ -25,13 +26,16 @@ export type ArchiveBackupFreezeFailure =
 
 const ARCHIVE_BACKUP_FREEZE_RECOVERY_RESULT_KEY = "archive_freeze_recovery";
 
-async function attestArchiveFreezeReleased(op_id: string): Promise<void> {
+async function attestArchiveFreezeRecovery(
+  op_id: string,
+  status: "not-started" | "released",
+): Promise<void> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 20; attempt += 1) {
     try {
       const updated = await mergeLroResult({
         op_id,
-        result: { [ARCHIVE_BACKUP_FREEZE_RECOVERY_RESULT_KEY]: "released" },
+        result: { [ARCHIVE_BACKUP_FREEZE_RECOVERY_RESULT_KEY]: status },
         if_status: ["succeeded", "failed", "canceled", "expired"],
       });
       if (updated) return;
@@ -41,20 +45,32 @@ async function attestArchiveFreezeReleased(op_id: string): Promise<void> {
     await new Promise<void>((resolve) => setTimeout(resolve, 250));
   }
   if (lastError) throw lastError;
-  throw new Error("backup LRO did not become terminal after releasing freeze");
+  throw new Error(
+    `backup LRO did not become terminal before ${status} attestation`,
+  );
+}
+
+async function attestArchiveFreezeReleased(op_id: string): Promise<void> {
+  await attestArchiveFreezeRecovery(op_id, "released");
+}
+
+async function attestArchiveFreezeNotStarted(op_id: string): Promise<void> {
+  await attestArchiveFreezeRecovery(op_id, "not-started");
 }
 
 export function classifyArchiveBackupFreezeFailure({
   enabled,
   hostOperationStarted,
+  operationSettled = true,
   error,
 }: {
   enabled: boolean;
   hostOperationStarted: boolean;
+  operationSettled?: boolean;
   error: unknown;
 }): ArchiveBackupFreezeFailure | undefined {
   if (!enabled) return;
-  if (!hostOperationStarted) return "not-started";
+  if (!hostOperationStarted && operationSettled) return "not-started";
   if (
     `${(error as { code?: unknown })?.code ?? ""}` ===
     ARCHIVE_BACKUP_SOURCE_RELEASED_ERROR_CODE
@@ -86,6 +102,7 @@ export function createBackupFreezeRecovery({
   host_id,
   releaseArchiveFreeze = releaseProjectDataArchiveFreezeOnHost,
   attestReleased = attestArchiveFreezeReleased,
+  attestNotStarted = attestArchiveFreezeNotStarted,
 }: {
   enabled: boolean;
   op_id: string;
@@ -93,6 +110,7 @@ export function createBackupFreezeRecovery({
   host_id: string;
   releaseArchiveFreeze?: ReleaseArchiveFreeze;
   attestReleased?: AttestArchiveFreezeReleased;
+  attestNotStarted?: AttestArchiveFreezeNotStarted;
 }) {
   let handedOff = false;
   let cleanupStarted = false;
@@ -170,30 +188,36 @@ export function createBackupFreezeRecovery({
     watch(
       operation: Promise<FrozenBackupResult>,
       reason: string,
+      hostOperationStarted?: () => boolean,
     ): Promise<void> | undefined {
       if (!enabled || handedOff) return;
       return operation.then(
         async (backup) => await release(backup, reason),
         async (err) => {
-          if (
-            classifyArchiveBackupFreezeFailure({
-              enabled,
-              hostOperationStarted: true,
-              error: err,
-            }) !== "released"
-          ) {
+          const status = classifyArchiveBackupFreezeFailure({
+            enabled,
+            hostOperationStarted: hostOperationStarted?.() ?? true,
+            operationSettled: true,
+            error: err,
+          });
+          if (status !== "released" && status !== "not-started") {
             return;
           }
           if (handedOff || cleanupStarted) return;
           cleanupStarted = true;
           try {
-            await attestReleased(op_id);
+            if (status === "released") {
+              await attestReleased(op_id);
+            } else {
+              await attestNotStarted(op_id);
+            }
           } catch (attestErr) {
-            logger.error("unable to attest failed host backup release", {
+            logger.error("unable to attest settled archive backup failure", {
               op_id,
               project_id,
               host_id,
               reason,
+              status,
               err: `${attestErr}`,
             });
           }

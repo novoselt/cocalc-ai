@@ -114,6 +114,25 @@ describe("backup freeze recovery", () => {
     expect(attestReleased).toHaveBeenCalledWith(options.op_id);
   });
 
+  it("attests not-started only after a late pre-host failure settles", async () => {
+    const attestNotStarted = jest.fn(async () => undefined);
+    const recovery = createBackupFreezeRecovery({
+      ...options,
+      attestNotStarted,
+    });
+    const operation = deferred<{ id: string; generation: number }>();
+    const watched = recovery.watch(
+      operation.promise,
+      "host watch won before RPC",
+      () => false,
+    );
+
+    operation.reject(new Error("file server never became ready"));
+    await watched;
+
+    expect(attestNotStarted).toHaveBeenCalledWith(options.op_id);
+  });
+
   it("attests only failures that never reached the host or were explicitly released", () => {
     const notStarted = archiveBackupFreezeFailureResult({
       enabled: true,
@@ -132,13 +151,23 @@ describe("backup freeze recovery", () => {
       hostOperationStarted: true,
       error: new Error("timeout"),
     });
+    const unresolvedPreHost = archiveBackupFreezeFailureResult({
+      enabled: true,
+      hostOperationStarted: false,
+      operationSettled: false,
+      error: new Error("host watch won"),
+    });
 
     expect(notStarted).toEqual({ archive_freeze_recovery: "not-started" });
     expect(released).toEqual({ archive_freeze_recovery: "released" });
     expect(uncertain).toEqual({ archive_freeze_recovery: "uncertain" });
+    expect(unresolvedPreHost).toEqual({
+      archive_freeze_recovery: "uncertain",
+    });
     expect(isArchiveBackupFailureReopenSafe(notStarted)).toBe(true);
     expect(isArchiveBackupFailureReopenSafe(released)).toBe(true);
     expect(isArchiveBackupFailureReopenSafe(uncertain)).toBe(false);
+    expect(isArchiveBackupFailureReopenSafe(unresolvedPreHost)).toBe(false);
     expect(
       archiveBackupFreezeFailureResult({
         enabled: false,

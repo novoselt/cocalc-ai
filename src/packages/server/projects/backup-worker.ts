@@ -234,6 +234,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
     hostWatch.promise.catch(reject);
   });
   let backupOperation: Promise<any> | undefined;
+  let backupOperationSettled = false;
   let hostBackupOperationStarted = false;
   const freezeRecovery = createBackupFreezeRecovery({
     enabled: freeze_source,
@@ -350,6 +351,14 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
         freeze_source,
       });
     })();
+    void backupOperation.then(
+      () => {
+        backupOperationSettled = true;
+      },
+      () => {
+        backupOperationSettled = true;
+      },
+    );
     const backup = await Promise.race([
       withTimeout(backupOperation, BACKUP_TIMEOUT_MS),
       hostWatchFailure,
@@ -432,6 +441,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
       void freezeRecovery.watch(
         backupOperation,
         "backup worker lost the host result",
+        () => hostBackupOperationStarted,
       );
     };
     logger.warn("backup op failed", { op_id, err: `${err}` });
@@ -453,6 +463,9 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
         result: archiveBackupFreezeFailureResult({
           enabled: freeze_source,
           hostOperationStarted: hostBackupOperationStarted,
+          // A host-watch or timeout winner cannot prove that an unresolved
+          // pre-RPC promise will not proceed to freeze the project later.
+          operationSettled: backupOperation == null || backupOperationSettled,
           error: err,
         }),
       });
