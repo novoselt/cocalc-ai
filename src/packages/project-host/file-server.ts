@@ -3,7 +3,6 @@
 // without having to run that project.
 
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream, createWriteStream } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -165,12 +164,7 @@ import { requireManagedSshKeyAccount } from "./ssh/managed-key-account";
 import { managedProjectEgressResidualTracker } from "./managed-egress-residual";
 import { getLocalHostId } from "./sqlite/hosts";
 import { setContainerFileIO } from "@cocalc/lite/hub/acp/executor/container";
-import {
-  readFile as nodeReadFile,
-  writeFile as nodeWriteFile,
-  open as nodeOpen,
-  realpath as nodeRealpath,
-} from "node:fs/promises";
+import { open as nodeOpen } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { getMasterConatClient, queueProjectProvisioned } from "./master-status";
@@ -205,7 +199,10 @@ import {
   isProjectViewerRole,
   type ProjectViewerReadPolicy,
 } from "@cocalc/util/project-access";
-import { createViewerReadOnlyFilesystem } from "./viewer-read-only-filesystem";
+import {
+  assertViewerCanonicalPathAllowed,
+  createViewerReadOnlyFilesystem,
+} from "./viewer-read-only-filesystem";
 import {
   projectRuntimeRootfsContractLabelsForCurrentHost,
   readCurrentProjectRuntimeUsernsMapFingerprint,
@@ -2078,47 +2075,13 @@ export function configureProjectHostAcpContainerFileIO(): void {
   setContainerFileIO({
     mountPoint: projectMountpoint,
     readFile: async (project_id: string, p: string) => {
-      const { hostPath, base } = projectHostPath(project_id, p);
-      const fd = await nodeOpen(
-        hostPath,
-        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
-      );
-      try {
-        // TOCTOU mitigation: re-resolve via /proc/self/fd/<fd> AFTER open with
-        // O_NOFOLLOW. If a user flips the path to a symlink between path
-        // resolution and open, O_NOFOLLOW blocks the follow; if they flip it
-        // after open, realpath on the FD confirms we're still under the
-        // project root. This protects against symlink races into host paths.
-        const real = await nodeRealpath(`/proc/self/fd/${fd.fd}`);
-        if (!real.startsWith(base)) {
-          throw Error(`resolved path escapes project root: ${real}`);
-        }
-        return await nodeReadFile(fd, "utf8");
-      } finally {
-        await fd.close();
-      }
+      return (await getProjectSandboxFilesystem(project_id).readFile(
+        p,
+        "utf8",
+      )) as string;
     },
     writeFile: async (project_id: string, p: string, content: string) => {
-      const { hostPath, base } = projectHostPath(project_id, p);
-      const fd = await nodeOpen(
-        hostPath,
-        fsConstants.O_CREAT |
-          fsConstants.O_TRUNC |
-          fsConstants.O_WRONLY |
-          fsConstants.O_NOFOLLOW,
-        0o600,
-      );
-      try {
-        // Same TOCTOU guard as read: confirm the opened FD still resolves
-        // inside the project root before writing.
-        const real = await nodeRealpath(`/proc/self/fd/${fd.fd}`);
-        if (!real.startsWith(base)) {
-          throw Error(`resolved path escapes project root: ${real}`);
-        }
-        await nodeWriteFile(fd, content, "utf8");
-      } finally {
-        await fd.close();
-      }
+      await getProjectSandboxFilesystem(project_id).writeFile(p, content);
     },
   });
 }
@@ -4692,8 +4655,7 @@ export async function ensureFileDownloadReadServer({
       name: PROJECT_HOST_FILE_DOWNLOAD_READ_SERVICE,
       createReadStream: async (containerPath: string, opts?: any) => {
         const fs = await createProjectFilesystem(project_id);
-        const absPath = await fs.safeAbsPath(containerPath);
-        return createReadStream(absPath, opts);
+        return await fs.createReadStream(containerPath, opts);
       },
     })
       .then(() => undefined)
@@ -4726,13 +4688,21 @@ export async function ensureViewerFileDownloadReadServer({
       name: readServiceName,
       createReadStream: async (containerPath: string, opts?: any) => {
         const projectFs = await createProjectFilesystem(project_id);
-        const readOnlyFs = createViewerReadOnlyFilesystem({
-          fs: projectFs,
-          readPolicy: await getViewerReadPolicy({ project_id, account_id }),
+        const readPolicy = await getViewerReadPolicy({
+          project_id,
+          account_id,
         });
-        await readOnlyFs.stat(containerPath);
-        const absPath = await projectFs.safeAbsPath(containerPath);
-        return createReadStream(absPath, opts);
+        return await projectFs.createAuthorizedReadStream(
+          containerPath,
+          opts,
+          async (canonicalIdentity) => {
+            assertViewerCanonicalPathAllowed({
+              canonicalIdentity,
+              readPolicy,
+              path: containerPath,
+            });
+          },
+        );
       },
     })
       .then(() => undefined)
@@ -4771,17 +4741,22 @@ export async function ensureShareFileDownloadReadServer({
       name: readServiceName,
       createReadStream: async (containerPath: string, opts?: any) => {
         const projectFs = await createProjectFilesystem(project_id);
-        const readOnlyFs = createViewerReadOnlyFilesystem({
-          fs: projectFs,
-          readPolicy: await getShareReadPolicy({
-            project_id,
-            share_id,
-            account_id,
-          }),
+        const readPolicy = await getShareReadPolicy({
+          project_id,
+          share_id,
+          account_id,
         });
-        await readOnlyFs.stat(containerPath);
-        const absPath = await projectFs.safeAbsPath(containerPath);
-        return createReadStream(absPath, opts);
+        return await projectFs.createAuthorizedReadStream(
+          containerPath,
+          opts,
+          async (canonicalIdentity) => {
+            assertViewerCanonicalPathAllowed({
+              canonicalIdentity,
+              readPolicy,
+              path: containerPath,
+            });
+          },
+        );
       },
     })
       .then(() => undefined)
@@ -4823,9 +4798,8 @@ export async function ensureFileUploadWriteServer({
           deleteSnapshot: async (name: string) =>
             await deleteSnapshot({ project_id, name }),
         });
-        const absPath = await fs.safeAbsPath(containerPath);
-        await mkdir(dirname(absPath), { recursive: true });
-        return createWriteStream(absPath);
+        await fs.mkdir(dirname(containerPath), { recursive: true });
+        return await fs.createWriteStream(containerPath);
       },
     })
       .then(() => undefined)

@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { sha1 } from "@cocalc/util/misc";
+import { is_bad_latex_filename, sha1 } from "@cocalc/util/misc";
 
 import type {
   BuildDiagnostic,
@@ -103,6 +103,23 @@ function shouldStop(stage: BuildStageResult): boolean {
   return stage.state === "canceled" || stage.state === "timed_out";
 }
 
+// Hash of a generated input, or undefined when it does not exist. Only ENOENT
+// counts as "not there": runtime.exists() flattens permission and I/O failures
+// into false as well, which would silently turn a broken filesystem into a
+// missing file.
+async function hashIfPresent(
+  runtime: DocumentBuildRuntime,
+  path: string,
+): Promise<string | undefined> {
+  try {
+    return await runtime.hash(path);
+  } catch (error) {
+    if ((error as { code?: string } | null)?.code === "ENOENT")
+      return undefined;
+    throw error;
+  }
+}
+
 function markEarlierLatexPassesOptional(snapshot: DocumentBuildSnapshot): void {
   const latex = snapshot.stages.filter((stage) => stage.name === "latex");
   for (const stage of latex.slice(0, -1)) stage.required = false;
@@ -124,9 +141,9 @@ export async function runLatexPipeline(
   let outputDirectory: string | undefined;
   try {
     source = await runtime.readText(identity.logical_path);
-    if (/\s\s+/.test(identity.logical_path)) {
+    if (is_bad_latex_filename(identity.logical_path)) {
       throw new DocumentBuildConfigError(
-        `It is not possible to compile '${identity.logical_path}' because its name contains consecutive spaces.`,
+        `It is not possible to compile '${identity.logical_path}' because its name contains consecutive spaces or a single quote (').`,
       );
     }
     outputDirectory = knitr
@@ -193,7 +210,13 @@ export async function runLatexPipeline(
     }
   }
 
+  // Whether the pass held in `latex` could have been served from the aggregate
+  // cache instead of really running. Only such a pass can report sagetex.sty
+  // without having regenerated the .sagetex.sage file it describes.
+  let latexWasAggregatable = false;
+
   const runLatex = async (force: boolean): Promise<BuildStageResult> => {
+    latexWasAggregatable = !force && request.generation != null;
     const stage = await executeStage(
       snapshot,
       runtime,
@@ -267,9 +290,26 @@ export async function runLatexPipeline(
     const runDirectory =
       outputDirectory ?? path_split(identity.working_path).head;
     const sageFile = joinPath(runDirectory, sagetexFile(identity.working_path));
-    let hash: string;
+    // The generated .sagetex.sage file can be missing even though this LaTeX
+    // run reported sagetex.sty: a "clean" removes it, and the following
+    // non-forced LaTeX pass can then be served from the aggregate cache
+    // instead of regenerating it. Re-run LaTeX forced to get the file back
+    // rather than failing the whole build. See cocalc#8680.
+    //
+    // Only a pass that could have come from the cache is worth repeating: if
+    // LaTeX really ran and still produced no input, the same command would
+    // just burn another slice of the build deadline before the same failure.
+    let hash = "";
     try {
-      hash = await runtime.hash(sageFile);
+      // An empty hash leaves aggregate_key unset, so sagetex is never deduped
+      // against an earlier run when we could not identify its input.
+      hash = (await hashIfPresent(runtime, sageFile)) ?? "";
+      if (!hash && latexWasAggregatable) {
+        latex = await runLatex(true);
+        if (shouldStop(latex))
+          return finishSnapshot(snapshot, runtime, callbacks);
+        hash = (await hashIfPresent(runtime, sageFile)) ?? "";
+      }
     } catch (error) {
       snapshot.diagnostics.push({
         level: "error",

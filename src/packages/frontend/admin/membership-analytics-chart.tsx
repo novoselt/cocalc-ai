@@ -123,7 +123,9 @@ function isCompoundBreakdown(breakdown: MembershipAnalyticsBreakdown): boolean {
     breakdown === "tier-interval" ||
     breakdown === "tier-lifecycle" ||
     breakdown === "channel-tier" ||
-    breakdown === "tier-channel"
+    breakdown === "tier-channel" ||
+    breakdown === "product-cost-component" ||
+    breakdown === "product-provider"
   );
 }
 
@@ -257,7 +259,10 @@ export function buildMembershipAnalyticsSeriesVisuals({
           ? item.channel == null
             ? -1
             : usedChannels.indexOf(item.channel)
-          : -1;
+          : breakdown === "product-cost-component" ||
+              breakdown === "product-provider"
+            ? item.order
+            : -1;
     const tint =
       breakdown === "tier-interval" || breakdown === "tier-lifecycle"
         ? variantTint(breakdown, item.variant)
@@ -523,6 +528,13 @@ function pointValue(
     : point.activeMemberships;
 }
 
+function metricApplies(
+  series: MembershipAnalyticsSeries,
+  metric: MembershipAnalyticsMetric,
+): boolean {
+  return metric === "revenue" || series.countApplicable !== false;
+}
+
 export function buildMembershipAnalyticsHoverModel({
   day,
   visuals,
@@ -535,6 +547,7 @@ export function buildMembershipAnalyticsHoverModel({
   includeComparison: boolean;
 }): MembershipAnalyticsHoverModel | undefined {
   const rows = visuals
+    .filter(({ series }) => metricApplies(series, metric))
     .map((visual) => {
       const currentPoint = visual.series.current.find(
         ({ displayDay }) => displayDay === day,
@@ -558,10 +571,7 @@ export function buildMembershipAnalyticsHoverModel({
       };
     })
     .filter((row) => row != null)
-    .filter(
-      ({ current, comparison }) =>
-        metric !== "revenue" || current !== 0 || comparison !== 0,
-    );
+    .filter(({ current, comparison }) => current !== 0 || comparison !== 0);
   const first = rows[0];
   if (first == null) return;
   return {
@@ -940,24 +950,25 @@ export function MembershipAnalyticsPlot({
   onHoverDay: (day?: string) => void;
 }) {
   const [hover, setHover] = useState<MembershipAnalyticsHoverState>();
-  if (!visuals.length) {
+  const stacked = chartMode === "stacked";
+  const displayedVisuals = visuals
+    .filter(({ series }) => metricApplies(series, metric))
+    .filter(({ series }) =>
+      [...series.current, ...series.comparison].some(
+        (point) => pointValue(point, metric) !== 0,
+      ),
+    );
+  if (!displayedVisuals.length) {
     return (
       <Empty
         image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="No personal membership allocation data is available."
+        description="No data is available for this metric."
       />
     );
   }
-  const stacked = chartMode === "stacked";
-  const currentVisuals = stacked ? [...visuals].reverse() : visuals;
-  const displayedVisuals =
-    metric === "revenue"
-      ? visuals.filter(({ series }) =>
-          [...series.current, ...series.comparison].some(
-            ({ revenueCents }) => revenueCents !== 0,
-          ),
-        )
-      : visuals;
+  const currentVisuals = stacked
+    ? [...displayedVisuals].reverse()
+    : displayedVisuals;
   const comparisonTraces =
     comparisonLabel && view.comparisonAvailable
       ? stacked

@@ -30,9 +30,23 @@ jest.mock("../api/db", () => ({
   saveBlob: jest.fn(),
 }));
 
+const createReadServer = jest.fn(async () => undefined);
+
+jest.mock("@cocalc/conat/files/read", () => ({
+  createServer: (...args: any[]) => createReadServer(...args),
+}));
+
+import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import {
+  closeWorkspaceFileDownloadReadServers,
   createWorkspaceJupyterFilesystemHandlers,
+  ensureWorkspaceFileDownloadReadServer,
   startWorkspaceFilesystem,
+  workspaceProjectFilesystem,
+  WORKSPACE_FILE_DOWNLOAD_READ_SERVICE,
 } from "./workspace-filesystem";
 
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
@@ -85,5 +99,106 @@ describe("workspace filesystem", () => {
         ipynb: { cells: [] },
       }),
     ).rejects.toThrow("invalid workspace filesystem subject");
+  });
+});
+
+describe("workspace file download reader", () => {
+  let root: string;
+  let projectDir: string;
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    closeWorkspaceFileDownloadReadServers();
+    root = await mkdtemp(join(tmpdir(), "workspace-reader-"));
+    projectDir = join(root, PROJECT_ID);
+    await mkdir(join(projectDir, "latex"), { recursive: true });
+    await writeFile(join(projectDir, "latex", "tex.pdf"), "pdf");
+  });
+
+  it("resolves the canonical /home/user alias to the project directory", async () => {
+    const fs = workspaceProjectFilesystem({
+      project_id: PROJECT_ID,
+      path: root,
+    });
+    expect(await fs.safeAbsPath("/home/user/latex/tex.pdf")).toBe(
+      join(projectDir, "latex", "tex.pdf"),
+    );
+  });
+
+  it("keeps /tmp inside the project, matching stat and archive cleanup", async () => {
+    // Temporary download archives live at /tmp/.cocalc-download-archive-*, and
+    // are created through this same filesystem.  Reads must land in the same
+    // place rather than on the host's /tmp.
+    await mkdir(join(projectDir, "tmp"), { recursive: true });
+    const archive = ".cocalc-download-archive-abc.zip";
+    await writeFile(join(projectDir, "tmp", archive), "zip");
+    const fs = workspaceProjectFilesystem({
+      project_id: PROJECT_ID,
+      path: root,
+    });
+    expect(await fs.safeAbsPath(`/tmp/${archive}`)).toBe(
+      join(projectDir, "tmp", archive),
+    );
+  });
+
+  it("registers one read server per project and pairs it with the fs stat subject", async () => {
+    const client = {} as any;
+    const first = await ensureWorkspaceFileDownloadReadServer({
+      client,
+      project_id: PROJECT_ID,
+      path: root,
+    });
+    const second = await ensureWorkspaceFileDownloadReadServer({
+      client,
+      project_id: PROJECT_ID,
+      path: root,
+    });
+
+    expect(first.readServiceName).toBe(WORKSPACE_FILE_DOWNLOAD_READ_SERVICE);
+    expect(first.statSubject).toBe(`fs.project-${PROJECT_ID}`);
+    expect(second).toEqual(first);
+    // Cached: the second call must not open another subscription.
+    expect(createReadServer).toHaveBeenCalledTimes(1);
+    expect(createReadServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        client,
+        project_id: PROJECT_ID,
+        name: WORKSPACE_FILE_DOWNLOAD_READ_SERVICE,
+      }),
+    );
+  });
+
+  it("refuses to follow a symlink that escapes the project", async () => {
+    // The reader must open through the sandbox's verified handle rather than
+    // resolving a path and reopening it by name, so a link planted inside the
+    // project cannot be used to read the rest of the machine.
+    const outside = join(root, "outside-secret");
+    await writeFile(outside, "secret");
+    await symlink(outside, join(projectDir, "escape.txt"));
+
+    const client = {} as any;
+    await ensureWorkspaceFileDownloadReadServer({
+      client,
+      project_id: PROJECT_ID,
+      path: root,
+    });
+    const { createReadStream } = createReadServer.mock.calls[0][0] as any;
+    await expect(createReadStream("/home/user/escape.txt")).rejects.toThrow();
+  });
+
+  it("streams through the sandbox without any project process running", async () => {
+    const client = {} as any;
+    await ensureWorkspaceFileDownloadReadServer({
+      client,
+      project_id: PROJECT_ID,
+      path: root,
+    });
+    const { createReadStream } = createReadServer.mock.calls[0][0] as any;
+    const stream = await createReadStream("/home/user/latex/tex.pdf");
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.from(chunk));
+    }
+    expect(Buffer.concat(chunks).toString()).toBe("pdf");
   });
 });

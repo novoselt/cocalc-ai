@@ -287,6 +287,7 @@ async function reconcileVmBilling(
   await reconcileDedicatedHostPurchaseSessionForAccount({
     account_id: vm.owner_account_id,
     host_id: vm.id,
+    resource_kind: "compute-vm",
     host_name: `VM: ${vm.name}`,
     host_bay_id: vm.owning_bay_id,
     provider: vm.provider,
@@ -349,6 +350,7 @@ async function reconcileVolumeBilling(volume: ComputeVolumeRow) {
   await reconcileDedicatedHostPurchaseSessionForAccount({
     account_id: volume.owner_account_id,
     host_id: volume.id,
+    resource_kind: "compute-volume",
     host_name: `VM volume: ${volume.name}`,
     host_bay_id: volume.owning_bay_id,
     provider: volume.provider,
@@ -807,6 +809,7 @@ async function meterComputeVmPublicEgress() {
           : await recordDedicatedHostMeteredUsageForAccount({
               account_id: vm.owner_account_id,
               resource_id: vm.id,
+              product_kind: "virtual-machine",
               resource_name: `VM egress: ${vm.name}`,
               resource_bay_id: vm.owning_bay_id,
               project_id: vm.project_id,

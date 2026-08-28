@@ -83,7 +83,7 @@ describe("dedicated host spend accounting", () => {
       });
 
       const { rows } = await getPool().query(
-        `SELECT cost, cost_per_hour
+        `SELECT cost, cost_per_hour, description
            FROM purchases
           WHERE account_id=$1 AND tag=$2`,
         [account_id, `dedicated-host:${host_id}`],
@@ -92,6 +92,10 @@ describe("dedicated host spend accounting", () => {
         {
           cost: expected,
           cost_per_hour: "0.0200000000",
+          description: expect.objectContaining({
+            resource_kind: "project-host",
+            product_kind: "dedicated-host",
+          }),
         },
       ]);
     },
@@ -111,6 +115,7 @@ describe("dedicated host spend accounting", () => {
     const base = {
       account_id,
       resource_id,
+      product_kind: "virtual-machine" as const,
       resource_name: "VM egress: research-vm",
       resource_bay_id: "bay-0",
       project_id,
@@ -200,6 +205,7 @@ describe("dedicated host spend accounting", () => {
     expect(purchases[0].period_end.toISOString()).toBe(secondEnd.toISOString());
     expect(purchases[0].description).toMatchObject({
       resource_kind: "compute-egress",
+      product_kind: "virtual-machine",
       usage_bytes: 3_000_000_000,
     });
 

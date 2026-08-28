@@ -6,6 +6,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { useState } from "react";
 
 import {
   ClaimableMembershipPackagesPanel,
@@ -881,8 +882,21 @@ describe("membership package managers", () => {
     );
   });
 
-  it("shows a compact admin site-license list before the selected dashboard", async () => {
+  it("opens the selected admin site-license dashboard in a keyboard-accessible drawer", async () => {
     isAdmin = true;
+    function RoutedSiteLicenseAdminPanel() {
+      const [siteLicenseId, setSiteLicenseId] = useState<string>();
+      return (
+        <>
+          <output data-testid="selected-site-license">{siteLicenseId}</output>
+          <SiteLicenseAdminPanel
+            tiers={TIERS}
+            siteLicenseId={siteLicenseId}
+            onSiteLicenseIdChange={setSiteLicenseId}
+          />
+        </>
+      );
+    }
     listSiteLicenseOverviews.mockResolvedValue([
       {
         site_license: {
@@ -1000,7 +1014,7 @@ describe("membership package managers", () => {
       },
     ]);
 
-    render(<SiteLicenseAdminPanel tiers={TIERS} />);
+    render(<RoutedSiteLicenseAdminPanel />);
 
     await waitFor(() => {
       expect(screen.getByText("Showing 2 of 2")).toBeTruthy();
@@ -1010,28 +1024,56 @@ describe("membership package managers", () => {
       expect(screen.queryByText("Researchers")).toBeNull();
     });
 
-    fireEvent.click(getSiteLicenseSummaryRow("Campus License"));
+    const search = screen.getByPlaceholderText(
+      "Find by license, organization, domain, or bay",
+    );
+    fireEvent.change(search, { target: { value: "License" } });
+    const campusRow = getSiteLicenseSummaryRow("Campus License");
+    campusRow.focus();
+    fireEvent.keyDown(campusRow, { key: "Enter", code: "Enter" });
+
+    const campusDrawer = await screen.findByRole("dialog", {
+      name: "Manage Campus License - Example University site license",
+    });
+    expect(screen.getByTestId("selected-site-license")).toHaveTextContent(
+      "license-1",
+    );
+    expect(within(campusDrawer).getByText("Students")).toBeVisible();
+    expect(campusRow).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(
+      within(campusDrawer).getByRole("button", { name: "Close" }),
+    );
 
     await waitFor(() => {
-      expect(screen.getByText("Students")).toBeVisible();
+      expect(
+        screen.queryByRole("dialog", {
+          name: "Manage Campus License - Example University site license",
+        }),
+      ).toBeNull();
     });
-
-    fireEvent.click(getSiteLicenseSummaryRow("Campus License"));
-
-    await waitFor(() => {
-      expectTextNotVisible("Students");
-    });
+    expect(search).toHaveValue("License");
+    expect(screen.getByTestId("selected-site-license")).toBeEmptyDOMElement();
+    expect(campusRow).toHaveAttribute("aria-expanded", "false");
+    expect(campusRow).toHaveFocus();
 
     fireEvent.click(getSiteLicenseSummaryRow("Research License"));
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Researchers").length).toBeGreaterThan(0);
-      expectTextNotVisible("Students");
+    const researchDrawer = await screen.findByRole("dialog", {
+      name: "Manage Research License - Research Institute site license",
     });
+    expect(screen.getByTestId("selected-site-license")).toHaveTextContent(
+      "license-2",
+    );
+    expect(
+      within(researchDrawer).getAllByText("Researchers").length,
+    ).toBeGreaterThan(0);
+    expectTextNotVisible("Students");
   });
 
   it("lets admins revoke an active site-license pool seat", async () => {
     isAdmin = true;
+    localStorage.removeItem("cocalc-site-license-users-width");
     const activeOverview = {
       site_license: {
         id: "license-1",
@@ -1109,7 +1151,12 @@ describe("membership package managers", () => {
 
     fireEvent.click(screen.getByText("Manage users"));
 
-    await screen.findByText("Students users");
+    const usersDrawer = await screen.findByRole("dialog", {
+      name: "Students users",
+    });
+    expect(
+      usersDrawer.closest(".ant-drawer-content-wrapper")?.getAttribute("style"),
+    ).toContain("calc(100vw - 32px)");
     expect(await screen.findByText("Grace Hopper")).toBeTruthy();
     expect(screen.getByText("grace@example.edu")).toBeTruthy();
     expect(screen.getByText("Seat given on")).toBeTruthy();

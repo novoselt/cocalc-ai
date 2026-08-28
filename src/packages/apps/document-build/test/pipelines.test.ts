@@ -20,6 +20,10 @@ class FakeRuntime implements DocumentBuildRuntime {
   readonly files = new Map<string, string>();
   readonly existing = new Set<string>();
   readonly outputs = new Map<string, Output[]>();
+  // Files each successive run of a stage creates, keyed by stage name and
+  // consumed one entry per call like `outputs`. Lets a test show that a forced
+  // re-run regenerates an input the earlier aggregated run did not produce.
+  readonly creates = new Map<string, string[][]>();
   config?: SavedBuildConfig;
   clock = 1_000;
 
@@ -39,7 +43,18 @@ class FakeRuntime implements DocumentBuildRuntime {
     return this.existing.has(path);
   }
 
-  async hash(): Promise<string> {
+  // Failures a hash of this path should raise instead of succeeding, for the
+  // filesystem errors that are not "the file is absent".
+  readonly hashFailures = new Map<string, Error>();
+
+  async hash(path: string): Promise<string> {
+    const failure = this.hashFailures.get(path);
+    if (failure != null) throw failure;
+    if (!this.existing.has(path)) {
+      throw Object.assign(new Error(`ENOENT: no such file: ${path}`), {
+        code: "ENOENT",
+      });
+    }
     return "sage-hash";
   }
 
@@ -48,6 +63,9 @@ class FakeRuntime implements DocumentBuildRuntime {
     _onEvent: (event: BuildStageEvent) => void,
   ): Promise<BuildStageResult> {
     this.specs.push(spec);
+    for (const path of this.creates.get(spec.name)?.shift() ?? []) {
+      this.existing.add(path);
+    }
     const output = this.outputs.get(spec.name)?.shift() ?? {};
     return {
       ...spec,
@@ -160,6 +178,7 @@ describe("LaTeX-family pipelines", () => {
       { stdout: "after sage" },
       { stdout: "final" },
     );
+    runtime.existing.add("paper.sagetex.sage");
     runtime.queue("sagetex", {
       stderr: "Sage processing complete successfully",
     });
@@ -202,9 +221,168 @@ describe("LaTeX-family pipelines", () => {
     expect(result.state).toBe("succeeded");
   });
 
+  it.each([
+    ["two  spaces.tex"],
+    ["author's-notes.tex"],
+    ["sub/two  spaces.tex"],
+    ["sub/author's-notes.tex"],
+  ])("refuses to build %s", async (path) => {
+    const runtime = new FakeRuntime();
+    runtime.files.set(path, "\\documentclass{article}");
+    const result = await runDocumentBuild({ path }, runtime);
+    expect(runtime.specs).toHaveLength(0);
+    expect(result.state).toBe("failed");
+    expect(result.diagnostics[0]).toMatchObject({
+      source: "configuration",
+      message: expect.stringContaining("not possible to compile"),
+    });
+  });
+
+  it("builds a file whose directory contains spaces and a quote", async () => {
+    // Only the basename reaches the build command; the directory is passed as
+    // cwd, so it does not have to be shell-safe.
+    const runtime = new FakeRuntime();
+    const path = "bad  dir/author's-dir/paper.tex";
+    runtime.files.set(path, "\\documentclass{article}");
+    runtime.queue("latex", { stdout: "latexmk" });
+    const result = await runDocumentBuild({ path }, runtime);
+    expect(runtime.specs.map((spec) => spec.name)).toEqual(["latex"]);
+    expect(runtime.specs[0].cwd).toBe("bad  dir/author's-dir");
+    expect(result.state).toBe("succeeded");
+  });
+
+  it("re-runs LaTeX when the generated SageTeX input is missing", async () => {
+    const runtime = new FakeRuntime();
+    runtime.files.set("paper.tex", "\\documentclass{article}");
+    runtime.queue(
+      "latex",
+      { stdout: "sagetex.sty" },
+      { stdout: "regenerated sagetex.sty" },
+      { stdout: "after sage" },
+    );
+    runtime.queue("sagetex", {
+      stderr: "Sage processing complete successfully",
+    });
+
+    // The first pass is aggregated away and produces nothing; only the forced
+    // second pass regenerates the SageTeX input.
+    runtime.creates.set("latex", [[], ["paper.sagetex.sage"]]);
+
+    const result = await runDocumentBuild(
+      { path: "paper.tex", generation: "saved-17", output_directory: null },
+      runtime,
+    );
+
+    // The first LaTeX pass could be aggregated away, so a forced pass runs
+    // before sagetex instead of the build dying on the missing input.
+    expect(runtime.specs.map((spec) => spec.name)).toEqual([
+      "latex",
+      "latex",
+      "sagetex",
+      "latex",
+    ]);
+    expect(runtime.specs[0].aggregate_key).toBe("saved-17");
+    expect(runtime.specs[1].aggregate_key).toBeUndefined();
+    // The regenerated file was hashed, so sagetex can aggregate normally.
+    expect(
+      runtime.specs.find((spec) => spec.name === "sagetex")?.aggregate_key,
+    ).toBe("sage-hash");
+    expect(
+      result.diagnostics.filter((d) => d.source === "transport"),
+    ).toHaveLength(0);
+    expect(result.state).toBe("succeeded");
+  });
+
+  it("still runs SageTeX when the input cannot be regenerated", async () => {
+    const runtime = new FakeRuntime();
+    runtime.files.set("paper.tex", "\\documentclass{article}");
+    runtime.queue(
+      "latex",
+      { stdout: "sagetex.sty" },
+      { stdout: "still no sagetex input" },
+      { stdout: "after sage" },
+    );
+    runtime.queue("sagetex", { stderr: "Sage processing complete" });
+
+    const result = await runDocumentBuild(
+      { path: "paper.tex", generation: "saved-17", output_directory: null },
+      runtime,
+    );
+
+    // No hash could be computed, so sagetex must not be deduped against an
+    // earlier run whose input we could not identify.
+    expect(
+      runtime.specs.find((spec) => spec.name === "sagetex")?.aggregate_key,
+    ).toBeUndefined();
+    expect(
+      result.diagnostics.filter((d) => d.source === "transport"),
+    ).toHaveLength(0);
+    expect(result.state).toBe("succeeded");
+  });
+
+  it("does not re-run LaTeX for a missing SageTeX input after a forced pass", async () => {
+    const runtime = new FakeRuntime();
+    runtime.files.set("paper.tex", "\\documentclass{article}");
+    runtime.queue("latex", { stdout: "sagetex.sty" }, { stdout: "after sage" });
+    runtime.queue("sagetex", { stderr: "Sage processing complete" });
+
+    const result = await runDocumentBuild(
+      {
+        path: "paper.tex",
+        generation: "saved-17",
+        force: true,
+        output_directory: null,
+      },
+      runtime,
+    );
+
+    // A forced pass cannot have been served from the aggregate cache, so it
+    // really ran and repeating it would only spend more of the build deadline.
+    expect(runtime.specs.map((spec) => spec.name)).toEqual([
+      "latex",
+      "sagetex",
+      "latex",
+    ]);
+    expect(runtime.specs[0].aggregate_key).toBeUndefined();
+    expect(
+      runtime.specs.find((spec) => spec.name === "sagetex")?.aggregate_key,
+    ).toBeUndefined();
+    expect(result.state).toBe("succeeded");
+  });
+
+  it("reports a SageTeX input that cannot be read rather than treating it as missing", async () => {
+    const runtime = new FakeRuntime();
+    runtime.files.set("paper.tex", "\\documentclass{article}");
+    runtime.queue("latex", { stdout: "sagetex.sty" });
+    runtime.hashFailures.set(
+      "paper.sagetex.sage",
+      Object.assign(new Error("EACCES: permission denied"), {
+        code: "EACCES",
+      }),
+    );
+
+    const result = await runDocumentBuild(
+      { path: "paper.tex", generation: "saved-17", output_directory: null },
+      runtime,
+    );
+
+    // Not an absent file, so no recovery re-run and no SageTeX run with an
+    // unidentified input: the real error surfaces.
+    expect(runtime.specs.map((spec) => spec.name)).toEqual(["latex"]);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        source: "transport",
+        file: "paper.sagetex.sage",
+        message: expect.stringContaining("EACCES"),
+      }),
+    );
+    expect(result.state).toBe("failed");
+  });
+
   it("does not run later stages after a failed preprocessor", async () => {
     const runtime = new FakeRuntime();
     runtime.files.set("paper.tex", "\\documentclass{article}");
+    runtime.existing.add("paper.sagetex.sage");
     runtime.queue("latex", { stdout: "sagetex.sty" }, { stdout: "pending" });
     runtime.queue("sagetex", { exit_code: 2, stderr: "sage failed" });
 

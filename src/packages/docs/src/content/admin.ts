@@ -204,6 +204,13 @@ Run \`cocalc admin receivables --help\` and the relevant nested command's
 \`--help\` before a mutation. Mutations preview by default. Review the preview,
 then repeat with the displayed version, a concrete reason, and \`--commit\`.
 
+Order creation previews are validated by the same seed-authoritative code used
+for commits. They reject nonstandard next actions, missing or invalid due dates,
+malformed contacts, and invalid or inconsistent line items. The preview also
+normalizes amounts, email addresses, and timestamps. A draft may be created
+before its billing contact is known, but \`approval_ready\` remains false and
+\`approval_blockers\` explains that exactly one billing contact is required.
+
 ## Rollout controls
 
 Enable these site settings independently under **Billing & Commerce / Accounts
@@ -450,6 +457,69 @@ cocalc admin receivables collection mode AR-2026-000123 \
   --mode stripe_invoice --reason "use Stripe hosted invoicing" \
   --expected-version 8 --commit --json
 ~~~
+
+## Import historical site-license accounting
+
+Use the receivables backfill only for sales completed outside the canonical AR
+system. The importer creates a normal manual-invoice commercial order, approves
+it, records a local invoice, and optionally records a verified payment. It does
+not create editable analytics records. Contracted, invoiced, and collected
+analytics are subsequently derived from these canonical records.
+
+Each historical candidate requires stable provenance, the existing site-license
+UUID, exact service dates, one billing contact, and invoice evidence. Add
+\`payment\` only when collection has been independently reconciled. For example:
+
+~~~json
+[
+  {
+    "organization_name": "Example University",
+    "site_license_id": "11111111-1111-4111-8111-111111111111",
+    "agreed_total": "1200.00",
+    "next_action": "Create invoice",
+    "service_starts_at": "2025-01-01T00:00:00Z",
+    "service_ends_at": "2026-01-01T00:00:00Z",
+    "billing_contact": {
+      "role": "billing",
+      "name_snapshot": "Accounts Payable",
+      "email_snapshot": "ap@example.edu"
+    },
+    "provenance": {
+      "source": "legacy-site-license-spreadsheet",
+      "reference": "row-42"
+    },
+    "invoice": {
+      "reference": "INV-42",
+      "issued_at": "2024-12-15T00:00:00Z",
+      "due_at": "2025-01-15T00:00:00Z",
+      "evidence_reference": "archived invoice INV-42"
+    },
+    "payment": {
+      "amount": "1200.00",
+      "received_at": "2025-01-10T00:00:00Z",
+      "method": "wire",
+      "evidence_reference": "bank reconciliation row 42"
+    }
+  }
+]
+~~~
+
+Preview the entire file first. The response lists every planned canonical
+action and all blockers without writing. Commit only the identical reviewed
+file and reuse the same idempotency key when resuming an interrupted import.
+
+~~~sh
+cocalc admin receivables backfill --file historical-site-licenses.json \
+  --reason "import reconciled historical site licenses" --json
+cocalc admin receivables backfill --file historical-site-licenses.json \
+  --reason "import reconciled historical site licenses" \
+  --idempotency-key historical-site-licenses-2026-08 --commit --json
+~~~
+
+Any preview blocker rejects the entire batch before writing. This includes
+duplicate site licenses, Zendesk tickets, or provenance references within one
+input file. If a later operational error interrupts a commit, rerun the
+identical command and idempotency key to resume its canonical action sequence.
 
 ## Recovery and idempotency
 

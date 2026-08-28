@@ -93,6 +93,47 @@ describePglite("commercial order store", () => {
     }
   });
 
+  it("previews normalized create terms without writing an order", async () => {
+    const before = await pool.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM commercial_orders",
+    );
+    const preview = store.previewCommercialOrderCreate(
+      request({
+        agreed_subtotal: "3900.00",
+        next_action_due_at: "2026-09-01T00:00:00Z",
+        contacts: [],
+      }),
+    );
+    const after = await pool.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM commercial_orders",
+    );
+
+    expect(after.rows[0].count).toBe(before.rows[0].count);
+    expect(preview.normalized_request.agreed_subtotal).toBe("3900.0000000000");
+    expect(preview.normalized_request.next_action_due_at).toBe(
+      "2026-09-01T00:00:00.000Z",
+    );
+    expect(preview.normalized_request.account_id).toBeUndefined();
+    expect(preview.approval_ready).toBe(false);
+    expect(preview.approval_blockers).toEqual([
+      "exactly one billing contact is required before approval",
+    ]);
+
+    expect(() =>
+      store.previewCommercialOrderCreate(
+        request({ next_action: "Call Alice about the PO" as any }),
+      ),
+    ).toThrow("next_action is invalid");
+    expect(() =>
+      store.previewCommercialOrderCreate(
+        request({ next_action_due_at: "not-a-date" }),
+      ),
+    ).toThrow("next_action_due_at must be an ISO-8601 timestamp");
+    expect(() =>
+      store.previewCommercialOrderCreate(request({ items: [] })),
+    ).toThrow("at least one line item is required");
+  });
+
   it("creates an idempotent seed-global order and immutable event", async () => {
     const opts = request();
     const first = await store.createCommercialOrder(opts);
@@ -1544,5 +1585,199 @@ describePglite("commercial order store", () => {
         ({ event_type }) => event_type === "stripe-event-retry-requested",
       ),
     ).toHaveLength(1);
+  });
+
+  it("previews and idempotently imports canonical historical site-license accounting", async () => {
+    const siteLicenseId = randomUUID();
+    const input = {
+      account_id: actor,
+      reason: "import reconciled historical site license",
+      source: "cli" as const,
+      idempotency_key: `historical-site-license-${randomUUID()}`,
+      candidates: [
+        {
+          organization_name: "Historical University",
+          site_license_id: siteLicenseId,
+          agreed_total: "1200",
+          next_action: "Create invoice" as const,
+          service_starts_at: "2025-01-01T00:00:00.000Z",
+          service_ends_at: "2026-01-01T00:00:00.000Z",
+          billing_contact: {
+            role: "billing" as const,
+            name_snapshot: "Historical Accounts Payable",
+            email_snapshot: "accounts-payable@historical.example",
+          },
+          provenance: {
+            source: "legacy-site-license-spreadsheet",
+            reference: "legacy-row-42",
+          },
+          invoice: {
+            reference: "LEGACY-INV-42",
+            issued_at: "2024-12-15T00:00:00.000Z",
+            due_at: "2025-01-15T00:00:00.000Z",
+            evidence_reference: "archived invoice LEGACY-INV-42",
+          },
+          payment: {
+            amount: "1200",
+            received_at: "2025-01-10T00:00:00.000Z",
+            method: "wire" as const,
+            evidence_reference: "legacy bank reconciliation row 42",
+          },
+        },
+      ],
+    };
+    const before = await pool.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM commercial_orders",
+    );
+    const preview = await store.backfillCommercialOrders(input);
+    const afterPreview = await pool.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM commercial_orders",
+    );
+    expect(afterPreview.rows[0].count).toBe(before.rows[0].count);
+    expect(preview).toMatchObject({
+      preview: true,
+      created: [],
+      skipped: [],
+      planned: [
+        {
+          index: 0,
+          organization_name: "Historical University",
+          site_license_id: siteLicenseId,
+          provenance: {
+            source: "legacy-site-license-spreadsheet",
+            reference: "legacy-row-42",
+          },
+          actions: ["create", "approve", "issue_invoice", "record_payment"],
+          ready: true,
+          blockers: [],
+        },
+      ],
+    });
+
+    const committed = await store.backfillCommercialOrders({
+      ...input,
+      commit: true,
+    });
+    const replay = await store.backfillCommercialOrders({
+      ...input,
+      commit: true,
+    });
+    expect(committed.created).toHaveLength(1);
+    expect(replay.created[0].id).toBe(committed.created[0].id);
+    expect(committed.created[0]).toMatchObject({
+      workflow_state: "complete",
+      collection_mode: "manual_invoice",
+      collection_state: "paid",
+      site_license_id: siteLicenseId,
+      terms_snapshot: {
+        fulfillment_required: false,
+        legacy_import: {
+          source: "legacy-site-license-spreadsheet",
+          reference: "legacy-row-42",
+        },
+      },
+      invoices: [
+        expect.objectContaining({
+          provider: "manual",
+          status: "paid",
+          sent_at: "2024-12-15T00:00:00.000Z",
+        }),
+      ],
+      payments: [
+        expect.objectContaining({
+          amount: "1200.0000000000",
+          received_at: "2025-01-10T00:00:00.000Z",
+          status: "succeeded",
+        }),
+      ],
+    });
+    const events = await store.listCommercialOrderEvents({
+      id: committed.created[0].id,
+      reason: "verify historical import audit",
+    });
+    expect(events.events.map(({ event_type }) => event_type).sort()).toEqual(
+      [
+        "manual-invoice-issued",
+        "manual-payment-recorded",
+        "order-approved",
+        "order-created",
+      ].sort(),
+    );
+  });
+
+  it("reports historical backfill blockers without mutating", async () => {
+    const input = {
+      account_id: actor,
+      reason: "preview invalid historical site license",
+      source: "cli" as const,
+      idempotency_key: `invalid-historical-site-license-${randomUUID()}`,
+      candidates: [
+        {
+          organization_name: "Incomplete Historical University",
+          site_license_id: randomUUID(),
+          agreed_total: "500",
+          next_action: "Create invoice" as const,
+          provenance: { source: "legacy-sheet", reference: "row-99" },
+        },
+      ],
+    };
+    const preview = await store.backfillCommercialOrders(input);
+    expect(preview.planned[0]).toMatchObject({
+      ready: false,
+      actions: ["create", "approve", "issue_invoice"],
+      blockers: expect.arrayContaining([
+        "service_starts_at and service_ends_at are required for a historical site license",
+        "billing_contact is required for a historical site license",
+        "invoice is required for a historical site license",
+      ]),
+    });
+    await expect(
+      store.backfillCommercialOrders({ ...input, commit: true }),
+    ).rejects.toThrow("backfill candidate 0 is invalid");
+  });
+
+  it("rejects duplicate historical candidates before writing", async () => {
+    const siteLicenseId = randomUUID();
+    const candidate = {
+      organization_name: "Duplicate Historical University",
+      site_license_id: siteLicenseId,
+      agreed_total: "800",
+      next_action: "Create invoice" as const,
+      service_starts_at: "2024-01-01T00:00:00.000Z",
+      service_ends_at: "2025-01-01T00:00:00.000Z",
+      billing_contact: {
+        role: "billing" as const,
+        name_snapshot: "Accounts Payable",
+        email_snapshot: "ap@duplicate-historical.example",
+      },
+      provenance: { source: "legacy-sheet", reference: "duplicate-row" },
+      invoice: {
+        reference: "DUPLICATE-INV",
+        issued_at: "2023-12-15T00:00:00.000Z",
+      },
+    };
+    const input = {
+      account_id: actor,
+      reason: "reject duplicate historical import rows",
+      source: "cli" as const,
+      idempotency_key: `duplicate-historical-site-license-${randomUUID()}`,
+      candidates: [candidate, { ...candidate }],
+    };
+    const before = await pool.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM commercial_orders",
+    );
+    const preview = await store.backfillCommercialOrders(input);
+    expect(preview.planned[0].ready).toBe(true);
+    expect(preview.planned[1]).toMatchObject({
+      ready: false,
+      blockers: ["duplicates candidate 0 in this backfill"],
+    });
+    await expect(
+      store.backfillCommercialOrders({ ...input, commit: true }),
+    ).rejects.toThrow("backfill candidate 1 is invalid");
+    const after = await pool.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM commercial_orders",
+    );
+    expect(after.rows[0].count).toBe(before.rows[0].count);
   });
 });

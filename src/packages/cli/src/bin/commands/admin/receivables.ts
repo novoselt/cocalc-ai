@@ -669,7 +669,16 @@ function registerOrderMutationCommands(
         opts.idempotencyKey,
       );
       if (!opts.commit) {
-        return preview("create", undefined, request as unknown as JsonObject);
+        const validated = await ctx.hub.commercialOrders.createPreview(request);
+        return preview(
+          "create",
+          undefined,
+          validated.normalized_request as unknown as JsonObject,
+          {
+            approval_ready: validated.approval_ready,
+            approval_blockers: validated.approval_blockers,
+          },
+        );
       }
       return await ctx.hub.commercialOrders.create(request);
     });
@@ -1928,10 +1937,20 @@ function registerMaintenanceCommands(
   commitOnlyOptions(
     receivables
       .command("backfill")
-      .description("preview or import legacy commercial order candidates")
+      .description(
+        "preview or import legacy orders and historical site-license accounting",
+      )
       .requiredOption(
         "--file <path>",
         "JSON candidate array or object with a candidates array",
+      )
+      .addHelpText(
+        "after",
+        `
+Historical site-license candidates require site_license_id, service dates,
+billing_contact, provenance, and invoice. An optional payment creates local
+cash history. Preview is the default; --commit requires fresh authentication.
+`,
       ),
     "create eligible commercial orders from the backfill",
   ).action(async (opts: any, command: Command) => {

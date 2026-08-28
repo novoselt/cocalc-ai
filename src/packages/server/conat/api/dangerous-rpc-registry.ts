@@ -304,6 +304,11 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "creates durable institutional commercial terms",
   },
+  "commercialOrders.createPreview": {
+    decision: "fresh-auth-not-required",
+    reason:
+      "validates and normalizes proposed commercial terms without writing",
+  },
   "commercialOrders.createInvoiceDraft": {
     decision: "fresh-auth-required",
     reason: "creates a recoverable external Stripe invoice draft",

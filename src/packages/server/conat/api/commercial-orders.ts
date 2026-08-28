@@ -20,6 +20,7 @@ import type {
   CommercialManualPaymentRequest,
   CommercialOrderAssignRequest,
   CommercialOrderCreateRequest,
+  CommercialOrderCreatePreview,
   CommercialOrderEventsRequest,
   CommercialOrderEventsResponse,
   CommercialOrderGetRequest,
@@ -49,6 +50,8 @@ import type {
   CommercialStripeQuoteMutationRequest,
   CommercialStripeQuotePreview,
   CommercialStripeQuotePreviewRequest,
+  SiteLicenseRevenueAnalytics,
+  SiteLicenseRevenueAnalyticsRequest,
 } from "@cocalc/conat/hub/api/commercial-orders";
 import type {
   CommercialOrder,
@@ -201,10 +204,22 @@ export async function events(
   return await invoke("events", opts);
 }
 
+export async function siteLicenseRevenueAnalytics(
+  opts: SiteLicenseRevenueAnalyticsRequest,
+): Promise<SiteLicenseRevenueAnalytics> {
+  return await invoke("siteLicenseRevenueAnalytics", opts);
+}
+
 export async function create(
   opts: CommercialOrderCreateRequest,
 ): Promise<CommercialOrder> {
   return await invoke("create", opts, { fresh: true, capability: "mutate" });
+}
+
+export async function createPreview(
+  opts: CommercialOrderCreateRequest,
+): Promise<CommercialOrderCreatePreview> {
+  return await invoke("createPreview", opts);
 }
 
 export async function update(

@@ -183,6 +183,36 @@ test("EDITOR_PREFIX", () => {
   expect(misc.EDITOR_PREFIX).toBe("editor-");
 });
 
+describe("is_bad_latex_filename", () => {
+  test("allows filenames without consecutive spaces or quotes", () => {
+    expect(misc.is_bad_latex_filename("paper.tex")).toBe(false);
+    expect(misc.is_bad_latex_filename("my paper.tex")).toBe(false);
+    expect(misc.is_bad_latex_filename("folder/subfolder/file.tex")).toBe(false);
+  });
+
+  test("rejects filenames with two or more consecutive spaces", () => {
+    expect(misc.is_bad_latex_filename("my  paper.tex")).toBe(true);
+    expect(misc.is_bad_latex_filename("folder/my  paper.tex")).toBe(true);
+  });
+
+  test("rejects filenames with a single quote", () => {
+    expect(misc.is_bad_latex_filename("author's-notes.tex")).toBe(true);
+    expect(misc.is_bad_latex_filename("folder/author's-notes.tex")).toBe(true);
+  });
+
+  test("ignores directory components, which never reach the build command", () => {
+    // The build command is assembled from the basename and the directory is
+    // passed separately as cwd, so only the basename has to be safe. Verified
+    // against TeX Live 2026: a .tex file inside a directory with both a double
+    // space and a quote builds fine.
+    expect(misc.is_bad_latex_filename("bad  dir/paper.tex")).toBe(false);
+    expect(misc.is_bad_latex_filename("author's-dir/paper.tex")).toBe(false);
+    expect(misc.is_bad_latex_filename("bad  dir/author's-dir/paper.tex")).toBe(
+      false,
+    );
+  });
+});
+
 describe("humanSize", () => {
   it("uses decimal units by default", () => {
     expect(misc.humanSize(1536)).toBe("1.5 KB");

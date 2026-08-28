@@ -851,6 +851,7 @@ export async function closeDedicatedHostPurchaseSessionLocal(
 async function reconcileDedicatedHostPurchaseSessionUnlocked({
   account_id,
   host_id,
+  resource_kind = "project-host",
   host_name,
   host_bay_id,
   provider,
@@ -883,6 +884,7 @@ async function reconcileDedicatedHostPurchaseSessionUnlocked({
     moneyToDbString(newest.cost_per_hour ?? 0) === normalizedRate &&
     newest.description?.funding_lane === funding_lane &&
     newest.description?.billing_state === billing_state &&
+    newest.description?.resource_kind === resource_kind &&
     isDeepStrictEqual(
       newest.description?.pricing_snapshot ?? null,
       pricing_snapshot,
@@ -910,6 +912,9 @@ async function reconcileDedicatedHostPurchaseSessionUnlocked({
   const description: DedicatedHostPurchase = {
     type: "dedicated-host",
     host_id,
+    resource_kind,
+    product_kind:
+      resource_kind === "project-host" ? "dedicated-host" : "virtual-machine",
     host_name: host_name ?? null,
     host_bay_id: host_bay_id ?? null,
     provider,
@@ -1145,6 +1150,7 @@ export async function recordDedicatedHostMeteredUsageLocal(
             {
               provider: opts.provider,
               region: opts.region ?? null,
+              product_kind: opts.product_kind ?? "virtual-machine",
               unit_cost_usd_per_gb: moneyToDbString(opts.unit_cost_usd_per_gb),
             },
           ],
@@ -1205,6 +1211,7 @@ export async function recordDedicatedHostMeteredUsageLocal(
         funding_lane: opts.funding_lane,
         hourly_cost_usd: "0",
         resource_kind: "compute-egress",
+        product_kind: opts.product_kind ?? "virtual-machine",
         project_id: opts.project_id ?? null,
         usage_bytes: periodBytes,
         unit_cost_usd_per_gb: moneyToDbString(opts.unit_cost_usd_per_gb),

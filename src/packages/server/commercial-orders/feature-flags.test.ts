@@ -31,6 +31,7 @@ describe("commercial receivables action capabilities", () => {
         "cancel",
         "cancelStripeQuote",
         "create",
+        "createPreview",
         "createInvoiceDraft",
         "createStripeQuote",
         "diagnostics",

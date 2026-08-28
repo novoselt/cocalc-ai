@@ -59,6 +59,7 @@ export type AdminRoute =
   | { kind: "customer-detail"; id: string }
   | { kind: "receivables-create" }
   | { kind: "receivables-detail"; id: string }
+  | { kind: "site-license-detail"; id: string }
   | { kind: "news-list" }
   | { kind: "news-editor"; id: string };
 
@@ -104,6 +105,11 @@ export function parseAdminRoute(
         return { kind: "index", section: "customers" };
       }
       return { kind: "customer-detail", id };
+    case "site-licenses":
+      if (!id) {
+        return { kind: "index", section: "site-licenses" };
+      }
+      return { kind: "site-license-detail", id };
     default:
       if (ADMIN_SECTIONS.has(section as AdminSection) && id == null) {
         return { kind: "index", section: section as AdminSection };
@@ -154,6 +160,13 @@ export function normalizeAdminRoute(route: AdminRouteLike): AdminRoute {
       }
       return { kind: "index", section: "customers" };
     }
+    case "site-license-detail": {
+      const id = normalized?.["id"];
+      if (typeof id === "string" && id) {
+        return { kind: "site-license-detail", id };
+      }
+      return { kind: "index", section: "site-licenses" };
+    }
     case "receivables-create":
       return { kind: "receivables-create" };
     case "index":
@@ -190,6 +203,8 @@ export function getAdminTargetPath(route: AdminRouteLike): string {
       return "admin/receivables/new";
     case "customer-detail":
       return `admin/customers/${encodeURIComponent(normalized.id)}`;
+    case "site-license-detail":
+      return `admin/site-licenses/${encodeURIComponent(normalized.id)}`;
   }
 }
 

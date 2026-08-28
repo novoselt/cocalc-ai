@@ -672,6 +672,7 @@ async function reconcileStoppedHost({
   await reconcileDedicatedHostPurchaseSessionForAccount({
     account_id: owner,
     host_id: row.id,
+    resource_kind: "project-host",
     host_name: row.name ?? undefined,
     host_bay_id: getConfiguredBayId(),
     provider,
@@ -1264,6 +1265,7 @@ async function runPass(): Promise<void> {
     await reconcileDedicatedHostPurchaseSessionForAccount({
       account_id: owner,
       host_id: row.id,
+      resource_kind: "project-host",
       host_name: row.name ?? undefined,
       host_bay_id: getConfiguredBayId(),
       provider,

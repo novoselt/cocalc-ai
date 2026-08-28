@@ -155,6 +155,7 @@ export interface DedicatedHostPurchase {
     | "compute-vm"
     | "compute-volume"
     | "compute-egress";
+  product_kind?: "dedicated-host" | "virtual-machine";
   project_id?: string | null;
   usage_bytes?: number;
   unit_cost_usd_per_gb?: MoneyValue;

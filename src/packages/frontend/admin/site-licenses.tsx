@@ -16,7 +16,15 @@ const SiteLicenseAdminPanel = lazy(async () => ({
     .SiteLicenseAdminPanel,
 }));
 
-export function SiteLicensesAdmin() {
+export function SiteLicensesAdmin({
+  siteLicenseId,
+  onOpenSiteLicense,
+  onCloseSiteLicense,
+}: {
+  siteLicenseId?: string;
+  onOpenSiteLicense?: (id: string) => void;
+  onCloseSiteLicense?: () => void;
+}) {
   const { error, loading, tiers } = useMembershipTiers();
 
   return (
@@ -34,7 +42,21 @@ export function SiteLicensesAdmin() {
         <Loading />
       ) : (
         <Suspense fallback={<Loading />}>
-          <SiteLicenseAdminPanel tiers={tiers} />
+          <SiteLicenseAdminPanel
+            tiers={tiers}
+            siteLicenseId={siteLicenseId}
+            onSiteLicenseIdChange={
+              onOpenSiteLicense || onCloseSiteLicense
+                ? (id) => {
+                    if (id) {
+                      onOpenSiteLicense?.(id);
+                    } else {
+                      onCloseSiteLicense?.();
+                    }
+                  }
+                : undefined
+            }
+          />
         </Suspense>
       )}
     </Space>

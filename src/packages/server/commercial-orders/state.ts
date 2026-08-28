@@ -131,6 +131,19 @@ export function normalizeCurrency(currency: string | undefined): string {
   return value;
 }
 
+export function normalizeTimestamp(
+  value: string | undefined,
+  label: string,
+): string | undefined {
+  const raw = `${value ?? ""}`.trim();
+  if (!raw) return undefined;
+  const timestamp = new Date(raw);
+  if (!Number.isFinite(timestamp.valueOf())) {
+    throw Error(`${label} must be an ISO-8601 timestamp`);
+  }
+  return timestamp.toISOString();
+}
+
 export function normalizeMoney(value: string, label: string): string {
   let amount;
   try {
@@ -288,22 +301,18 @@ export function assertInvoiceTermsSnapshot(
 export function normalizeCreateRequest(opts: CommercialOrderCreateRequest) {
   const organizationName = `${opts.organization_name ?? ""}`.trim();
   const nextAction = normalizeNextAction(opts.next_action);
+  const workflowState = opts.workflow_state ?? "draft";
+  const nextActionDueAt = normalizeTimestamp(
+    opts.next_action_due_at,
+    "next_action_due_at",
+  );
   if (!organizationName) throw Error("organization_name is required");
-  if (
-    !["complete", "cancelled"].includes(opts.workflow_state ?? "draft") &&
-    !opts.next_action_due_at
-  ) {
+  if (!["complete", "cancelled"].includes(workflowState) && !nextActionDueAt) {
     throw Error("next_action_due_at is required for an open commercial order");
   }
-  assertEnum(
-    opts.workflow_state ?? "draft",
-    COMMERCIAL_WORKFLOW_STATES,
-    "workflow_state",
-  );
+  assertEnum(workflowState, COMMERCIAL_WORKFLOW_STATES, "workflow_state");
   assertInvoiceTermsSnapshot(opts.terms_snapshot);
-  if (
-    !["draft", "awaiting_customer"].includes(opts.workflow_state ?? "draft")
-  ) {
+  if (!["draft", "awaiting_customer"].includes(workflowState)) {
     throw Error(
       "new commercial orders must start in draft or awaiting_customer",
     );
@@ -327,7 +336,8 @@ export function normalizeCreateRequest(opts: CommercialOrderCreateRequest) {
   return {
     organization_name: organizationName,
     next_action: nextAction,
-    workflow_state: opts.workflow_state ?? "draft",
+    next_action_due_at: nextActionDueAt,
+    workflow_state: workflowState,
     collection_mode: opts.collection_mode ?? "stripe_invoice",
     currency: normalizeCurrency(opts.currency),
     agreed_subtotal: subtotal,

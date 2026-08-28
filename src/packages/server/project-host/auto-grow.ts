@@ -917,6 +917,7 @@ async function performSharedScratchAutoGrow(
     await reconcileDedicatedHostPurchaseSessionForAccount({
       account_id: `${row.metadata?.owner ?? ""}`.trim(),
       host_id: row.id,
+      resource_kind: "project-host",
       host_name: row.name,
       host_bay_id: getConfiguredBayId(),
       provider: providerId,

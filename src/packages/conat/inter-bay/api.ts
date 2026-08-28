@@ -41,6 +41,8 @@ import type {
   MembershipAnalyticsBackfillResult,
   MembershipAllocationSeries,
   MembershipAllocationSeriesQuery,
+  ComputeRevenueSeries,
+  ComputeRevenueSeriesQuery,
   MembershipAnalyticsEventRow,
   MembershipAnalyticsEventsQuery,
   MembershipAnalyticsOverview,
@@ -1085,6 +1087,8 @@ export interface AccountLocalGetDedicatedHostPolicySnapshotRequest {
 export interface AccountLocalReconcileDedicatedHostPurchaseSessionRequest {
   account_id: string;
   host_id: string;
+  // Optional only for rolling upgrades from bays that predate product attribution.
+  resource_kind?: "project-host" | "compute-vm" | "compute-volume";
   host_name?: string | null;
   host_bay_id?: string | null;
   provider: string;
@@ -1107,6 +1111,8 @@ export interface AccountLocalCloseDedicatedHostPurchaseSessionRequest {
 export interface AccountLocalRecordDedicatedHostMeteredUsageRequest {
   account_id: string;
   resource_id: string;
+  // Egress metering currently only originates from virtual machines.
+  product_kind?: "dedicated-host" | "virtual-machine";
   resource_name?: string | null;
   resource_bay_id?: string | null;
   project_id?: string | null;
@@ -2770,6 +2776,7 @@ export type BayOpsMethod =
   | "get-membership-tier-usage-report"
   | "get-membership-analytics-overview"
   | "get-membership-allocation-series"
+  | "get-compute-revenue-series"
   | "get-active-user-map"
   | "get-active-user-map-history-report"
   | "get-active-user-map-history-series"
@@ -4436,6 +4443,9 @@ export interface InterBayBayOpsApi {
   getMembershipAllocationSeries: (
     opts: MembershipAllocationSeriesQuery,
   ) => Promise<MembershipAllocationSeries>;
+  getComputeRevenueSeries: (
+    opts: ComputeRevenueSeriesQuery,
+  ) => Promise<ComputeRevenueSeries>;
   getActiveUserMap: (
     opts: ActiveUserMapQuery,
   ) => Promise<ActiveUserMapOverview>;
@@ -10010,6 +10020,15 @@ export function createInterBayBayOpsClient({
       method: "get-membership-allocation-series",
     }),
   });
+  const computeRevenueSeriesClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "getComputeRevenueSeries">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "get-compute-revenue-series",
+    }),
+  });
   const activeUserMapClient = createServiceClient<
     Pick<InterBayBayOpsApi, "getActiveUserMap">
   >({
@@ -10139,6 +10158,8 @@ export function createInterBayBayOpsClient({
       await membershipAllocationSeriesClient.getMembershipAllocationSeries(
         opts,
       ),
+    getComputeRevenueSeries: async (opts) =>
+      await computeRevenueSeriesClient.getComputeRevenueSeries(opts),
     getActiveUserMap: async (opts) =>
       await activeUserMapClient.getActiveUserMap(opts),
     getActiveUserMapHistoryReport: async (opts) =>
@@ -10436,6 +10457,18 @@ export function createInterBayBayOpsHandlers({
       impl: {
         getMembershipAllocationSeries: async (opts) =>
           await impl.getMembershipAllocationSeries(opts),
+      },
+    }),
+    createServiceHandler<Pick<InterBayBayOpsApi, "getComputeRevenueSeries">>({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "get-compute-revenue-series",
+      }),
+      impl: {
+        getComputeRevenueSeries: async (opts) =>
+          await impl.getComputeRevenueSeries(opts),
       },
     }),
     createServiceHandler<Pick<InterBayBayOpsApi, "getActiveUserMap">>({

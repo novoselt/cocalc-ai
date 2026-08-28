@@ -143,13 +143,37 @@ test("receivables create previews without mutating and commits explicitly", asyn
       organization_name: "Example University",
       agreed_subtotal: "3900",
       next_action: "Create invoice",
-      items: [],
+      next_action_due_at: "2026-09-01T00:00:00Z",
+      items: [
+        {
+          description: "Campus adoption pilot",
+          quantity: "1",
+          unit_amount: "3900",
+          subtotal: "3900",
+          product_kind: "site_license",
+        },
+      ],
       contacts: [],
     }),
   );
   let calls = 0;
+  let previewCalls = 0;
   let captured: any;
   const api = {
+    createPreview: async (opts: any) => {
+      previewCalls += 1;
+      return {
+        normalized_request: {
+          ...opts,
+          agreed_subtotal: "3900.0000000000",
+          next_action_due_at: "2026-09-01T00:00:00.000Z",
+        },
+        approval_ready: false,
+        approval_blockers: [
+          "exactly one billing contact is required before approval",
+        ],
+      };
+    },
     create: async (opts: any) => {
       calls += 1;
       captured = opts;
@@ -170,8 +194,17 @@ test("receivables create previews without mutating and commits explicitly", asyn
     "accepted pilot",
   ]);
   assert.equal(calls, 0);
+  assert.equal(previewCalls, 1);
   assert.equal(previewRun.output().preview, true);
   assert.equal(previewRun.output().request.source, "cli");
+  assert.equal(
+    previewRun.output().request.next_action_due_at,
+    "2026-09-01T00:00:00.000Z",
+  );
+  assert.equal(previewRun.output().approval_ready, false);
+  assert.deepEqual(previewRun.output().approval_blockers, [
+    "exactly one billing contact is required before approval",
+  ]);
 
   const commitRun = setup(api);
   await commitRun.program.parseAsync([
@@ -187,6 +220,7 @@ test("receivables create previews without mutating and commits explicitly", asyn
     "--commit",
   ]);
   assert.equal(calls, 1);
+  assert.equal(previewCalls, 1);
   assert.equal(captured.reason, "accepted pilot");
   assert.match(captured.idempotency_key, /^receivables-create-/);
 });

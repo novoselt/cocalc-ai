@@ -61,6 +61,7 @@ jest.mock("./dangerous-session-auth", () => ({
 import {
   approve,
   create,
+  createPreview,
   createInvoiceDraft,
   issueManualInvoice,
   list,
@@ -68,6 +69,7 @@ import {
   provision,
   revise,
   retryStripeEvent,
+  siteLicenseRevenueAnalytics,
 } from "./commercial-orders";
 
 const BASE = {
@@ -155,6 +157,63 @@ describe("commercial orders public Conat API", () => {
       actor_account_id: "admin-1",
       payload: {
         reason: "List eligible receivables assignees",
+        source: "admin-ui",
+      },
+    });
+  });
+
+  it("validates create previews as a read without fresh auth", async () => {
+    mockDispatchCommercialSeedRequest.mockResolvedValue({
+      normalized_request: { organization_name: "Example University" },
+      approval_ready: false,
+      approval_blockers: ["exactly one billing contact is required"],
+    });
+
+    await createPreview({
+      ...BASE,
+      organization_name: "Example University",
+    } as any);
+
+    expect(mockRequireDangerousSessionAuth).not.toHaveBeenCalled();
+    expect(mockAssertCommercialReceivablesCapability).toHaveBeenCalledWith(
+      "visible",
+    );
+    expect(mockDispatchCommercialSeedRequest).toHaveBeenCalledWith({
+      action: "createPreview",
+      actor_account_id: "admin-1",
+      payload: expect.objectContaining({
+        organization_name: "Example University",
+        reason: BASE.reason,
+        source: "admin-ui",
+      }),
+    });
+  });
+
+  it("routes site license analytics as an audited seed read", async () => {
+    mockDispatchCommercialSeedRequest.mockResolvedValue({
+      start: "2026-01-01",
+      end: "2026-02-01",
+      rows: [],
+    });
+
+    await siteLicenseRevenueAnalytics({
+      ...BASE,
+      start: "2026-01-01",
+      end: "2026-02-01",
+      reason: "Review site license revenue analytics",
+    });
+
+    expect(mockRequireDangerousSessionAuth).not.toHaveBeenCalled();
+    expect(mockAssertCommercialReceivablesCapability).toHaveBeenCalledWith(
+      "visible",
+    );
+    expect(mockDispatchCommercialSeedRequest).toHaveBeenCalledWith({
+      action: "siteLicenseRevenueAnalytics",
+      actor_account_id: "admin-1",
+      payload: {
+        start: "2026-01-01",
+        end: "2026-02-01",
+        reason: "Review site license revenue analytics",
         source: "admin-ui",
       },
     });

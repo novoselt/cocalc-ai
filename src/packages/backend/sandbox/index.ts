@@ -58,9 +58,11 @@ import {
 } from "node:fs/promises";
 import {
   close as closeFdCallback,
+  createWriteStream as createNodeWriteStream,
   type ReadStream,
   readFile as readFileFdCallback,
   statSync,
+  type WriteStream,
   writeFile as writeFileFdCallback,
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -353,7 +355,10 @@ const INTERNAL_METHODS = new Set([
   "resolveSandboxBasePathForComparison",
   "ensureFdInSandbox",
   "ensureHandleMatchesPath",
+  "canonicalIdentityForOpenedHandle",
   "openVerifiedHandle",
+  "openReadOnlySubtree",
+  "createAuthorizedReadStream",
   "cpDirectoryRequiresRecursiveError",
   "cpUnsupportedTypeError",
   "cpDestNotDirectoryError",
@@ -1427,14 +1432,20 @@ export class SandboxedFilesystem {
     handle: Awaited<ReturnType<typeof open>>;
     pathInSandbox: string;
     sandboxBasePath: string;
+    absoluteHomeAlias?: string;
+    absoluteTempAlias?: "tmp" | "scratch";
   }> => {
     if (verify) {
       // Pre-open path check blocks obvious symlink escapes for existing paths,
       // while still allowing create paths that currently do not exist.
       await this.safeAbsPath(path);
     }
-    const { pathInSandbox, sandboxBasePath } =
-      await this.resolvePathInSandbox(path);
+    const {
+      pathInSandbox,
+      sandboxBasePath,
+      absoluteHomeAlias,
+      absoluteTempAlias,
+    } = await this.resolvePathInSandbox(path);
     const handle = await open(pathInSandbox, flags, mode);
     if (verify) {
       try {
@@ -1452,7 +1463,36 @@ export class SandboxedFilesystem {
         throw err;
       }
     }
-    return { handle, pathInSandbox, sandboxBasePath };
+    return {
+      handle,
+      pathInSandbox,
+      sandboxBasePath,
+      absoluteHomeAlias,
+      absoluteTempAlias,
+    };
+  };
+
+  private canonicalIdentityForOpenedHandle = async ({
+    handle,
+    pathInSandbox,
+    sandboxBasePath,
+    absoluteHomeAlias,
+    absoluteTempAlias,
+  }: Awaited<ReturnType<typeof this.openVerifiedHandle>>): Promise<string> => {
+    const openedPath =
+      process.platform === "linux"
+        ? await realpath(`/proc/self/fd/${handle.fd}`)
+        : await realpath(pathInSandbox);
+    const compareBase = this.unsafeMode
+      ? sandboxBasePath
+      : await this.resolveSandboxBasePathForComparison(sandboxBasePath);
+    return this.toSyncIdentityPath({
+      pathInSandbox: openedPath,
+      sandboxBasePath,
+      absoluteHomeAlias,
+      absoluteTempAlias,
+      compareBasePath: compareBase,
+    });
   };
 
   safeAbsPath = async (path: string): Promise<string> => {
@@ -2100,29 +2140,127 @@ export class SandboxedFilesystem {
     }
   };
 
+  createAuthorizedReadStream = async (
+    path: string,
+    options: {
+      start?: number;
+      end?: number;
+      highWaterMark?: number;
+    } = {},
+    authorize?: (canonicalIdentity: string) => Promise<void> | void,
+  ): Promise<ReadStream> => {
+    const opened = await this.openVerifiedHandle({
+      path,
+      flags: constants.O_RDONLY,
+    });
+    try {
+      if (authorize != null) {
+        await authorize(await this.canonicalIdentityForOpenedHandle(opened));
+      }
+      const stream = opened.handle.createReadStream({
+        start: options.start,
+        end: options.end,
+        highWaterMark: options.highWaterMark,
+        autoClose: true,
+      });
+      stream.once("close", () => {
+        void opened.handle.close().catch(() => {});
+      });
+      stream.once("error", () => {
+        void opened.handle.close().catch(() => {});
+      });
+      return stream;
+    } catch (err) {
+      await opened.handle.close().catch(() => {});
+      throw err;
+    }
+  };
+
   createReadStream = async (
     path: string,
     options: {
       start?: number;
       end?: number;
+      highWaterMark?: number;
     } = {},
-  ): Promise<ReadStream> => {
-    const { handle } = await this.openVerifiedHandle({
+  ): Promise<ReadStream> =>
+    await this.createAuthorizedReadStream(path, options);
+
+  createWriteStream = async (path: string): Promise<WriteStream> => {
+    this.assertWritable(path);
+    const openWriteFd = await this.openAt2WriteWithRetry({
       path,
-      flags: constants.O_RDONLY,
+      create: true,
+      truncate: true,
+      append: false,
+      mode: 0o666,
     });
-    const stream = handle.createReadStream({
-      start: options.start,
-      end: options.end,
-      autoClose: true,
+    if (openWriteFd != null) {
+      try {
+        // When fd is provided, Node never reopens path. The pathname is only
+        // retained for useful stream error messages.
+        return createNodeWriteStream(path, {
+          fd: openWriteFd,
+          autoClose: true,
+        });
+      } catch (err) {
+        await closeFd(openWriteFd).catch(() => {});
+        throw err;
+      }
+    }
+    if (!this.unsafeMode) {
+      throw new Error(
+        `descriptor-anchored writes are required for streamed write '${path}'`,
+      );
+    }
+    return createNodeWriteStream(await this.resolveSandboxPath(path));
+  };
+
+  openReadOnlySubtree = async (
+    path: string,
+  ): Promise<{
+    fs: SandboxedFilesystem;
+    close: () => Promise<void>;
+  }> => {
+    if (process.platform !== "linux") {
+      throw new Error("descriptor-anchored subtrees require Linux");
+    }
+    const opened = await this.openVerifiedHandle({
+      path,
+      flags: constants.O_RDONLY | constants.O_DIRECTORY,
     });
-    stream.once("close", () => {
-      void handle.close().catch(() => {});
-    });
-    stream.once("error", () => {
-      void handle.close().catch(() => {});
-    });
-    return stream;
+    try {
+      const info = await opened.handle.stat();
+      if (!info.isDirectory()) {
+        const err: NodeJS.ErrnoException = new Error(
+          `ENOTDIR: not a directory, open '${path}'`,
+        );
+        err.code = "ENOTDIR";
+        err.path = path;
+        throw err;
+      }
+      // Keep this descriptor open for the subtree lifetime. Replacing the
+      // project-controlled pathname cannot change what this proc fd path
+      // names. Use our pid rather than /proc/self so sandboxed subprocesses
+      // can also resolve the anchored directory while the handle is open.
+      const fs = new SandboxedFilesystem(
+        `/proc/${process.pid}/fd/${opened.handle.fd}`,
+        { readonly: true },
+      );
+      let closed = false;
+      return {
+        fs,
+        close: async () => {
+          if (closed) return;
+          closed = true;
+          fs.close();
+          await opened.handle.close().catch(() => {});
+        },
+      };
+    } catch (err) {
+      await opened.handle.close().catch(() => {});
+      throw err;
+    }
   };
 
   lockFile = async (path: string, lock?: number) => {

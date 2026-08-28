@@ -7,8 +7,10 @@
 Quarto Editor Actions
 */
 
+import type { Set } from "immutable";
 import { debounce } from "lodash";
 import type { DocumentBuildSnapshot } from "@cocalc/app-document-build";
+import type { AccountStore } from "@cocalc/frontend/account";
 import type { DocumentBuildWatcher } from "@cocalc/frontend/client/document-build-watcher";
 import {
   documentBuildApi,
@@ -69,11 +71,30 @@ export class Actions extends MarkdownActions {
   }
 
   private do_build_on_save(): boolean {
-    const account: any = this.redux.getStore("account");
-    if (account != null) {
-      return !!account.getIn(["editor_settings", "build_on_save"]);
+    const account: AccountStore | undefined = this.redux.getStore("account");
+    // Default to false until the account settings are confirmed loaded.  The
+    // store is populated with the schema defaults (build_on_save: true) before
+    // "is_ready" fires, so checking editor_settings != null is not enough --
+    // without the is_ready check we would build based on the default rather
+    // than the user's actual preference.
+    if (!account?.get("is_ready")) return false;
+    const settings = account.get("editor_settings");
+    if (settings == null) return false;
+    return settings.get("build_on_save") ?? true;
+  }
+
+  // Whether a build-on-save should run, waiting for the account settings if
+  // they have not loaded yet.  False if they never arrive, or if the editor
+  // was closed while waiting.
+  private async waitForBuildOnSave(): Promise<boolean> {
+    const account: AccountStore | undefined = this.redux.getStore("account");
+    if (account == null) return false;
+    if (!account.get("is_ready")) {
+      const ready = await account.waitUntilReady();
+      if (!ready) return false;
+      if (this._state === "closed") return false;
     }
-    return true;
+    return this.do_build_on_save();
   }
 
   _init_qmd_converter(): void {
@@ -86,7 +107,12 @@ export class Actions extends MarkdownActions {
 
     const do_build = reuseInFlight(async () => {
       if (this.explicit_build) return;
-      if (!this.do_build_on_save()) return;
+      // The account settings may still be loading.  Wait for them rather than
+      // dropping this notification: the saved source is already newer than the
+      // output, so returning here leaves it stale until the next edit -- which
+      // may never come.  reuseInFlight folds any further save events that
+      // arrive while we wait into this same pending check.
+      if (!(await this.waitForBuildOnSave())) return;
       if (this._syncstring == null) return;
       const hash = this._syncstring.hash_of_saved_version();
       if (this._last_qmd_hash != hash) {
@@ -181,8 +207,10 @@ export class Actions extends MarkdownActions {
     this.setState({ building });
   }
 
-  async _check_produced_files(): Promise<void> {
-    await checkProducedFiles(this);
+  // Tri-state: a Set of the produced extensions, or null if we could not
+  // determine it.  null must never be treated as "no output exists".
+  async _check_produced_files(): Promise<Set<string> | null> {
+    return await checkProducedFiles(this);
   }
 
   // use this.run_qmd_converter

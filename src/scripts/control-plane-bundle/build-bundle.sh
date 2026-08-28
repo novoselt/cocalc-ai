@@ -139,6 +139,44 @@ copy_js_pkg() {
   fi
 }
 
+copy_openat2_binary() {
+  local dest="$1"
+  if [[ "$TARGET_OS" != "linux" ]]; then
+    return
+  fi
+
+  local triple="linux-${TARGET_ARCH}-gnu"
+  local pkg="@cocalc/openat2-${triple}"
+  local filename="cocalc_openat2.${triple}.node"
+  local dir
+  dir=$(find "$ROOT/packages" -path "*node_modules/${pkg}" -type d -print -quit || true)
+  [[ -n "$dir" ]] || die "missing native module ${pkg}"
+  [[ -f "$dir/$filename" ]] || die "${pkg} does not contain ${filename}"
+
+  echo "- Copy openat2 native binary ${filename}"
+  cp "$dir/$filename" "$dest/bundle/$filename"
+}
+
+validate_workspace_imports() {
+  local bundle="$1"
+  node - "$bundle" <<'NODE'
+const fs = require("node:fs");
+
+const filename = process.argv[2];
+const source = fs.readFileSync(filename, "utf8");
+const unresolved = [
+  ...source.matchAll(/eval\("require"\)\("(@cocalc\/[^"\\]+)"\)/gu),
+].map((match) => match[1]);
+const allowed = /^@cocalc\/openat2-(?:android|darwin|freebsd|linux|win32)-[a-z0-9-]+$/u;
+const invalid = [...new Set(unresolved.filter((pkg) => !allowed.test(pkg)))];
+
+if (invalid.length > 0) {
+  console.error(invalid.join("\n"));
+  process.exit(1);
+}
+NODE
+}
+
 copy_webapp_assets() {
   local dest="$1"
   echo "- Copy webapp assets"
@@ -397,9 +435,13 @@ cp "$ANALYTICS_SCRIPT" "$OUT/bundle/analytics-script.js"
 # Workspace packages must be part of the self-contained bundle. ncc can
 # silently leave them as runtime requires when their dist output was missing
 # as dependency analysis started, which only fails after a hub worker starts.
-if grep -nE 'eval\("require"\)\("@cocalc/' "$OUT/bundle/index.js" >&2; then
+# The generated openat2 loader probes optional packages for every platform;
+# the matching target binary is copied beside the bundle below.
+if ! validate_workspace_imports "$OUT/bundle/index.js"; then
   die "control-plane bundle contains unresolved @cocalc workspace imports"
 fi
+
+copy_openat2_binary "$OUT"
 
 copy_native_pkg "bufferutil" "$OUT"
 copy_native_pkg "utf-8-validate" "$OUT"
