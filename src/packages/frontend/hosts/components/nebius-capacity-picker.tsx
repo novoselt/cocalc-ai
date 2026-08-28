@@ -5,7 +5,7 @@
 
 import type { HostCatalog } from "@cocalc/conat/hub/api/hosts";
 import { Alert, Flex, Radio, Space, Switch, Tag, Typography } from "antd";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { COLORS } from "@cocalc/util/theme";
 import {
   getNebiusPlacementOptions,
@@ -83,11 +83,35 @@ export function NebiusCapacityPicker({
       machineType === selection.machine_type &&
       platform === selection.provider_platform,
   );
+  const fallbackRequestRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    if (selected || !options[0]) return;
+    if (selected) {
+      fallbackRequestRef.current = undefined;
+      return;
+    }
+    if (!options[0]) return;
+    const requestKey = [
+      pricingModel,
+      effectiveKind,
+      selection.region ?? "",
+      selection.machine_type ?? "",
+      selection.provider_platform ?? "",
+      options[0].key,
+    ].join("\0");
+    if (fallbackRequestRef.current === requestKey) return;
+    fallbackRequestRef.current = requestKey;
     onSelect(options[0]);
-  }, [onSelect, options, selected]);
+  }, [
+    effectiveKind,
+    onSelect,
+    options,
+    pricingModel,
+    selected,
+    selection.machine_type,
+    selection.provider_platform,
+    selection.region,
+  ]);
 
   const chooseKind = (nextKind: "cpu" | "gpu") => {
     setKind(nextKind);
