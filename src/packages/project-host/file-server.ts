@@ -4222,10 +4222,10 @@ async function createBackup({
             // entitlement, but must never invalidate the recovery barrier.
             for (const backup of retention.replace) {
               try {
-                await deleteBackup({
+                await deleteBackupForRetention({
                   project_id,
                   id: backup.id,
-                  allow_archive_frozen: freeze_source === true,
+                  archiveFreezeOwned: freeze_source === true,
                 });
               } catch (err) {
                 logger.warn("unable to prune replaced backup", {
@@ -4485,60 +4485,87 @@ async function cleanupRestoreStaging(opts?: { root?: string }): Promise<void> {
   await cleanupRestoreStagingBtrfs({ root });
 }
 
-async function deleteBackup({
+async function forgetBackup({
   project_id,
   id,
-  allow_archive_frozen = false,
 }: {
   project_id: string;
   id: string;
-  allow_archive_frozen?: boolean;
+}): Promise<void> {
+  const vol = await getVolumeForBackup(project_id);
+  await vol.rustic.forget({ id });
+  await rusticBackupBrowser.markStale(vol.fs.rusticRepo);
+  const directIndexStore = await getBackupIndexStoreConfig(project_id).catch(
+    () => null,
+  );
+  if (directIndexStore) {
+    try {
+      await deleteRemoteProjectBackupIndex({
+        project_id,
+        backup_id: id,
+      });
+    } catch (err) {
+      logger.warn("backup index delete failed", { project_id, id, err });
+    }
+  } else {
+    try {
+      await rustic(
+        ["forget", "--filter-label", `${BACKUP_INDEX_LABEL_PREFIX}${id}`],
+        {
+          repo: vol.fs.rusticRepo,
+          host: backupIndexHost(project_id),
+          timeout: 30 * 60 * 1000,
+        },
+      );
+    } catch (err) {
+      logger.warn("backup index delete failed", { project_id, id, err });
+    }
+  }
+  await removeBackupIndexLocal(project_id, id).catch((err) => {
+    logger.warn("backup index cache cleanup failed", { project_id, id, err });
+  });
+}
+
+async function deleteBackup({
+  project_id,
+  id,
+}: {
+  project_id: string;
+  id: string;
 }): Promise<void> {
   await withProjectVolumeLifecycleLock(project_id, async () => {
     const vol = await getVolumeForBackup(project_id);
-    if (!allow_archive_frozen) {
-      if (!(await exists(vol.path))) {
-        throw new Error(
-          "cannot delete backups while project data is archived or unavailable",
-        );
-      }
-      if (await isSubvolumeReadonly(vol.path)) {
-        throw new Error(
-          "cannot delete backups while project archival is in progress",
-        );
-      }
+    if (!(await exists(vol.path))) {
+      throw new Error(
+        "cannot delete backups while project data is archived or unavailable",
+      );
     }
-    await vol.rustic.forget({ id });
-    await rusticBackupBrowser.markStale(vol.fs.rusticRepo);
-    const directIndexStore = await getBackupIndexStoreConfig(project_id).catch(
-      () => null,
-    );
-    if (directIndexStore) {
-      try {
-        await deleteRemoteProjectBackupIndex({
-          project_id,
-          backup_id: id,
-        });
-      } catch (err) {
-        logger.warn("backup index delete failed", { project_id, id, err });
-      }
-    } else {
-      try {
-        await rustic(
-          ["forget", "--filter-label", `${BACKUP_INDEX_LABEL_PREFIX}${id}`],
-          {
-            repo: vol.fs.rusticRepo,
-            host: backupIndexHost(project_id),
-            timeout: 30 * 60 * 1000,
-          },
-        );
-      } catch (err) {
-        logger.warn("backup index delete failed", { project_id, id, err });
-      }
+    if (await isSubvolumeReadonly(vol.path)) {
+      throw new Error(
+        "cannot delete backups while project archival is in progress",
+      );
     }
-    await removeBackupIndexLocal(project_id, id).catch((err) => {
-      logger.warn("backup index cache cleanup failed", { project_id, id, err });
-    });
+    await forgetBackup({ project_id, id });
+  });
+}
+
+async function deleteBackupForRetention({
+  project_id,
+  id,
+  archiveFreezeOwned,
+}: {
+  project_id: string;
+  id: string;
+  archiveFreezeOwned: boolean;
+}): Promise<void> {
+  await withProjectVolumeLifecycleLock(project_id, async () => {
+    const vol = await getVolumeForBackup(project_id);
+    if (!archiveFreezeOwned && (await isSubvolumeReadonly(vol.path))) {
+      throw new Error(
+        "cannot apply backup retention while project archival is in progress",
+      );
+    }
+    await forgetBackup({ project_id, id });
   });
 }
 
