@@ -45,6 +45,7 @@ import {
   activeUsersMapLocationName,
   ActiveUsersMapPlot,
 } from "./active-users-map-plot";
+import { ActiveUsersMapDomainChart } from "./active-users-map-domains";
 import { ActiveUsersMapHistoryPlot } from "./active-users-map-history-plot";
 import { ActiveUsersMapSummary } from "./active-users-map-summary";
 
@@ -704,6 +705,7 @@ export function ActiveUsersMapAdmin() {
           setSelectedUser(undefined);
         }}
       >
+        <ActiveUsersMapDomainChart users={selectedUsers} />
         <UserList
           users={selectedUsers}
           onSelect={(user) => void openUser(user)}
