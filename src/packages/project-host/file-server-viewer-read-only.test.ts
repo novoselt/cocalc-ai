@@ -5,7 +5,10 @@
 
 import { DEFAULT_PROJECT_VIEWER_FULL_READ_POLICY } from "@cocalc/util/project-access";
 import type { Filesystem } from "@cocalc/conat/files/fs";
-import { createViewerReadOnlyFilesystem } from "./viewer-read-only-filesystem";
+import {
+  assertViewerCanonicalPathAllowed,
+  createViewerReadOnlyFilesystem,
+} from "./viewer-read-only-filesystem";
 
 function mockFilesystem(
   overrides: Partial<Filesystem> = {},
@@ -27,6 +30,24 @@ function mockFilesystem(
 }
 
 describe("viewer read-only filesystem boundary", () => {
+  it("authorizes the canonical identity supplied by an opened handle", () => {
+    expect(
+      assertViewerCanonicalPathAllowed({
+        canonicalIdentity: "/home/user/public/a.pdf",
+        readPolicy: { rules: [{ action: "include", path: "public/**" }] },
+        path: "/home/user/public/a.pdf",
+      }),
+    ).toBe("public/a.pdf");
+
+    expect(() =>
+      assertViewerCanonicalPathAllowed({
+        canonicalIdentity: "/home/user/private/a.pdf",
+        readPolicy: { rules: [{ action: "include", path: "public/**" }] },
+        path: "/home/user/public/link.pdf",
+      }),
+    ).toThrow("viewer read policy");
+  });
+
   it("allows included project-home files using canonical identity paths", async () => {
     const fs = mockFilesystem({
       canonicalSyncIdentityPath: jest.fn(async () => "/home/user/docs/a.txt"),

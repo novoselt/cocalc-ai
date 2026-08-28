@@ -59,7 +59,6 @@ const MAX_ACTIVE_READ_STREAMS = parsePositiveInt(
   process.env.COCALC_PROJECT_FILE_READ_MAX_ACTIVE,
   16,
 );
-let activeReadStreams = 0;
 
 let subs: { [name: string]: Subscription } = {};
 export async function close({
@@ -137,6 +136,10 @@ export async function createServer({
 }
 
 async function listen({ sub, createReadStream, project_id, maxActiveStreams }) {
+  // Keep admission accounting local to this reader. A project-host serves many
+  // projects in one process, so a module-global counter lets one project's slow
+  // downloads starve every other project.
+  let activeReadStreams = 0;
   for await (const mesg of sub) {
     if (activeReadStreams >= maxActiveStreams) {
       const error = "project file read service is busy";
@@ -191,7 +194,7 @@ function getSeqHeader(seq) {
 }
 
 async function sendData(mesg, createReadStream) {
-  const { path } = mesg.data;
+  const { path, start, end } = mesg.data;
   logger.debug("sendData: starting", { path });
   let seq = 0;
   const chunks: Buffer[] = [];
@@ -219,6 +222,8 @@ async function sendData(mesg, createReadStream) {
 
   for await (let chunk of await createReadStream(path, {
     highWaterMark: CHUNK_SIZE,
+    ...(start != null ? { start } : {}),
+    ...(end != null ? { end } : {}),
   })) {
     chunks.push(chunk);
     size += chunk.length;
@@ -239,6 +244,8 @@ export interface ReadFileOptions {
   name?: string;
   maxWait?: number;
   client?: ConatClient;
+  start?: number;
+  end?: number;
 }
 
 export async function* readFile({
@@ -247,6 +254,8 @@ export async function* readFile({
   path,
   name = "",
   maxWait = 1000 * 60 * 10, // 10 minutes
+  start,
+  end,
 }: ReadFileOptions) {
   logger.debug("readFile", { project_id, path });
   const subject = getSubject({ project_id, name });
@@ -256,7 +265,11 @@ export async function* readFile({
   let bytes = 0;
   for await (const resp of await cn.requestMany(
     subject,
-    { path },
+    {
+      path,
+      ...(start != null ? { start } : {}),
+      ...(end != null ? { end } : {}),
+    },
     {
       // waitForInterest is extremely important because of the timing
       // of how readFile gets used by writeFile in write.ts.

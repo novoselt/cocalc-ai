@@ -23,6 +23,29 @@ function viewerAccessDenied(path: string): NodeJS.ErrnoException {
   return err;
 }
 
+export function assertViewerCanonicalPathAllowed({
+  canonicalIdentity,
+  readPolicy,
+  path,
+}: {
+  canonicalIdentity: string;
+  readPolicy: ProjectViewerReadPolicy;
+  path: string;
+}): string {
+  const relativeHomePath = projectRuntimeHomeRelativePath(canonicalIdentity);
+  const canonical =
+    canonicalIdentity.startsWith("/") && relativeHomePath == null
+      ? undefined
+      : normalizeProjectViewerPolicyPath(relativeHomePath ?? canonicalIdentity);
+  if (
+    canonical == null ||
+    !viewerReadPolicyAllowsPath({ policy: readPolicy, path: canonical })
+  ) {
+    throw viewerAccessDenied(path);
+  }
+  return canonical;
+}
+
 async function assertViewerPathAllowed({
   fs,
   readPolicy,
@@ -36,18 +59,11 @@ async function assertViewerPathAllowed({
     throw new Error("project filesystem does not support canonical paths");
   }
   const canonicalIdentity = await fs.canonicalSyncIdentityPath(path);
-  const relativeHomePath = projectRuntimeHomeRelativePath(canonicalIdentity);
-  const canonical =
-    canonicalIdentity.startsWith("/") && relativeHomePath == null
-      ? undefined
-      : normalizeProjectViewerPolicyPath(relativeHomePath ?? canonicalIdentity);
-  if (
-    canonical == null ||
-    !viewerReadPolicyAllowsPath({ policy: readPolicy, path: canonical })
-  ) {
-    throw viewerAccessDenied(path);
-  }
-  return canonical;
+  return assertViewerCanonicalPathAllowed({
+    canonicalIdentity,
+    readPolicy,
+    path,
+  });
 }
 
 async function canonicalProjectRelativePath({

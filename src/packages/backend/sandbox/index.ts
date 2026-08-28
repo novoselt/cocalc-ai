@@ -353,7 +353,9 @@ const INTERNAL_METHODS = new Set([
   "resolveSandboxBasePathForComparison",
   "ensureFdInSandbox",
   "ensureHandleMatchesPath",
+  "canonicalIdentityForOpenedHandle",
   "openVerifiedHandle",
+  "createAuthorizedReadStream",
   "cpDirectoryRequiresRecursiveError",
   "cpUnsupportedTypeError",
   "cpDestNotDirectoryError",
@@ -1427,14 +1429,20 @@ export class SandboxedFilesystem {
     handle: Awaited<ReturnType<typeof open>>;
     pathInSandbox: string;
     sandboxBasePath: string;
+    absoluteHomeAlias?: string;
+    absoluteTempAlias?: "tmp" | "scratch";
   }> => {
     if (verify) {
       // Pre-open path check blocks obvious symlink escapes for existing paths,
       // while still allowing create paths that currently do not exist.
       await this.safeAbsPath(path);
     }
-    const { pathInSandbox, sandboxBasePath } =
-      await this.resolvePathInSandbox(path);
+    const {
+      pathInSandbox,
+      sandboxBasePath,
+      absoluteHomeAlias,
+      absoluteTempAlias,
+    } = await this.resolvePathInSandbox(path);
     const handle = await open(pathInSandbox, flags, mode);
     if (verify) {
       try {
@@ -1452,7 +1460,36 @@ export class SandboxedFilesystem {
         throw err;
       }
     }
-    return { handle, pathInSandbox, sandboxBasePath };
+    return {
+      handle,
+      pathInSandbox,
+      sandboxBasePath,
+      absoluteHomeAlias,
+      absoluteTempAlias,
+    };
+  };
+
+  private canonicalIdentityForOpenedHandle = async ({
+    handle,
+    pathInSandbox,
+    sandboxBasePath,
+    absoluteHomeAlias,
+    absoluteTempAlias,
+  }: Awaited<ReturnType<typeof this.openVerifiedHandle>>): Promise<string> => {
+    const openedPath =
+      process.platform === "linux"
+        ? await realpath(`/proc/self/fd/${handle.fd}`)
+        : await realpath(pathInSandbox);
+    const compareBase = this.unsafeMode
+      ? sandboxBasePath
+      : await this.resolveSandboxBasePathForComparison(sandboxBasePath);
+    return this.toSyncIdentityPath({
+      pathInSandbox: openedPath,
+      sandboxBasePath,
+      absoluteHomeAlias,
+      absoluteTempAlias,
+      compareBasePath: compareBase,
+    });
   };
 
   safeAbsPath = async (path: string): Promise<string> => {
@@ -2100,6 +2137,42 @@ export class SandboxedFilesystem {
     }
   };
 
+  createAuthorizedReadStream = async (
+    path: string,
+    options: {
+      start?: number;
+      end?: number;
+      highWaterMark?: number;
+    } = {},
+    authorize?: (canonicalIdentity: string) => Promise<void> | void,
+  ): Promise<ReadStream> => {
+    const opened = await this.openVerifiedHandle({
+      path,
+      flags: constants.O_RDONLY,
+    });
+    try {
+      if (authorize != null) {
+        await authorize(await this.canonicalIdentityForOpenedHandle(opened));
+      }
+      const stream = opened.handle.createReadStream({
+        start: options.start,
+        end: options.end,
+        highWaterMark: options.highWaterMark,
+        autoClose: true,
+      });
+      stream.once("close", () => {
+        void opened.handle.close().catch(() => {});
+      });
+      stream.once("error", () => {
+        void opened.handle.close().catch(() => {});
+      });
+      return stream;
+    } catch (err) {
+      await opened.handle.close().catch(() => {});
+      throw err;
+    }
+  };
+
   createReadStream = async (
     path: string,
     options: {
@@ -2107,25 +2180,8 @@ export class SandboxedFilesystem {
       end?: number;
       highWaterMark?: number;
     } = {},
-  ): Promise<ReadStream> => {
-    const { handle } = await this.openVerifiedHandle({
-      path,
-      flags: constants.O_RDONLY,
-    });
-    const stream = handle.createReadStream({
-      start: options.start,
-      end: options.end,
-      highWaterMark: options.highWaterMark,
-      autoClose: true,
-    });
-    stream.once("close", () => {
-      void handle.close().catch(() => {});
-    });
-    stream.once("error", () => {
-      void handle.close().catch(() => {});
-    });
-    return stream;
-  };
+  ): Promise<ReadStream> =>
+    await this.createAuthorizedReadStream(path, options);
 
   lockFile = async (path: string, lock?: number) => {
     const p = await this.resolveSandboxPath(path);

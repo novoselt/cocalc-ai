@@ -183,6 +183,48 @@ describeIfLinux("baseline mutator parity behavior", () => {
   });
 });
 
+describeIfLinux("authorized read streams", () => {
+  it("authorizes the canonical identity of the opened handle and preserves ranges", async () => {
+    const home = join(tempDir, "authorized-read-stream");
+    await mkdir(join(home, "docs"), { recursive: true });
+    await writeFile(join(home, "docs", "a.txt"), "hello");
+    const fs = new SandboxedFilesystem(home, {
+      homeAliases: ["/home/user"],
+    });
+    let canonicalIdentity: string | undefined;
+
+    const stream = await fs.createAuthorizedReadStream(
+      "/home/user/docs/a.txt",
+      { start: 1, end: 3 },
+      (openedIdentity) => {
+        canonicalIdentity = openedIdentity;
+      },
+    );
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.from(chunk));
+    }
+
+    expect(canonicalIdentity).toBe("/home/user/docs/a.txt");
+    expect(Buffer.concat(chunks).toString()).toBe("ell");
+  });
+
+  it("closes the opened handle when authorization fails", async () => {
+    const home = join(tempDir, "denied-read-stream");
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, "private.txt"), "secret");
+    const fs = new SandboxedFilesystem(home, {
+      homeAliases: ["/home/user"],
+    });
+
+    await expect(
+      fs.createAuthorizedReadStream("/home/user/private.txt", {}, () => {
+        throw new Error("denied");
+      }),
+    ).rejects.toThrow("denied");
+  });
+});
+
 describe("describeFile", () => {
   let home;
   let fs;

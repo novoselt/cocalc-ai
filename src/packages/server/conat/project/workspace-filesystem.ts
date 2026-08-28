@@ -87,15 +87,11 @@ export const WORKSPACE_FILE_DOWNLOAD_READ_SERVICE = ":workspace";
 // register those subjects.
 const WORKSPACE_FILE_DOWNLOAD_READ_QUEUE = "workspace-file-download-read";
 
-// `createReadServer` accounts active streams against a counter that is global to
-// the process.  Project-local readers each live in their own project process, so
-// the default budget is effectively per project; the hub-side reader serves every
-// workspace project from one process, so that same budget would be shared across
-// all of them and a few slow downloads could starve unrelated projects.  Size it
-// explicitly for a centralized service instead.
+// Workspace readers have an explicit per-project limit so local deployments can
+// tune PDF and large-file concurrency independently of hosted project readers.
 const WORKSPACE_FILE_DOWNLOAD_MAX_ACTIVE_STREAMS = parsePositiveInt(
   process.env.COCALC_WORKSPACE_FILE_READ_MAX_ACTIVE,
-  128,
+  16,
 );
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {

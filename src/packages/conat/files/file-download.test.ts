@@ -193,6 +193,83 @@ describe("handleFileDownload", () => {
     );
   });
 
+  it("serves a satisfiable byte range through the read service", async () => {
+    mockFsStat.mockResolvedValue({
+      size: 100,
+      mtime: new Date("2026-04-26T21:00:00.000Z"),
+    });
+    mockReadFile.mockResolvedValue([Buffer.from("range")]);
+    const headers: Record<string, any> = {};
+    const req: any = {
+      method: "GET",
+      url: "/project-123/files/home/user/a.pdf",
+      headers: { range: "bytes=10-19" },
+    };
+    const res: any = {
+      statusCode: undefined,
+      setHeader: jest.fn((key, value) => {
+        headers[key] = value;
+      }),
+      write: jest.fn(() => true),
+      end: jest.fn(),
+      on: jest.fn(),
+      writableEnded: false,
+      destroyed: false,
+    };
+
+    await handleFileDownload({
+      req,
+      res,
+      client: { id: "client-1" } as any,
+      readServiceName: ":workspace",
+      statSubject: "fs.project-test",
+    });
+
+    expect(res.statusCode).toBe(206);
+    expect(headers["Accept-Ranges"]).toBe("bytes");
+    expect(headers["Content-Range"]).toBe("bytes 10-19/100");
+    expect(headers["Content-Length"]).toBe(10);
+    expect(mockReadFile).toHaveBeenCalledWith({
+      client: { id: "client-1" },
+      project_id: "project-123",
+      path: "/home/user/a.pdf",
+      name: ":workspace",
+      maxWait: 1000 * 60 * 60,
+      start: 10,
+      end: 19,
+    });
+  });
+
+  it("rejects an unsatisfiable byte range without opening a stream", async () => {
+    mockFsStat.mockResolvedValue({ size: 100 });
+    const headers: Record<string, any> = {};
+    const req: any = {
+      method: "GET",
+      url: "/project-123/files/home/user/a.pdf",
+      headers: { range: "bytes=100-110" },
+    };
+    const res: any = {
+      statusCode: undefined,
+      setHeader: jest.fn((key, value) => {
+        headers[key] = value;
+      }),
+      end: jest.fn(),
+      on: jest.fn(),
+      writableEnded: false,
+      destroyed: false,
+    };
+
+    await handleFileDownload({
+      req,
+      res,
+      client: { id: "client-1" } as any,
+    });
+
+    expect(res.statusCode).toBe(416);
+    expect(headers["Content-Range"]).toBe("bytes */100");
+    expect(mockReadFile).not.toHaveBeenCalled();
+  });
+
   it.each(["ENOENT", "ENOTDIR"])(
     "returns 404 when a streamed file fails with %s before sending data",
     async (code) => {

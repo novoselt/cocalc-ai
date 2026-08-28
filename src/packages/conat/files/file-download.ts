@@ -73,6 +73,42 @@ function isMissingFileError(err: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
+function parseByteRange(
+  value: unknown,
+  size: number,
+): { start: number; end: number } | "unsatisfiable" | undefined {
+  if (typeof value !== "string") return;
+  const match = value.match(/^bytes=(\d*)-(\d*)$/i);
+  if (match == null) return "unsatisfiable";
+  const [, fromText, toText] = match;
+  if (!fromText && !toText) return "unsatisfiable";
+  if (size <= 0) return "unsatisfiable";
+
+  if (!fromText) {
+    const suffixLength = Number(toText);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
+      return "unsatisfiable";
+    }
+    return {
+      start: Math.max(0, size - suffixLength),
+      end: size - 1,
+    };
+  }
+
+  const start = Number(fromText);
+  const requestedEnd = toText ? Number(toText) : size - 1;
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(requestedEnd) ||
+    start < 0 ||
+    requestedEnd < start ||
+    start >= size
+  ) {
+    return "unsatisfiable";
+  }
+  return { start, end: Math.min(requestedEnd, size - 1) };
+}
+
 async function cleanupTemporaryDownloadArchive({
   client,
   project_id,
@@ -194,21 +230,45 @@ export async function handleFileDownload({
     }
   }
 
-  if (req.method === "HEAD" && client != null) {
+  let range: { start: number; end: number } | undefined;
+  if (
+    client != null &&
+    (req.method === "HEAD" || typeof req.headers?.range === "string")
+  ) {
     try {
       const stat = await fsClient({
         client,
         subject: statSubject ?? fsSubject({ project_id }),
       }).stat(path);
-      if (typeof stat.size === "number" && Number.isFinite(stat.size)) {
-        res.setHeader("Content-Length", stat.size);
+      if (typeof stat.size === "number" && Number.isSafeInteger(stat.size)) {
+        res.setHeader("Accept-Ranges", "bytes");
+        const parsedRange = parseByteRange(req.headers?.range, stat.size);
+        if (parsedRange === "unsatisfiable") {
+          res.statusCode = 416;
+          res.setHeader("Content-Range", `bytes */${stat.size}`);
+          res.end();
+          return;
+        }
+        range = parsedRange;
+        if (range != null) {
+          res.statusCode = 206;
+          res.setHeader(
+            "Content-Range",
+            `bytes ${range.start}-${range.end}/${stat.size}`,
+          );
+          res.setHeader("Content-Length", range.end - range.start + 1);
+        } else {
+          res.setHeader("Content-Length", stat.size);
+        }
       }
       if (stat.mtime instanceof Date && Number.isFinite(stat.mtime.valueOf())) {
         res.setHeader("Last-Modified", stat.mtime.toUTCString());
       }
-      res.statusCode = 200;
-      res.end();
-      return;
+      if (req.method === "HEAD") {
+        res.statusCode ??= 200;
+        res.end();
+        return;
+      }
     } catch (err: any) {
       logger.debug("ERROR statting file for HEAD download", {
         project_id,
@@ -237,6 +297,7 @@ export async function handleFileDownload({
       path,
       name: readServiceName,
       maxWait,
+      ...(range != null ? range : {}),
     })) {
       if (res.writableEnded || res.destroyed) {
         partial = true;
