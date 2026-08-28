@@ -85,6 +85,9 @@ export abstract class AppRedux implements AppReduxInterface {
       if (store == null) continue;
       const s = state.get(name);
       if (this.lastReduxState.get(name) !== s) {
+        // Update before notifying listeners so a nested dispatch cannot emit
+        // this same, unchanged store again.
+        this.lastReduxState = this.lastReduxState.set(name, s!);
         store._handle_store_change(s);
       }
     }
@@ -145,6 +148,10 @@ export abstract class AppRedux implements AppReduxInterface {
       S.emit("destroy");
       delete this._stores[name];
       S.removeAllListeners();
+      this.changedStores.delete(name);
+      if (this.lastReduxState != null) {
+        this.lastReduxState = this.lastReduxState.delete(name);
+      }
       this.reduxStore.dispatch(actionRemoveStore(name));
     }
   }
