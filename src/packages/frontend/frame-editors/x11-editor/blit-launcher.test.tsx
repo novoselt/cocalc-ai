@@ -218,8 +218,10 @@ describe("Blit application launcher", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent("apt failed");
-    expect(
-      screen.getByRole("dialog", { name: "Install Gnumeric?" }),
-    ).toBeVisible();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("dialog", { name: "Install Gnumeric?" }),
+      ).toBeVisible(),
+    );
   });
 });
