@@ -274,17 +274,20 @@ class SessionManager {
   }
 }
 
-function getSessionState(redux: AppRedux): State[] {
+export function getSessionState(redux: AppRedux): State[] {
   const state: State[] = [];
   redux
     .getStore("projects")
     .get("open_projects")
     .forEach((project_id) => {
+      const openFiles = redux.hasProjectStore(project_id)
+        ? (redux
+            .getProjectStore(project_id)
+            .get("open_files_order")
+            ?.toJS?.() ?? [])
+        : [];
       state.push({
-        [project_id]: redux
-          .getProjectStore(project_id)
-          .get("open_files_order")
-          .toJS(),
+        [project_id]: openFiles,
       });
       return true;
     });

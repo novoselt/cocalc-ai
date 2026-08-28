@@ -1,5 +1,6 @@
 import {
   getOpenFilesForSessionClose,
+  getSessionState,
   projectsReadyForSessionRestore,
   restoreSessionState,
 } from "./session";
@@ -61,6 +62,36 @@ describe("getOpenFilesForSessionClose", () => {
     } as any;
 
     expect(getOpenFilesForSessionClose(redux, "project-1")).toBe(openFiles);
+  });
+});
+
+describe("getSessionState", () => {
+  it("preserves reduced tabs without initializing the project runtime", () => {
+    const openProjects = {
+      forEach(callback: (projectId: string) => void) {
+        callback("full-project");
+        callback("reduced-project");
+      },
+    };
+    const getProjectStore = jest.fn((projectId: string) => {
+      expect(projectId).toBe("full-project");
+      return {
+        get: jest.fn(() => ({ toJS: () => ["a.txt", "b.ipynb"] })),
+      };
+    });
+    const redux = {
+      getStore: jest.fn(() => ({ get: () => openProjects })),
+      hasProjectStore: jest.fn(
+        (projectId: string) => projectId === "full-project",
+      ),
+      getProjectStore,
+    } as any;
+
+    expect(getSessionState(redux)).toEqual([
+      { "full-project": ["a.txt", "b.ipynb"] },
+      { "reduced-project": [] },
+    ]);
+    expect(getProjectStore).toHaveBeenCalledTimes(1);
   });
 });
 

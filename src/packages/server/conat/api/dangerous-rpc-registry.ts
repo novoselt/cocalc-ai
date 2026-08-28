@@ -279,6 +279,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     reason:
       "changes the future customer-facing invoice recipient and billing address",
   },
+  "commercialOrders.updateCollectionMode": {
+    decision: "fresh-auth-required",
+    reason: "changes how an approved institutional order will collect payment",
+  },
   "commercialOrders.approve": {
     decision: "fresh-auth-required",
     reason: "approves institutional commercial terms for invoicing",

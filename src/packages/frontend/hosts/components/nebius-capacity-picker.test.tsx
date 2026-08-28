@@ -1,7 +1,8 @@
 /** @jest-environment jsdom */
 
 import type { HostCatalog } from "@cocalc/conat/hub/api/hosts";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { React } from "@cocalc/frontend/app-framework";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NebiusCapacityPicker } from "./nebius-capacity-picker";
 
 const catalog: HostCatalog = {
@@ -91,6 +92,34 @@ const catalog: HostCatalog = {
 };
 
 describe("NebiusCapacityPicker", () => {
+  it("requests an unmatched fallback only once when the parent rerenders", async () => {
+    const onSelect = jest.fn();
+
+    function UnmatchedSelectionHarness() {
+      const [, rerender] = React.useState(0);
+      return (
+        <NebiusCapacityPicker
+          catalog={catalog}
+          selection={{
+            pricing_model: "spot",
+            region: "missing-region",
+            machine_type: "missing-machine",
+            provider_platform: "missing-platform",
+          }}
+          onPricingModelChange={jest.fn()}
+          onSelect={(option) => {
+            onSelect(option);
+            rerender((value) => value + 1);
+          }}
+        />
+      );
+    }
+
+    render(<UnmatchedSelectionHarness />);
+
+    await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
+  });
+
   it("shows unique all-region choices and exposes them to keyboard users", () => {
     const onSelect = jest.fn();
     render(

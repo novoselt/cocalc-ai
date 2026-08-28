@@ -171,6 +171,57 @@ describePglite("integrated CRM store", () => {
     expect(created.customer_number).toMatch(/^CRM-\d{4}-\d{6}$/);
   });
 
+  it("paginates filtered organization searches", async () => {
+    const query = `Pagination University ${randomUUID()}`;
+    const organizationIds = [randomUUID(), randomUUID()];
+    for (const [index, organizationId] of organizationIds.entries()) {
+      await pool.query(
+        `INSERT INTO crm_organizations
+           (id,customer_number,display_name,organization_type,lifecycle_stage,
+            created_by_account_id,updated_by_account_id,created_at,updated_at,version)
+         VALUES ($1,$2,$3,'university','customer',$4,$4,NOW(),NOW() - ($5::int * INTERVAL '1 second'),1)`,
+        [organizationId, `TEST-${organizationId}`, query, actor, index],
+      );
+      await pool.query(
+        `INSERT INTO crm_opportunities
+           (id,organization_id,name,kind,stage,owner_account_id,
+            expected_close_date,created_by_account_id,updated_by_account_id,
+            created_at,updated_at,version)
+         VALUES ($1,$2,'Annual renewal','renewal','discovery',$3,
+                 '2027-01-31',$3,$3,NOW(),NOW(),1)`,
+        [randomUUID(), organizationId, actor],
+      );
+    }
+
+    const first = await store.searchOrganizations({
+      account_id: actor,
+      query,
+      opportunity_kinds: ["renewal"],
+      limit: 1,
+      reason: "review first filtered search page",
+    });
+    expect(first.organizations).toHaveLength(1);
+    expect(first.next_cursor).toBeTruthy();
+    expect(first.truncated).toBe(true);
+
+    const second = await store.searchOrganizations({
+      account_id: actor,
+      query,
+      opportunity_kinds: ["renewal"],
+      cursor: first.next_cursor,
+      limit: 1,
+      reason: "review second filtered search page",
+    });
+    expect(second.organizations).toHaveLength(1);
+    expect(second.next_cursor).toBeUndefined();
+    expect(second.truncated).toBe(false);
+    expect(
+      [...first.organizations, ...second.organizations]
+        .map(({ id }) => id)
+        .sort(),
+    ).toEqual([...organizationIds].sort());
+  });
+
   it("enforces versions and evidence-based domain identity", async () => {
     const createdPreview = await store.createOrganization({
       account_id: actor,
@@ -539,6 +590,35 @@ describePglite("integrated CRM store", () => {
       service_ends_at: "2027-06-30T23:59:59.000Z",
       source_zendesk_ticket_ids: [20529],
     });
+    const pilotCustomers = await store.listOrganizations({
+      account_id: actor,
+      opportunity_kinds: ["adoption_pilot"],
+      reason: "review customers with open pilot opportunities",
+    });
+    expect(
+      pilotCustomers.organizations.find(({ id }) => id === organization.id),
+    ).toMatchObject({
+      open_opportunity_count: 1,
+      open_opportunity_kinds: ["adoption_pilot"],
+    });
+    expect(
+      (
+        await store.searchOrganizations({
+          account_id: actor,
+          query: organization.display_name,
+          opportunity_kinds: ["adoption_pilot"],
+          reason: "search customers with open pilot opportunities",
+        })
+      ).organizations.map(({ id }) => id),
+    ).toContain(organization.id);
+    expect(
+      await store.searchOrganizations({
+        account_id: actor,
+        query: organization.display_name,
+        opportunity_kinds: ["renewal"],
+        reason: "exclude search matches without a renewal opportunity",
+      }),
+    ).toMatchObject({ organizations: [] });
     const taskPreview = await store.createTask({
       account_id: actor,
       organization: organization.id,

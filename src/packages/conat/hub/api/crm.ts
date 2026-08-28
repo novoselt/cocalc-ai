@@ -81,8 +81,7 @@ export interface CrmPageRequest extends CrmReadRequest {
   max_bytes?: number;
 }
 
-export interface CrmOrganizationListRequest extends CrmPageRequest {
-  search?: string;
+export interface CrmOrganizationQueueFilters {
   lifecycle_stages?: CrmLifecycleStage[];
   statuses?: Array<"active" | "merged" | "archived">;
   organization_types?: CrmOrganizationType[];
@@ -92,6 +91,11 @@ export interface CrmOrganizationListRequest extends CrmPageRequest {
   unassigned?: boolean;
 }
 
+export interface CrmOrganizationListRequest
+  extends CrmPageRequest, CrmOrganizationQueueFilters {
+  search?: string;
+}
+
 export interface CrmOrganizationListResponse {
   organizations: CrmOrganizationSummary[];
   next_cursor?: string;
@@ -99,7 +103,8 @@ export interface CrmOrganizationListResponse {
   result_bytes: number;
 }
 
-export interface CrmOrganizationSearchRequest extends CrmPageRequest {
+export interface CrmOrganizationSearchRequest
+  extends CrmPageRequest, CrmOrganizationQueueFilters {
   query?: string;
   domain?: string;
   email?: string;

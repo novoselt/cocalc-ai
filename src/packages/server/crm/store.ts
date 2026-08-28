@@ -39,6 +39,7 @@ import type {
   CrmOrganizationListResponse,
   CrmOrganizationMergeRequest,
   CrmOrganizationPersonMutationRequest,
+  CrmOrganizationQueueFilters,
   CrmOrganizationSearchRequest,
   CrmOrganizationUpdateRequest,
   CrmPersonAccountMutationRequest,
@@ -67,6 +68,7 @@ import type {
   CrmExternalReference,
   CrmMutationResult,
   CrmOpportunity,
+  CrmOpportunityKind,
   CrmOpportunityStage,
   CrmOrganization,
   CrmOrganizationDomain,
@@ -927,8 +929,11 @@ async function summaryForOrganization(
         ORDER BY p.display_name LIMIT 10`,
         [organization.id],
       ),
-      db.query<{ count: string }>(
-        "SELECT count(*)::text AS count FROM crm_opportunities WHERE organization_id=$1 AND stage NOT IN ('won','lost')",
+      db.query<{ count: string; kinds: CrmOpportunityKind[] }>(
+        `SELECT count(*)::text AS count,
+                COALESCE(array_agg(DISTINCT kind ORDER BY kind), ARRAY[]::text[]) AS kinds
+           FROM crm_opportunities
+          WHERE organization_id=$1 AND stage NOT IN ('won','lost')`,
         [organization.id],
       ),
       db.query(
@@ -951,10 +956,47 @@ async function summaryForOrganization(
     verified_domains: domains.rows.map((x) => x.normalized_domain),
     primary_contacts: contacts.rows,
     open_opportunity_count: Number(opportunityCount.rows[0]?.count ?? 0),
+    open_opportunity_kinds: opportunityCount.rows[0]?.kinds ?? [],
     next_task: nextTask.rows[0] ? taskRow(nextTask.rows[0]) : null,
     latest_activity_at: iso(latest.rows[0]?.occurred_at),
     outstanding_receivables: `${outstanding.rows[0]?.amount ?? "0"}`,
   };
+}
+
+function appendOrganizationQueueFilters(
+  opts: CrmOrganizationQueueFilters,
+  values: unknown[],
+  clauses: string[],
+): void {
+  const add = (clause: string, value: unknown) => {
+    values.push(value);
+    clauses.push(clause.replace("?", `$${values.length}`));
+  };
+  if (opts.lifecycle_stages?.length) {
+    add("o.lifecycle_stage=ANY(?::text[])", opts.lifecycle_stages);
+  }
+  if (opts.statuses?.length) {
+    add("o.status=ANY(?::text[])", opts.statuses);
+  }
+  if (opts.organization_types?.length) {
+    add("o.organization_type=ANY(?::text[])", opts.organization_types);
+  }
+  if (opts.opportunity_kinds?.length) {
+    add(
+      "EXISTS (SELECT 1 FROM crm_opportunities q WHERE q.organization_id=o.id AND q.kind=ANY(?::text[]) AND q.stage NOT IN ('won','lost'))",
+      opts.opportunity_kinds,
+    );
+  }
+  if (opts.owner_account_id === null || opts.unassigned) {
+    clauses.push("o.relationship_owner_account_id IS NULL");
+  } else if (opts.owner_account_id) {
+    add("o.relationship_owner_account_id=?::uuid", opts.owner_account_id);
+  }
+  if (opts.has_overdue_tasks) {
+    clauses.push(
+      "EXISTS (SELECT 1 FROM crm_tasks t WHERE t.organization_id=o.id AND t.state IN ('open','waiting') AND t.due_at<NOW())",
+    );
+  }
 }
 
 export async function listOrganizations(
@@ -965,10 +1007,6 @@ export async function listOrganizations(
   const maxBytes = byteLimit(opts.max_bytes);
   const values: unknown[] = [];
   const where: string[] = [];
-  const add = (clause: string, value: unknown) => {
-    values.push(value);
-    where.push(clause.replace("?", `$${values.length}`));
-  };
   if (opts.search?.trim()) {
     const query = `%${opts.search.trim()}%`;
     values.push(query);
@@ -976,24 +1014,7 @@ export async function listOrganizations(
       `(o.display_name ILIKE $${values.length} OR o.legal_name ILIKE $${values.length} OR o.customer_number ILIKE $${values.length} OR EXISTS (SELECT 1 FROM unnest(o.aliases) a WHERE a ILIKE $${values.length}))`,
     );
   }
-  if (opts.lifecycle_stages?.length)
-    add("o.lifecycle_stage=ANY(?::text[])", opts.lifecycle_stages);
-  if (opts.statuses?.length) add("o.status=ANY(?::text[])", opts.statuses);
-  if (opts.organization_types?.length)
-    add("o.organization_type=ANY(?::text[])", opts.organization_types);
-  if (opts.opportunity_kinds?.length)
-    add(
-      "EXISTS (SELECT 1 FROM crm_opportunities q WHERE q.organization_id=o.id AND q.kind=ANY(?::text[]) AND q.stage NOT IN ('won','lost'))",
-      opts.opportunity_kinds,
-    );
-  if (opts.owner_account_id === null || opts.unassigned)
-    where.push("o.relationship_owner_account_id IS NULL");
-  else if (opts.owner_account_id)
-    add("o.relationship_owner_account_id=?::uuid", opts.owner_account_id);
-  if (opts.has_overdue_tasks)
-    where.push(
-      "EXISTS (SELECT 1 FROM crm_tasks t WHERE t.organization_id=o.id AND t.state IN ('open','waiting') AND t.due_at<NOW())",
-    );
+  appendOrganizationQueueFilters(opts, values, where);
   const cursor = decodeCursor(opts.cursor);
   if (cursor) {
     values.push(cursor.updated_at, cursor.id);
@@ -1071,6 +1092,14 @@ export async function searchOrganizations(
       `EXISTS (SELECT 1 FROM site_licenses sl WHERE sl.crm_organization_id=o.id AND sl.id=$${values.length}::uuid)`,
     );
   }
+  appendOrganizationQueueFilters(opts, values, clauses);
+  const cursor = decodeCursor(opts.cursor);
+  if (cursor) {
+    values.push(cursor.updated_at, cursor.id);
+    clauses.push(
+      `(o.updated_at,o.id)<($${values.length - 1}::timestamptz,$${values.length}::uuid)`,
+    );
+  }
   values.push(limit + 1);
   const { rows } = await getPool().query(
     `SELECT DISTINCT o.* FROM crm_organizations o ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
@@ -1083,9 +1112,15 @@ export async function searchOrganizations(
       .map((row) => summaryForOrganization(getPool(), organizationRow(row))),
   );
   const boundedRows = truncateRows(summaries, byteLimit(opts.max_bytes));
+  const hasMore = rows.length > limit;
+  const last = boundedRows.rows.at(-1);
   return {
     organizations: boundedRows.rows,
-    truncated: rows.length > limit || boundedRows.truncated,
+    next_cursor:
+      last && (hasMore || boundedRows.truncated)
+        ? encodeCursor(last.updated_at, last.id)
+        : undefined,
+    truncated: hasMore || boundedRows.truncated,
     result_bytes: boundedRows.bytes,
   };
 }

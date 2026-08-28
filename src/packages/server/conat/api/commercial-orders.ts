@@ -7,6 +7,7 @@ import type {
   CommercialBackfillRequest,
   CommercialBackfillResponse,
   CommercialBillingDetailsUpdateRequest,
+  CommercialCollectionModeUpdateRequest,
   CommercialDiagnosticsRequest,
   CommercialAssigneeListRequest,
   CommercialFulfillmentPlan,
@@ -234,6 +235,15 @@ export async function updateBillingDetails(
   opts: CommercialBillingDetailsUpdateRequest,
 ): Promise<CommercialOrder> {
   return await invoke("updateBillingDetails", opts, {
+    fresh: true,
+    capability: "mutate",
+  });
+}
+
+export async function updateCollectionMode(
+  opts: CommercialCollectionModeUpdateRequest,
+): Promise<CommercialOrder> {
+  return await invoke("updateCollectionMode", opts, {
     fresh: true,
     capability: "mutate",
   });

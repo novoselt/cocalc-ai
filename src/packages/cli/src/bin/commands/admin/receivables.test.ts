@@ -394,6 +394,69 @@ test("receivables billing correction previews and commits explicitly", async () 
   assert.match(captured.idempotency_key, /^receivables-billing-update-/);
 });
 
+test("receivables collection mode transition previews and commits explicitly", async () => {
+  let calls = 0;
+  let captured: any;
+  const api = {
+    get: async () =>
+      order({
+        collection_mode: "manual_invoice",
+        fulfillment_state: "provisioned",
+      }),
+    updateCollectionMode: async (request: any) => {
+      calls += 1;
+      captured = request;
+      return order({
+        collection_mode: request.collection_mode,
+        fulfillment_state: "provisioned",
+      });
+    },
+  };
+
+  const dryRun = setup(api);
+  await dryRun.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "collection",
+    "mode",
+    "AR-2026-000123",
+    "--mode",
+    "stripe_invoice",
+    "--reason",
+    "use hosted Stripe invoicing",
+  ]);
+  assert.equal(calls, 0);
+  assert.equal(dryRun.output().operation, "collection-mode-update");
+  assert.equal(dryRun.output().request.collection_mode, "stripe_invoice");
+  assert.match(
+    dryRun.output().request.idempotency_key,
+    /^receivables-collection-mode-/,
+  );
+
+  const commit = setup(api);
+  await commit.program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "receivables",
+    "collection",
+    "mode",
+    "AR-2026-000123",
+    "--mode",
+    "stripe_invoice",
+    "--reason",
+    "use hosted Stripe invoicing",
+    "--expected-version",
+    "7",
+    "--commit",
+  ]);
+  assert.equal(calls, 1);
+  assert.equal(captured.collection_mode, "stripe_invoice");
+  assert.equal(captured.expected_version, 7);
+});
+
 test("receivables quote issue previews inputs and stored PDFs download", async () => {
   const quote = {
     id: "44444444-4444-4444-8444-444444444444",

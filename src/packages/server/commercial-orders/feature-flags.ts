@@ -44,6 +44,7 @@ export const COMMERCIAL_ACTION_CAPABILITIES = {
   cancel: "mutate",
   backfill: "mutate",
   updateBillingDetails: "mutate",
+  updateCollectionMode: "mutate",
   issueQuote: "mutate",
   voidQuote: "mutate",
   uploadDocument: "mutate",
