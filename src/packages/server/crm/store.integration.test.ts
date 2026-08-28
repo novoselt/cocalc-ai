@@ -220,6 +220,14 @@ describePglite("integrated CRM store", () => {
         .map(({ id }) => id)
         .sort(),
     ).toEqual([...organizationIds].sort());
+    await pool.query(
+      "DELETE FROM crm_opportunities WHERE organization_id = ANY($1::uuid[])",
+      [organizationIds],
+    );
+    await pool.query(
+      "DELETE FROM crm_organizations WHERE id = ANY($1::uuid[])",
+      [organizationIds],
+    );
   });
 
   it("enforces versions and evidence-based domain identity", async () => {
@@ -938,6 +946,517 @@ describePglite("integrated CRM store", () => {
       [organizationName],
     );
     expect(count.rows[0].count).toBe(1);
+  });
+
+  it("sets commercial backlinks only for verified references", async () => {
+    const organizationId = randomUUID();
+    const orderId = randomUUID();
+    const licenseId = randomUUID();
+    await pool.query(
+      `INSERT INTO crm_organizations
+         (id,customer_number,display_name,organization_type,lifecycle_stage,
+          created_by_account_id,updated_by_account_id)
+       VALUES($1,$2,'Verified Backlink University','university','prospect',$3,$3)`,
+      [organizationId, `CRM-BACKLINK-${randomUUID().slice(0, 20)}`, actor],
+    );
+    await pool.query(
+      `INSERT INTO commercial_orders
+         (id,order_number,organization_name,workflow_state,collection_state,
+          fulfillment_state,currency,agreed_total)
+       VALUES($1,$2,'Verified Backlink University','draft','not_invoiced',
+              'not_provisioned','usd',1000)`,
+      [orderId, `AR-${randomUUID()}`],
+    );
+    await pool.query(
+      `INSERT INTO site_licenses(id,name,organization_name)
+       VALUES($1,$2,'Verified Backlink University')`,
+      [licenseId, `License ${randomUUID()}`],
+    );
+
+    for (const target of [
+      {
+        object_kind: "commercial_order" as const,
+        external_id: orderId,
+        table: "commercial_orders",
+      },
+      {
+        object_kind: "site_license" as const,
+        external_id: licenseId,
+        table: "site_licenses",
+      },
+    ]) {
+      for (const action of ["add", "verify", "reject"] as const) {
+        const preview = await store.mutateExternalReference({
+          account_id: actor,
+          organization: organizationId,
+          action,
+          provider: "cocalc",
+          object_kind: target.object_kind,
+          external_id: target.external_id,
+          reason: `${action} a synthetic commercial source reference`,
+        });
+        if (!preview.preview) throw Error("expected preview");
+        committed(
+          await store.mutateExternalReference({
+            account_id: actor,
+            organization: organizationId,
+            action,
+            provider: "cocalc",
+            object_kind: target.object_kind,
+            external_id: target.external_id,
+            reason: `${action} a synthetic commercial source reference`,
+            commit: true,
+            expected_version: preview.expected_version,
+            idempotency_key: preview.idempotency_key,
+          }),
+        );
+        const backlink = await pool.query(
+          `SELECT crm_organization_id FROM ${target.table} WHERE id=$1`,
+          [target.external_id],
+        );
+        expect(backlink.rows[0].crm_organization_id).toBe(
+          action === "verify" ? organizationId : null,
+        );
+      }
+    }
+  });
+
+  it("binds, discovers, and paginates reviewed person source references", async () => {
+    const organizationId = randomUUID();
+    const otherOrganizationId = randomUUID();
+    const personId = randomUUID();
+    const secondPersonId = randomUUID();
+    const unrelatedPersonId = randomUUID();
+    const sourcePrefix = `fixture:${randomUUID()}:`;
+    await pool.query(
+      `INSERT INTO crm_organizations
+         (id,customer_number,display_name,organization_type,lifecycle_stage,
+          created_by_account_id,updated_by_account_id)
+       VALUES
+         ($1,$3,'Source Binding University','university','prospect',$5,$5),
+         ($2,$4,'Other Source University','university','prospect',$5,$5)`,
+      [
+        organizationId,
+        otherOrganizationId,
+        `CRM-SOURCE-${randomUUID().slice(0, 20)}`,
+        `CRM-SOURCE-${randomUUID().slice(0, 20)}`,
+        actor,
+      ],
+    );
+    await pool.query(
+      `INSERT INTO crm_people
+         (id,display_name,created_by_account_id,updated_by_account_id)
+       VALUES
+         ($1,'Reviewed Source Person',$4,$4),
+         ($2,'Second Source Person',$4,$4),
+         ($3,'Unrelated Source Person',$4,$4)`,
+      [personId, secondPersonId, unrelatedPersonId, actor],
+    );
+    await pool.query(
+      `INSERT INTO crm_organization_people
+         (id,organization_id,person_id,roles,state)
+       VALUES
+         ($1,$4,$6,'{}','active'),
+         ($2,$4,$7,'{}','active'),
+         ($3,$5,$8,'{}','active')`,
+      [
+        randomUUID(),
+        randomUUID(),
+        randomUUID(),
+        organizationId,
+        otherOrganizationId,
+        personId,
+        secondPersonId,
+        unrelatedPersonId,
+      ],
+    );
+    const otherOpportunityPreview = await store.createOpportunity({
+      account_id: actor,
+      organization: otherOrganizationId,
+      name: "Other source opportunity",
+      kind: "adoption_pilot",
+      owner_account_id: actor,
+      expected_value: "1000",
+      expected_close_date: "2026-12-31",
+      reason: "create a synthetic cross-customer opportunity",
+    });
+    if (!otherOpportunityPreview.preview) throw Error("expected preview");
+    const otherOpportunity = committed(
+      await store.createOpportunity({
+        account_id: actor,
+        organization: otherOrganizationId,
+        name: "Other source opportunity",
+        kind: "adoption_pilot",
+        owner_account_id: actor,
+        expected_value: "1000",
+        expected_close_date: "2026-12-31",
+        reason: "create a synthetic cross-customer opportunity",
+        commit: true,
+        expected_version: otherOpportunityPreview.expected_version,
+        idempotency_key: otherOpportunityPreview.idempotency_key,
+      }),
+    );
+
+    await expect(
+      store.mutateExternalReference({
+        account_id: actor,
+        organization: organizationId,
+        action: "verify",
+        provider: "cocalc",
+        object_kind: "person",
+        external_id: `${sourcePrefix}missing-person`,
+        reason: "reject an incomplete person source binding",
+      }),
+    ).rejects.toThrow(/person/i);
+    await expect(
+      store.mutateExternalReference({
+        account_id: actor,
+        organization: organizationId,
+        action: "verify",
+        provider: "cocalc",
+        object_kind: "person",
+        external_id: `${sourcePrefix}wrong-organization`,
+        person: unrelatedPersonId,
+        reason: "reject a cross-customer person source binding",
+      }),
+    ).rejects.toThrow(/organization|relationship/i);
+    await expect(
+      store.mutateExternalReference({
+        account_id: actor,
+        organization: organizationId,
+        action: "verify",
+        provider: "cocalc",
+        object_kind: "organization",
+        external_id: `${sourcePrefix}cross-customer-opportunity`,
+        opportunity: otherOpportunity.id,
+        reason: "reject a cross-customer opportunity association",
+      }),
+    ).rejects.toThrow(/opportunity.*organization/i);
+    await expect(
+      store.mutateExternalReference({
+        account_id: actor,
+        organization: organizationId,
+        action: "verify",
+        provider: "cocalc",
+        object_kind: "organization",
+        external_id: `${sourcePrefix}cross-customer-contact`,
+        person: unrelatedPersonId,
+        reason: "reject a cross-customer reference association",
+      }),
+    ).rejects.toThrow(/organization|relationship/i);
+    await expect(
+      store.mutateExternalReference({
+        account_id: actor,
+        organization: organizationId,
+        action: "verify",
+        provider: "cocalc",
+        object_kind: "person",
+        external_id: `${sourcePrefix}opportunity-not-allowed`,
+        person: personId,
+        opportunity: randomUUID(),
+        reason: "reject a person binding with an opportunity target",
+      }),
+    ).rejects.toThrow(/opportunity is not allowed/i);
+
+    const personExternalId = `${sourcePrefix}person`;
+    const personPreview = await store.mutateExternalReference({
+      account_id: actor,
+      organization: organizationId,
+      action: "verify",
+      provider: "cocalc",
+      object_kind: "person",
+      external_id: personExternalId,
+      person: personId,
+      label: "Synthetic source person",
+      reason: "bind a reviewed synthetic person source",
+    });
+    if (!personPreview.preview) throw Error("expected preview");
+    const personCommitRequest = {
+      account_id: actor,
+      organization: organizationId,
+      action: "verify" as const,
+      provider: "cocalc" as const,
+      object_kind: "person" as const,
+      external_id: personExternalId,
+      person: personId,
+      label: "Synthetic source person",
+      reason: "bind a reviewed synthetic person source",
+      commit: true,
+      expected_version: personPreview.expected_version,
+      idempotency_key: personPreview.idempotency_key,
+    };
+    committed(await store.mutateExternalReference(personCommitRequest));
+    const replay = await store.mutateExternalReference(personCommitRequest);
+    expect(replay).toMatchObject({ preview: false, replayed: true });
+    await pool.query(
+      `UPDATE crm_organization_people SET state='former'
+        WHERE organization_id=$1 AND person_id=$2`,
+      [organizationId, personId],
+    );
+    await expect(
+      store.mutateExternalReference({
+        account_id: actor,
+        organization: organizationId,
+        action: "verify",
+        provider: "cocalc",
+        object_kind: "person",
+        external_id: personExternalId,
+        person: personId,
+        label: "Synthetic source person",
+        reason: "confirm a reviewed former-contact identity binding",
+      }),
+    ).resolves.toMatchObject({ preview: true, expected_version: 1 });
+    await expect(
+      store.mutateExternalReference({
+        account_id: actor,
+        organization: organizationId,
+        action: "verify",
+        provider: "cocalc",
+        object_kind: "person",
+        external_id: personExternalId,
+        person: secondPersonId,
+        reason: "reject silent person source reassignment",
+      }),
+    ).rejects.toThrow(/another person/i);
+    await expect(
+      store.mutateOrganizationPerson({
+        account_id: actor,
+        organization: organizationId,
+        person: personId,
+        action: "unlink",
+        reason: "reject orphaning a reviewed source binding",
+      }),
+    ).rejects.toThrow(/external references/i);
+
+    const organizationExternalId = `${sourcePrefix}organization`;
+    const organizationPreview = await store.mutateExternalReference({
+      account_id: actor,
+      organization: organizationId,
+      action: "verify",
+      provider: "cocalc",
+      object_kind: "organization",
+      external_id: organizationExternalId,
+      label: "Synthetic source organization",
+      reason: "bind a reviewed synthetic organization source",
+    });
+    if (!organizationPreview.preview) throw Error("expected preview");
+    committed(
+      await store.mutateExternalReference({
+        account_id: actor,
+        organization: organizationId,
+        action: "verify",
+        provider: "cocalc",
+        object_kind: "organization",
+        external_id: organizationExternalId,
+        label: "Synthetic source organization",
+        reason: "bind a reviewed synthetic organization source",
+        commit: true,
+        expected_version: organizationPreview.expected_version,
+        idempotency_key: organizationPreview.idempotency_key,
+      }),
+    );
+
+    const exact = await store.listExternalReferences({
+      reason: "find one reviewed synthetic person source",
+      provider: "cocalc",
+      object_kind: "person",
+      external_id: personExternalId,
+      organization: organizationId,
+      verification_state: "verified",
+      limit: 10,
+      max_bytes: 100_000,
+    });
+    expect(exact).toMatchObject({ truncated: false });
+    expect(exact.external_references).toHaveLength(1);
+    expect(exact.external_references[0]).toMatchObject({
+      reference: {
+        organization_id: organizationId,
+        person_id: personId,
+        provider: "cocalc",
+        object_kind: "person",
+        external_id: personExternalId,
+        verification_state: "verified",
+      },
+      organization: {
+        id: organizationId,
+        display_name: "Source Binding University",
+      },
+    });
+
+    const foundPeople = await store.listPeople({
+      reason: "find a contact by reviewed source reference",
+      search: personExternalId,
+    });
+    expect(foundPeople.people.map(({ id }) => id)).toContain(personId);
+
+    const firstPage = await store.listExternalReferences({
+      reason: "page through synthetic source bindings",
+      external_id_prefix: sourcePrefix,
+      limit: 1,
+      max_bytes: 100_000,
+    });
+    expect(firstPage.external_references).toHaveLength(1);
+    expect(firstPage.truncated).toBe(true);
+    expect(firstPage.next_cursor).toBeTruthy();
+    const secondPage = await store.listExternalReferences({
+      reason: "page through synthetic source bindings",
+      external_id_prefix: sourcePrefix,
+      cursor: firstPage.next_cursor,
+      limit: 1,
+      max_bytes: 100_000,
+    });
+    expect(secondPage.external_references).toHaveLength(1);
+    expect(secondPage.truncated).toBe(false);
+    expect(
+      [...firstPage.external_references, ...secondPage.external_references].map(
+        ({ reference }) => reference.external_id,
+      ),
+    ).toEqual([organizationExternalId, personExternalId]);
+
+    const literalExternalId = `${sourcePrefix}literal%_value`;
+    const wildcardLookalikeId = `${sourcePrefix}literalABvalue`;
+    await pool.query(
+      `INSERT INTO crm_external_references
+         (id,organization_id,provider,object_kind,external_id,
+          verification_state,created_by_account_id,updated_by_account_id)
+       VALUES
+         ($1,$3,'cocalc','organization',$4,'verified',$6,$6),
+         ($2,$3,'cocalc','organization',$5,'verified',$6,$6)`,
+      [
+        randomUUID(),
+        randomUUID(),
+        organizationId,
+        literalExternalId,
+        wildcardLookalikeId,
+        actor,
+      ],
+    );
+    const literalPrefix = await store.listExternalReferences({
+      reason: "treat source prefix wildcard characters literally",
+      external_id_prefix: `${sourcePrefix}literal%_`,
+      limit: 10,
+      max_bytes: 100_000,
+    });
+    expect(
+      literalPrefix.external_references.map(
+        ({ reference }) => reference.external_id,
+      ),
+    ).toEqual([literalExternalId]);
+
+    const rejectBoundPreview = await store.mutateExternalReference({
+      account_id: actor,
+      organization: organizationId,
+      action: "reject",
+      provider: "cocalc",
+      object_kind: "person",
+      external_id: personExternalId,
+      reason: "reject and unbind a previously reviewed person source",
+    });
+    if (!rejectBoundPreview.preview) throw Error("expected preview");
+    expect(rejectBoundPreview.proposed).toMatchObject({
+      person_id: null,
+      verification_state: "rejected",
+    });
+    expect(
+      committed(
+        await store.mutateExternalReference({
+          account_id: actor,
+          organization: organizationId,
+          action: "reject",
+          provider: "cocalc",
+          object_kind: "person",
+          external_id: personExternalId,
+          reason: "reject and unbind a previously reviewed person source",
+          commit: true,
+          expected_version: rejectBoundPreview.expected_version,
+          idempotency_key: rejectBoundPreview.idempotency_key,
+        }),
+      ),
+    ).toMatchObject({ person_id: null, verification_state: "rejected" });
+
+    const rejectedExternalId = `${sourcePrefix}rejected-person`;
+    const rejectedPreview = await store.mutateExternalReference({
+      account_id: actor,
+      organization: organizationId,
+      action: "reject",
+      provider: "cocalc",
+      object_kind: "person",
+      external_id: rejectedExternalId,
+      reason: "reject an unbound synthetic person source",
+    });
+    if (!rejectedPreview.preview) throw Error("expected preview");
+    expect(rejectedPreview.proposed).toMatchObject({
+      person_id: null,
+      verification_state: "rejected",
+    });
+    const rejectedReference = committed(
+      await store.mutateExternalReference({
+        account_id: actor,
+        organization: organizationId,
+        action: "reject",
+        provider: "cocalc",
+        object_kind: "person",
+        external_id: rejectedExternalId,
+        reason: "reject an unbound synthetic person source",
+        commit: true,
+        expected_version: rejectedPreview.expected_version,
+        idempotency_key: rejectedPreview.idempotency_key,
+      }),
+    );
+    expect(rejectedReference).toMatchObject({
+      person_id: null,
+      verification_state: "rejected",
+    });
+    const rejectedPeople = await store.listPeople({
+      reason: "do not treat a rejected source identity as authoritative",
+      search: rejectedExternalId,
+    });
+    expect(rejectedPeople.people.map(({ id }) => id)).not.toContain(personId);
+
+    const removePreview = await store.mutateExternalReference({
+      account_id: actor,
+      organization: organizationId,
+      action: "remove",
+      provider: "cocalc",
+      object_kind: "person",
+      external_id: personExternalId,
+      reason: "remove the reviewed synthetic person source",
+    });
+    if (!removePreview.preview) throw Error("expected preview");
+    committed(
+      await store.mutateExternalReference({
+        account_id: actor,
+        organization: organizationId,
+        action: "remove",
+        provider: "cocalc",
+        object_kind: "person",
+        external_id: personExternalId,
+        reason: "remove the reviewed synthetic person source",
+        commit: true,
+        expected_version: removePreview.expected_version,
+        idempotency_key: removePreview.idempotency_key,
+      }),
+    );
+    const unlinkPreview = await store.mutateOrganizationPerson({
+      account_id: actor,
+      organization: organizationId,
+      person: personId,
+      action: "unlink",
+      reason: "allow unlink after source binding removal",
+    });
+    if (!unlinkPreview.preview) throw Error("expected preview");
+    committed(
+      await store.mutateOrganizationPerson({
+        account_id: actor,
+        organization: organizationId,
+        person: personId,
+        action: "unlink",
+        reason: "allow unlink after source binding removal",
+        commit: true,
+        expected_version: unlinkPreview.expected_version,
+        idempotency_key: unlinkPreview.idempotency_key,
+      }),
+    );
   });
 
   it("builds a deterministic bounded daily work digest", async () => {

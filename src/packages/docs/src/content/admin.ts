@@ -584,6 +584,10 @@ cocalc admin crm organizations search --domain example.edu --json
 cocalc admin crm organizations search --zendesk-ticket 20599 --json
 cocalc admin crm organizations show CRM-2026-000123 --json
 cocalc admin crm activities list CRM-2026-000123 --json
+cocalc admin crm links list --provider cocalc \
+  --external-id source-system:organization-123 --json
+cocalc admin crm links list --provider cocalc \
+  --external-id-prefix source-system: --limit 100 --json
 cocalc admin crm digest --assignee me --json
 cocalc admin crm diagnostics --json
 ~~~
@@ -592,6 +596,15 @@ Selectors accept customer number, exact customer name, reviewed domain, email,
 and other documented human identifiers. Ambiguous selectors return bounded
 candidates instead of silently choosing a record.
 
+External-reference filters are combined. \`--external-id\` is an exact,
+case-sensitive identifier; \`--external-id-prefix\` is a literal prefix, not a
+SQL wildcard, and the two options are mutually exclusive. JSON output places
+rows in \`data.external_references\` and reports \`data.truncated\`,
+\`data.result_bytes\`, and, when another page exists, \`data.next_cursor\`.
+Repeat the same filters with \`--cursor <next_cursor>\` until
+\`data.truncated\` is false. A cursor-complete list is not a frozen database
+snapshot; repeat and compare a full scan when concurrent changes matter.
+
 ## Preview and commit
 
 Run a mutation once without \`--commit\`. Review the proposed change, warnings,
@@ -599,11 +612,13 @@ Run a mutation once without \`--commit\`. Review the proposed change, warnings,
 values and \`--commit\`:
 
 ~~~sh
+# PREVIEW ONLY — this command makes no change.
 cocalc admin crm organizations create \
   --name "Example University" --type university \
   --owner admin@example.com \
   --reason "reviewed institutional inquiry" --json
 
+# COMMIT — apply the exact reviewed preview.
 cocalc admin crm organizations create \
   --name "Example University" --type university \
   --owner admin@example.com \
@@ -636,24 +651,40 @@ means another operator changed the record; read it again and make a new review.
 Representative commands:
 
 ~~~sh
+# PREVIEW ONLY — this command makes no change.
 cocalc admin crm domains add CRM-2026-000123 example.edu \
   --kind primary --reason "domain supplied by procurement"
+# PREVIEW ONLY — this command makes no change.
 cocalc admin crm people create --name "Ada Example" \
   --organization CRM-2026-000123 --roles billing,procurement \
   --email ada@example.edu --linkedin https://www.linkedin.com/in/ada-example \
   --website https://example.edu/~ada \
   --note "Primary procurement contact for the pilot" \
   --reason "billing contact supplied by customer"
+# PREVIEW ONLY — this command makes no change.
 cocalc admin crm people update ada@example.edu \
   --x https://x.com/adaexample --timezone America/New_York \
   --reason "reviewed public contact details"
+# PREVIEW ONLY — this command makes no change.
 cocalc admin crm links add CRM-2026-000123 \
   --provider zendesk --kind ticket --external-id 20599 --verify \
   --reason "reviewed institutional inquiry"
+# PREVIEW ONLY — this command makes no change.
+cocalc admin crm links add example-customer \
+  --provider cocalc --kind person --person ada@example.com \
+  --external-id source-system:person-456 --verify \
+  --reason "reviewed source-person binding"
+# PREVIEW ONLY — this command makes no change.
+cocalc admin crm links add example-customer \
+  --provider cocalc --kind person \
+  --external-id source-system:person-789 --reject \
+  --reason "reviewed and rejected source candidate"
+# PREVIEW ONLY — this command makes no change.
 cocalc admin crm opportunities create CRM-2026-000123 \
   --name "Campus adoption pilot" --kind adoption-pilot \
   --owner admin@example.com --value 3900 --close-date 2026-09-30 \
   --reason "customer accepted pilot terms"
+# PREVIEW ONLY — this command makes no change.
 cocalc admin crm tasks create CRM-2026-000123 \
   --type procurement --assignee admin@example.com \
   --due 2026-09-01T17:00:00Z --subject "Obtain purchase order" \
@@ -662,6 +693,109 @@ cocalc admin crm tasks create CRM-2026-000123 \
 
 Run \`cocalc admin crm --help\` and each nested command's help for the full
 command tree. Every admin UI mutation has a CLI equivalent.
+
+## Complete CLI leaf-command inventory
+
+This inventory is checked against the command tree registered by the CLI. It
+lists command paths rather than every option; run a leaf command with
+\`--help\` for its exact arguments and flags. A **previewed mutation** makes no
+change unless it is repeated with the reviewed \`expected_version\`, the same
+payload and idempotency key, and \`--commit\`. A **sensitive export** does not
+mutate CRM, but it writes customer data to the requested local file and requires
+fresh authentication. A **conditional write** is read-only by default, but its
+\`--refresh\` option persists a newly computed snapshot.
+
+<!-- crm-cli-inventory:start -->
+- **read** — \`cocalc admin crm organizations list\`
+- **read** — \`cocalc admin crm organizations search\`
+- **read** — \`cocalc admin crm organizations show\`
+- **conditional write** — \`cocalc admin crm organizations metrics\`
+- **previewed mutation** — \`cocalc admin crm organizations create\`
+- **previewed mutation** — \`cocalc admin crm organizations update\`
+- **previewed mutation** — \`cocalc admin crm organizations archive\`
+- **previewed mutation** — \`cocalc admin crm organizations merge\`
+- **previewed mutation** — \`cocalc admin crm domains add\`
+- **previewed mutation** — \`cocalc admin crm domains verify\`
+- **previewed mutation** — \`cocalc admin crm domains reject\`
+- **previewed mutation** — \`cocalc admin crm domains retire\`
+- **previewed mutation** — \`cocalc admin crm domains transfer\`
+- **read** — \`cocalc admin crm people list\`
+- **read** — \`cocalc admin crm people search\`
+- **read** — \`cocalc admin crm people show\`
+- **previewed mutation** — \`cocalc admin crm people create\`
+- **previewed mutation** — \`cocalc admin crm people update\`
+- **previewed mutation** — \`cocalc admin crm people link\`
+- **previewed mutation** — \`cocalc admin crm people unlink\`
+- **read** — \`cocalc admin crm opportunities list\`
+- **read** — \`cocalc admin crm opportunities show\`
+- **previewed mutation** — \`cocalc admin crm opportunities create\`
+- **previewed mutation** — \`cocalc admin crm opportunities update\`
+- **previewed mutation** — \`cocalc admin crm opportunities transition\`
+- **read** — \`cocalc admin crm tasks list\`
+- **read** — \`cocalc admin crm tasks show\`
+- **previewed mutation** — \`cocalc admin crm tasks create\`
+- **previewed mutation** — \`cocalc admin crm tasks assign\`
+- **previewed mutation** — \`cocalc admin crm tasks reschedule\`
+- **previewed mutation** — \`cocalc admin crm tasks complete\`
+- **previewed mutation** — \`cocalc admin crm tasks cancel\`
+- **read** — \`cocalc admin crm activities list\`
+- **previewed mutation** — \`cocalc admin crm activities note\`
+- **previewed mutation** — \`cocalc admin crm activities call\`
+- **previewed mutation** — \`cocalc admin crm activities meeting\`
+- **read** — \`cocalc admin crm links list\`
+- **previewed mutation** — \`cocalc admin crm links add\`
+- **previewed mutation** — \`cocalc admin crm links remove\`
+- **previewed mutation** — \`cocalc admin crm order create\`
+- **read** — \`cocalc admin crm outreach list\`
+- **read** — \`cocalc admin crm outreach show\`
+- **read** — \`cocalc admin crm outreach preview\`
+- **previewed mutation** — \`cocalc admin crm outreach draft\`
+- **previewed mutation** — \`cocalc admin crm outreach approve\`
+- **previewed mutation** — \`cocalc admin crm outreach queue\`
+- **previewed mutation** — \`cocalc admin crm outreach pause\`
+- **previewed mutation** — \`cocalc admin crm outreach resume\`
+- **previewed mutation** — \`cocalc admin crm outreach cancel\`
+- **previewed mutation** — \`cocalc admin crm outreach retry\`
+- **previewed mutation** — \`cocalc admin crm outreach reconcile\`
+- **previewed mutation** — \`cocalc admin crm outreach delivery retry\`
+- **previewed mutation** — \`cocalc admin crm outreach delivery reconcile\`
+- **previewed mutation** — \`cocalc admin crm outreach delivery cancel\`
+- **read** — \`cocalc admin crm outreach limits\`
+- **read** — \`cocalc admin crm outreach diagnostics\`
+- **read** — \`cocalc admin crm outreach batch list\`
+- **read** — \`cocalc admin crm outreach batch show\`
+- **read** — \`cocalc admin crm outreach batch preview\`
+- **previewed mutation** — \`cocalc admin crm outreach batch add\`
+- **previewed mutation** — \`cocalc admin crm outreach batch create\`
+- **previewed mutation** — \`cocalc admin crm outreach batch update\`
+- **previewed mutation** — \`cocalc admin crm outreach batch remove\`
+- **previewed mutation** — \`cocalc admin crm outreach batch approve\`
+- **previewed mutation** — \`cocalc admin crm outreach batch queue\`
+- **previewed mutation** — \`cocalc admin crm outreach batch pause\`
+- **previewed mutation** — \`cocalc admin crm outreach batch resume\`
+- **previewed mutation** — \`cocalc admin crm outreach batch cancel\`
+- **read** — \`cocalc admin crm outreach templates list\`
+- **read** — \`cocalc admin crm outreach templates show\`
+- **previewed mutation** — \`cocalc admin crm outreach templates create\`
+- **previewed mutation** — \`cocalc admin crm outreach templates activate\`
+- **previewed mutation** — \`cocalc admin crm outreach templates retire\`
+- **read** — \`cocalc admin crm outreach suppressions list\`
+- **previewed mutation** — \`cocalc admin crm outreach suppressions add\`
+- **previewed mutation** — \`cocalc admin crm outreach suppressions revoke\`
+- **read** — \`cocalc admin crm outreach followups list\`
+- **read** — \`cocalc admin crm outreach followups show\`
+- **read** — \`cocalc admin crm outreach followups preview\`
+- **previewed mutation** — \`cocalc admin crm outreach followups send\`
+- **previewed mutation** — \`cocalc admin crm outreach followups reschedule\`
+- **previewed mutation** — \`cocalc admin crm outreach followups complete\`
+- **previewed mutation** — \`cocalc admin crm outreach followups cancel\`
+- **read** — \`cocalc admin crm outreach engagement\`
+- **read** — \`cocalc admin crm support-context\`
+- **previewed mutation** — \`cocalc admin crm backfill\`
+- **read** — \`cocalc admin crm digest\`
+- **read** — \`cocalc admin crm diagnostics\`
+- **sensitive export** — \`cocalc admin crm export\`
+<!-- crm-cli-inventory:end -->
 
 ## System boundaries
 
@@ -676,6 +810,13 @@ metadata only. Current Zendesk details are fetched on demand through the
 support API. Accepted order snapshots and issued invoices are never rewritten
 when a CRM contact or organization changes.
 
+Creating or updating a \`person\` external reference binds one reviewed
+source-person identifier to an existing CRM person. It requires \`--person\`,
+and that person must have an existing relationship to the organization named
+by the command. Relationship state does not erase identity history. Removing
+the binding may omit \`--person\`. The reference does not create a person, move
+one between organizations, or make an unreviewed identity authoritative.
+
 Person records may include a reviewed website, LinkedIn, Facebook, and X
 profile plus one bounded internal note. These fields are visible to CRM admins
 and agents. Keep the note concise and never store credentials, payment details,
@@ -687,7 +828,9 @@ relationship events instead.
 Customer discovery is candidate-only and preview-first:
 
 ~~~sh
+# PREVIEW ONLY — this command makes no change.
 cocalc admin crm backfill --limit 100 --reason "review commercial customer candidates" --json
+# COMMIT — apply the exact reviewed candidate selection.
 cocalc admin crm backfill --candidate <candidate-key> \
   --reason "reviewed order and license identity" \
   --expected-version 0 --idempotency-key <key> --commit --json
@@ -781,7 +924,7 @@ commits it. Use \`result.id\` from the committed batch response as
 \`<batch-id>\`.
 
 ~~~sh
-# Preview only: this does not create a batch.
+# PREVIEW ONLY — this command does not create a batch.
 cocalc admin crm outreach batch create \
   --name "Example University adoption pilot" \
   --purpose "Offer a reviewed institutional adoption pilot" \
@@ -789,7 +932,7 @@ cocalc admin crm outreach batch create \
   --template adoption-pilot \
   --reason "Prepare a reviewed pilot offer" --json
 
-# Commit the same proposed batch after reviewing the preview.
+# COMMIT — create the exact reviewed batch.
 cocalc admin crm outreach batch create \
   --name "Example University adoption pilot" \
   --purpose "Offer a reviewed institutional adoption pilot" \
@@ -799,13 +942,13 @@ cocalc admin crm outreach batch create \
   --expected-version <expected-version-from-preview> \
   --idempotency-key <idempotency-key-from-preview> --commit --json
 
-# Preview adding one reviewed recipient; this does not add the recipient.
+# PREVIEW ONLY — this command does not add the recipient.
 cocalc admin crm outreach batch add <batch-id> \
   --person ada@example.edu --organization CRM-2026-000123 \
   --opportunity <opportunity-id> \
   --reason "Ada is the reviewed institutional contact" --json
 
-# Commit the same recipient after reviewing the rendered proposal.
+# COMMIT — add the exact reviewed recipient.
 cocalc admin crm outreach batch add <batch-id> \
   --person ada@example.edu --organization CRM-2026-000123 \
   --opportunity <opportunity-id> \
@@ -829,17 +972,19 @@ approval commit changes the batch version, so preview queueing only after the
 approval commit succeeds; do not reuse the approval version or idempotency key.
 
 ~~~sh
-# Preview approval, then repeat it with the values returned by this preview.
+# PREVIEW ONLY — this command does not approve the batch.
 cocalc admin crm outreach approve <batch-id> \
   --reason "Reviewed exact content" --json
+# COMMIT — approve the exact reviewed batch snapshot.
 cocalc admin crm outreach approve <batch-id> \
   --reason "Reviewed exact content" \
   --expected-version <approval-expected-version> \
   --idempotency-key <approval-idempotency-key> --commit --json
 
-# Preview queueing against the newly approved batch, then commit that preview.
+# PREVIEW ONLY — this command does not queue the batch.
 cocalc admin crm outreach queue <batch-id> \
   --reason "Approved for controlled send" --json
+# COMMIT — queue the exact reviewed batch snapshot.
 cocalc admin crm outreach queue <batch-id> \
   --reason "Approved for controlled send" \
   --expected-version <queue-expected-version> \
@@ -890,11 +1035,11 @@ cocalc admin crm outreach followups list --viewed --unreplied --json
 cocalc admin crm outreach engagement <delivery-id> --json
 cocalc admin crm outreach followups preview <delivery-id> --json
 
-# Preview the reviewed same-thread follow-up mutation.
+# PREVIEW ONLY — this command does not queue the follow-up.
 cocalc admin crm outreach followups send <delivery-id> \
   --body-file follow-up.md --reason "Reviewed seven-day follow-up" --json
 
-# Commit the exact same body and reason with values from the mutation preview.
+# COMMIT — queue the exact reviewed same-thread follow-up.
 cocalc admin crm outreach followups send <delivery-id> \
   --body-file follow-up.md --reason "Reviewed seven-day follow-up" \
   --expected-version <expected-version-from-preview> \
@@ -915,13 +1060,13 @@ returns a generic confirmation page.
 ~~~sh
 cocalc admin crm outreach suppressions list --json
 
-# Preview the suppression; this does not yet block outreach.
+# PREVIEW ONLY — this command does not yet block outreach.
 cocalc admin crm outreach suppressions add --scope email \
   --value ada@example.edu --suppression-reason manual \
   --note "Requested no further proactive contact" \
   --reason "Recorded contact preference" --json
 
-# Commit the same reviewed suppression.
+# COMMIT — apply the exact reviewed suppression.
 cocalc admin crm outreach suppressions add --scope email \
   --value ada@example.edu --suppression-reason manual \
   --note "Requested no further proactive contact" \

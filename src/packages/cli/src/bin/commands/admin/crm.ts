@@ -10,6 +10,9 @@ import { Command } from "commander";
 import { COMMERCIAL_NEXT_ACTIONS } from "@cocalc/util/commercial-orders";
 import {
   CRM_DOMAIN_KINDS,
+  CRM_EXTERNAL_OBJECT_KINDS,
+  CRM_EXTERNAL_PROVIDERS,
+  CRM_EXTERNAL_REFERENCE_VERIFICATION_STATES,
   CRM_LIFECYCLE_STAGES,
   CRM_OPPORTUNITY_KINDS,
   CRM_OPPORTUNITY_STAGES,
@@ -50,6 +53,10 @@ type OutreachRecipientInput = {
 };
 
 const OUTREACH_IMPORT_MAX_ROWS = 500;
+
+function cliEnumValues(values: readonly string[]): string {
+  return values.map((value) => value.replace(/_/g, "-")).join(", ");
+}
 
 function crmCliEnvelope(data: unknown): Json {
   return {
@@ -1133,48 +1140,123 @@ function registerLinks(crm: Command, deps: CrmCommandDeps): void {
   const links = crm
     .command("links")
     .description("reviewed external-system references");
+  addPageOptions(
+    links
+      .command("list")
+      .description("list external references with cursor-complete pagination")
+      .option(
+        "--provider <provider>",
+        `external provider: ${cliEnumValues(CRM_EXTERNAL_PROVIDERS)}`,
+      )
+      .option(
+        "--kind <kind>",
+        `external object kind: ${cliEnumValues(CRM_EXTERNAL_OBJECT_KINDS)}`,
+      )
+      .option("--external-id <id>", "exact stable external identifier")
+      .option(
+        "--external-id-prefix <prefix>",
+        "literal stable external identifier prefix",
+      )
+      .option("--organization <customer>", "customer selector")
+      .option(
+        "--verification-state <state>",
+        `verification state: ${cliEnumValues(CRM_EXTERNAL_REFERENCE_VERIFICATION_STATES)}`,
+      ),
+  ).action(async (opts: any, cmd: Command) => {
+    const externalId = `${opts.externalId ?? ""}`.trim() || undefined;
+    const externalIdPrefix =
+      `${opts.externalIdPrefix ?? ""}`.trim() || undefined;
+    if (externalId && externalIdPrefix) {
+      throw Error(
+        "--external-id and --external-id-prefix are mutually exclusive",
+      );
+    }
+    return deps.withContext(cmd, "admin crm links list", async (ctx) =>
+      ctx.hub.adminCrm.listExternalReferences({
+        ...page(opts),
+        provider: opts.provider
+          ? enumValue(opts.provider, CRM_EXTERNAL_PROVIDERS, "--provider")
+          : undefined,
+        object_kind: opts.kind
+          ? enumValue(opts.kind, CRM_EXTERNAL_OBJECT_KINDS, "--kind")
+          : undefined,
+        external_id: externalId,
+        external_id_prefix: externalIdPrefix,
+        organization: `${opts.organization ?? ""}`.trim() || undefined,
+        verification_state: opts.verificationState
+          ? enumValue(
+              opts.verificationState,
+              CRM_EXTERNAL_REFERENCE_VERIFICATION_STATES,
+              "--verification-state",
+            )
+          : undefined,
+        reason: readReason(opts.reason, "Review CRM external references"),
+      }),
+    );
+  });
   for (const commandName of ["add", "remove"] as const) {
     addMutationOptions(
       links
         .command(`${commandName} <organization>`)
         .description(`preview or ${commandName} an external reference`)
-        .requiredOption("--provider <provider>", "zendesk, stripe, or cocalc")
+        .requiredOption(
+          "--provider <provider>",
+          `external provider: ${cliEnumValues(CRM_EXTERNAL_PROVIDERS)}`,
+        )
         .requiredOption(
           "--kind <kind>",
-          "ticket, customer, account, commercial-order, site-license, or project",
+          `external object kind: ${cliEnumValues(CRM_EXTERNAL_OBJECT_KINDS)}`,
         )
         .requiredOption("--external-id <id>", "stable external identifier")
         .option("--person <person>", "contact selector")
         .option("--opportunity <opportunity>", "opportunity selector")
         .option("--label <text>", "redacted display label")
         .option("--metadata-file <path>", "bounded JSON metadata")
-        .option("--verify", "mark the link reviewed and verified"),
+        .option("--verify", "mark the link reviewed and verified")
+        .option("--reject", "mark the reviewed link rejected")
+        .addHelpText(
+          "after",
+          "\nWhen --kind is person, --person is required when adding or verifying and must belong to <organization>; reject always stores an unbound identity, and remove may omit it.\n",
+        ),
     ).action(async (organization: string, opts: any, cmd: Command) =>
-      deps.withContext(
-        cmd,
-        `admin crm links ${commandName}`,
-        async (ctx) =>
-          await ctx.hub.adminCrm.mutateExternalReference(
-            mutationRequest(`external-reference.${commandName}`, opts, {
-              organization,
-              action:
-                commandName === "remove"
-                  ? "remove"
+      deps.withContext(cmd, `admin crm links ${commandName}`, async (ctx) => {
+        if (opts.verify && opts.reject) {
+          throw Error("--verify and --reject are mutually exclusive");
+        }
+        if (commandName === "remove" && (opts.verify || opts.reject)) {
+          throw Error("--verify and --reject cannot be used with links remove");
+        }
+        return await ctx.hub.adminCrm.mutateExternalReference(
+          mutationRequest(`external-reference.${commandName}`, opts, {
+            organization,
+            action:
+              commandName === "remove"
+                ? "remove"
+                : opts.reject
+                  ? "reject"
                   : opts.verify
                     ? "verify"
                     : "add",
-              provider: normalizeState(opts.provider),
-              object_kind: normalizeState(opts.kind),
-              external_id: opts.externalId,
-              person: opts.person,
-              opportunity: opts.opportunity,
-              label: opts.label,
-              metadata: opts.metadataFile
-                ? await readJson(opts.metadataFile)
-                : undefined,
-            }),
-          ),
-      ),
+            provider: enumValue(
+              opts.provider,
+              CRM_EXTERNAL_PROVIDERS,
+              "--provider",
+            ),
+            object_kind: enumValue(
+              opts.kind,
+              CRM_EXTERNAL_OBJECT_KINDS,
+              "--kind",
+            ),
+            external_id: opts.externalId,
+            person: opts.person,
+            opportunity: opts.opportunity,
+            label: opts.label,
+            metadata: opts.metadataFile
+              ? await readJson(opts.metadataFile)
+              : undefined,
+          }),
+        );
+      }),
     );
   }
 }

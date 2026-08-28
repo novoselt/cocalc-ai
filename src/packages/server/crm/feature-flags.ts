@@ -4,23 +4,15 @@
  */
 
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
+import {
+  CRM_FEATURE_FLAGS,
+  type CrmCapability,
+  type CrmFeatureFlagName,
+  type CrmFeatureFlagSnapshot,
+} from "@cocalc/util/crm";
 
-export const CRM_FLAGS = {
-  visible: "crm_visible",
-  mutate: "crm_mutations_enabled",
-  pipeline: "crm_pipeline_mutations_enabled",
-  zendesk: "crm_zendesk_linking_enabled",
-  commercial: "crm_commercial_integration_enabled",
-  metrics: "crm_metric_projections_enabled",
-  export: "crm_exports_enabled",
-  backfill: "crm_backfill_enabled",
-  outreach: "crm_outreach_enabled",
-  outreachMutate: "crm_outreach_mutations_enabled",
-  outreachDelivery: "crm_outreach_delivery_enabled",
-  outreachWebhook: "crm_outreach_webhook_enabled",
-} as const;
-
-export type CrmCapability = keyof typeof CRM_FLAGS;
+export const CRM_FLAGS = CRM_FEATURE_FLAGS;
+export type { CrmCapability };
 
 const READ_ACTIONS = new Set([
   "listOrganizations",
@@ -28,6 +20,7 @@ const READ_ACTIONS = new Set([
   "getSupportContext",
   "getOrganization",
   "getCustomerTimeline",
+  "listExternalReferences",
   "listPeople",
   "searchPeople",
   "getPerson",
@@ -123,9 +116,18 @@ export function crmActionCapabilities(
     return ["visible", "mutate", "pipeline", "commercial"];
   }
   if (action === "mutateExternalReference") {
-    const capability =
-      request.provider === "zendesk" ? "zendesk" : "commercial";
-    return ["visible", "mutate", capability];
+    if (request.provider === "zendesk") {
+      return ["visible", "mutate", "zendesk"];
+    }
+    if (
+      request.provider === "stripe" ||
+      ["commercial_order", "site_license"].includes(
+        `${request.object_kind ?? ""}`,
+      )
+    ) {
+      return ["visible", "mutate", "commercial"];
+    }
+    return ["visible", "mutate"];
   }
   return ["visible", "mutate"];
 }
@@ -144,11 +146,26 @@ export async function assertCrmCapability(
 export async function getCrmCapabilities(): Promise<
   Record<CrmCapability, boolean>
 > {
-  const settings = await getServerSettings();
+  const snapshot = await getCrmFeatureFlagSnapshot();
   return Object.fromEntries(
     Object.entries(CRM_FLAGS).map(([capability, setting]) => [
       capability,
-      settings[setting] === true,
+      snapshot[setting],
     ]),
   ) as Record<CrmCapability, boolean>;
+}
+
+export function crmFeatureFlagSnapshot(
+  settings: Partial<Record<CrmFeatureFlagName, unknown>>,
+): CrmFeatureFlagSnapshot {
+  return Object.fromEntries(
+    Object.values(CRM_FLAGS).map((setting) => [
+      setting,
+      settings[setting] === true,
+    ]),
+  ) as CrmFeatureFlagSnapshot;
+}
+
+export async function getCrmFeatureFlagSnapshot(): Promise<CrmFeatureFlagSnapshot> {
+  return crmFeatureFlagSnapshot(await getServerSettings());
 }

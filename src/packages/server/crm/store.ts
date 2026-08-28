@@ -22,6 +22,8 @@ import type {
   CrmDomainMutationRequest,
   CrmExportRequest,
   CrmExportResponse,
+  CrmExternalReferenceListRequest,
+  CrmExternalReferenceListResponse,
   CrmExternalReferenceMutationRequest,
   CrmMetricsRequest,
   CrmOpportunityCreateRequest,
@@ -80,10 +82,12 @@ import type {
   CrmTask,
 } from "@cocalc/util/crm";
 import {
+  CRM_SCHEMA_CONTRACT_VERSION,
   CRM_DOMAIN_KINDS,
   CRM_DOMAIN_STATES,
   CRM_EXTERNAL_OBJECT_KINDS,
   CRM_EXTERNAL_PROVIDERS,
+  CRM_EXTERNAL_REFERENCE_VERIFICATION_STATES,
   CRM_LIFECYCLE_STAGES,
   CRM_OPPORTUNITY_KINDS,
   CRM_OPPORTUNITY_STAGES,
@@ -93,6 +97,7 @@ import {
   CRM_TASK_TYPES,
 } from "@cocalc/util/crm";
 import { isValidUUID } from "@cocalc/util/misc";
+import { getCrmRuntimeContract } from "./runtime-contract";
 
 type Queryable = PoolClient | ReturnType<typeof getPool>;
 type Json = Record<string, unknown>;
@@ -321,6 +326,51 @@ function decodeCursor(
   }
 }
 
+type ExternalReferenceCursor = Pick<
+  CrmExternalReference,
+  "provider" | "object_kind" | "external_id"
+>;
+
+function encodeExternalReferenceCursor({
+  provider,
+  object_kind,
+  external_id,
+}: ExternalReferenceCursor): string {
+  return Buffer.from(
+    JSON.stringify({ provider, object_kind, external_id }),
+  ).toString("base64url");
+}
+
+function decodeExternalReferenceCursor(
+  cursor?: string,
+): ExternalReferenceCursor | undefined {
+  if (!cursor) return;
+  try {
+    const value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+    if (
+      typeof value.provider !== "string" ||
+      typeof value.object_kind !== "string" ||
+      typeof value.external_id !== "string"
+    ) {
+      throw Error();
+    }
+    assertEnum(value.provider, CRM_EXTERNAL_PROVIDERS, "cursor provider");
+    assertEnum(
+      value.object_kind,
+      CRM_EXTERNAL_OBJECT_KINDS,
+      "cursor object_kind",
+    );
+    if (!value.external_id || value.external_id.length > 500) throw Error();
+    return value as ExternalReferenceCursor;
+  } catch {
+    throw Error("invalid CRM external-reference cursor");
+  }
+}
+
+function escapeLikeLiteral(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
+}
+
 function truncateRows<T>(
   rows: T[],
   maxBytes: number,
@@ -411,6 +461,24 @@ function externalReferenceRow(row: any): CrmExternalReference {
     metadata: row.metadata ?? {},
     created_at: isoRequired(row.created_at),
     updated_at: isoRequired(row.updated_at),
+  };
+}
+
+function externalReferenceListItem(
+  row: any,
+): CrmExternalReferenceListResponse["external_references"][number] {
+  const {
+    organization_customer_number,
+    organization_display_name,
+    ...reference
+  } = row;
+  return {
+    reference: externalReferenceRow(reference),
+    organization: {
+      id: row.organization_id,
+      customer_number: organization_customer_number,
+      display_name: organization_display_name,
+    },
   };
 }
 
@@ -506,6 +574,75 @@ async function resolvePersonId(
       candidates: rows,
     });
   return rows[0].id;
+}
+
+async function assertPersonOrganizationRelationship(
+  db: Queryable,
+  organizationId: string,
+  personId: string,
+  lock = false,
+): Promise<void> {
+  const { rows } = await db.query(
+    `SELECT id FROM crm_organization_people
+      WHERE organization_id=$1 AND person_id=$2
+      ${lock ? "FOR SHARE" : ""}`,
+    [organizationId, personId],
+  );
+  if (rows[0]) return;
+  throw Object.assign(
+    Error(
+      "a person external reference requires a relationship to the selected organization",
+    ),
+    { code: 409 },
+  );
+}
+
+async function assertPersonRelationshipCanBeUnlinked(
+  db: Queryable,
+  organizationId: string,
+  personId: string,
+  lock = false,
+): Promise<void> {
+  if (lock) {
+    await db.query(
+      `SELECT id FROM crm_organization_people
+        WHERE organization_id=$1 AND person_id=$2
+        FOR UPDATE`,
+      [organizationId, personId],
+    );
+  }
+  const { rows } = await db.query(
+    `SELECT id FROM crm_external_references
+      WHERE organization_id=$1 AND person_id=$2
+      LIMIT 1`,
+    [organizationId, personId],
+  );
+  if (!rows[0]) return;
+  throw Object.assign(
+    Error(
+      "remove the person's external references before unlinking the organization relationship",
+    ),
+    { code: 409 },
+  );
+}
+
+async function assertOpportunityOrganization(
+  db: Queryable,
+  organizationId: string,
+  opportunityId: string,
+  lock = false,
+): Promise<void> {
+  const { rows } = await db.query(
+    `SELECT id FROM crm_opportunities
+      WHERE id=$1 AND organization_id=$2
+      ${lock ? "FOR SHARE" : ""}`,
+    [opportunityId, organizationId],
+  );
+  if (rows[0]) return;
+  throw Object.assign(
+    Error("the selected opportunity does not belong to the organization"),
+    { code: 409 },
+  );
 }
 
 async function resolveOpportunityId(
@@ -1186,7 +1323,15 @@ export async function listPeople(
   if (opts.search?.trim()) {
     values.push(`%${opts.search.trim()}%`);
     where.push(
-      `(p.id::text ILIKE $${values.length} OR p.display_name ILIKE $${values.length} OR EXISTS (SELECT 1 FROM crm_person_emails e WHERE e.person_id=p.id AND e.normalized_email ILIKE $${values.length}))`,
+      `(p.id::text ILIKE $${values.length} OR p.display_name ILIKE $${values.length}
+        OR EXISTS (SELECT 1 FROM crm_person_emails e WHERE e.person_id=p.id AND e.normalized_email ILIKE $${values.length})
+        OR EXISTS (
+          SELECT 1 FROM crm_external_references x
+           WHERE x.person_id=p.id
+             AND x.object_kind='person'
+             AND x.verification_state='verified'
+             AND (x.external_id ILIKE $${values.length} OR x.label ILIKE $${values.length})
+        ))`,
     );
   }
   if (opts.status) {
@@ -1354,6 +1499,94 @@ export async function getTask(opts: {
 }): Promise<CrmTask> {
   await prepareRead(opts.reason);
   return await loadTask(getPool(), await resolveTaskId(getPool(), opts.task));
+}
+
+export async function listExternalReferences(
+  opts: CrmExternalReferenceListRequest,
+): Promise<CrmExternalReferenceListResponse> {
+  await prepareRead(opts.reason);
+  if (opts.external_id != null && opts.external_id_prefix != null) {
+    throw Error("external_id and external_id_prefix are mutually exclusive");
+  }
+  const values: unknown[] = [];
+  const where: string[] = [];
+  const add = (clause: string, value: unknown) => {
+    values.push(value);
+    where.push(clause.replace("?", `$${values.length}`));
+  };
+  if (opts.provider != null) {
+    add(
+      "x.provider=?",
+      assertEnum(opts.provider, CRM_EXTERNAL_PROVIDERS, "provider"),
+    );
+  }
+  if (opts.object_kind != null) {
+    add(
+      "x.object_kind=?",
+      assertEnum(opts.object_kind, CRM_EXTERNAL_OBJECT_KINDS, "object_kind"),
+    );
+  }
+  if (opts.external_id != null) {
+    add("x.external_id=?", bounded(opts.external_id, "external_id", 500));
+  }
+  if (opts.external_id_prefix != null) {
+    const prefix = bounded(opts.external_id_prefix, "external_id_prefix", 500);
+    add("x.external_id LIKE ? ESCAPE E'\\\\'", `${escapeLikeLiteral(prefix)}%`);
+  }
+  if (opts.organization != null) {
+    add(
+      "x.organization_id=?::uuid",
+      await resolveOrganizationId(getPool(), opts.organization),
+    );
+  }
+  if (opts.verification_state != null) {
+    add(
+      "x.verification_state=?",
+      assertEnum(
+        opts.verification_state,
+        CRM_EXTERNAL_REFERENCE_VERIFICATION_STATES,
+        "verification_state",
+      ),
+    );
+  }
+  const cursor = decodeExternalReferenceCursor(opts.cursor);
+  if (cursor) {
+    values.push(cursor.provider, cursor.object_kind, cursor.external_id);
+    where.push(
+      `(x.provider,x.object_kind,x.external_id)>($${values.length - 2},$${values.length - 1},$${values.length})`,
+    );
+  }
+  const limit = pageLimit(opts.limit);
+  values.push(limit + 1);
+  const { rows } = await getPool().query(
+    `SELECT x.*,o.customer_number AS organization_customer_number,
+            o.display_name AS organization_display_name
+       FROM crm_external_references x
+       JOIN crm_organizations o ON o.id=x.organization_id
+       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY x.provider,x.object_kind,x.external_id
+      LIMIT $${values.length}`,
+    values,
+  );
+  const hasMore = rows.length > limit;
+  const data = rows.slice(0, limit).map(externalReferenceListItem);
+  const boundedRows = truncateRows(data, byteLimit(opts.max_bytes));
+  if (data.length > 0 && boundedRows.rows.length === 0) {
+    throw Error(
+      "max_bytes is too small for one CRM external reference; increase max_bytes and retry",
+    );
+  }
+  const last = boundedRows.rows.at(-1);
+  const truncated = hasMore || boundedRows.truncated;
+  return {
+    external_references: boundedRows.rows,
+    next_cursor:
+      last && truncated
+        ? encodeExternalReferenceCursor(last.reference)
+        : undefined,
+    truncated,
+    result_bytes: boundedRows.bytes,
+  };
 }
 
 export async function getCustomerMetrics(
@@ -2410,6 +2643,13 @@ export async function mutateOrganizationPerson(
     : undefined;
   if (opts.action === "unlink" && !current)
     throw Error("organization contact link was not found");
+  if (opts.action === "unlink") {
+    await assertPersonRelationshipCanBeUnlinked(
+      getPool(),
+      organizationId,
+      personId,
+    );
+  }
   const roles = opts.roles ?? current?.roles ?? [];
   for (const role of roles) assertEnum(role, CRM_PERSON_ROLES, "role");
   const state = assertEnum(
@@ -2436,16 +2676,49 @@ export async function mutateOrganizationPerson(
     organizationId,
     proposed,
     resultType: "organization-person",
-    currentVersion: async () => current?.version ?? 0,
+    currentVersion: async (db) => {
+      const { rows } = await db.query<{ version: number }>(
+        "SELECT version FROM crm_organization_people WHERE organization_id=$1 AND person_id=$2",
+        [organizationId, personId],
+      );
+      return rows[0]?.version ?? 0;
+    },
     apply: async (client, eventId) => {
       if (opts.action === "unlink") {
-        await client.query("DELETE FROM crm_organization_people WHERE id=$1", [
-          current!.id,
-        ]);
-        return current!;
+        await assertPersonRelationshipCanBeUnlinked(
+          client,
+          organizationId,
+          personId,
+          true,
+        );
+        const { rows } = await client.query(
+          `DELETE FROM crm_organization_people
+            WHERE id=$1 AND version=$2
+            RETURNING *`,
+          [current!.id, opts.expected_version],
+        );
+        if (!rows[0]) {
+          throw Object.assign(
+            Error(
+              "organization contact link changed before it could be removed",
+            ),
+            { code: 409 },
+          );
+        }
+        return relationshipRow(rows[0]);
       }
       const { rows } = await client.query(
-        `INSERT INTO crm_organization_people(id,organization_id,person_id,roles,title,department,state) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(organization_id,person_id) DO UPDATE SET roles=EXCLUDED.roles,title=EXCLUDED.title,department=EXCLUDED.department,state=EXCLUDED.state,updated_at=NOW(),version=crm_organization_people.version+1 RETURNING *`,
+        `INSERT INTO crm_organization_people(id,organization_id,person_id,roles,title,department,state)
+         VALUES($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT(organization_id,person_id) DO UPDATE SET
+           roles=EXCLUDED.roles,
+           title=EXCLUDED.title,
+           department=EXCLUDED.department,
+           state=EXCLUDED.state,
+           updated_at=NOW(),
+           version=crm_organization_people.version+1
+         WHERE crm_organization_people.version=$8
+         RETURNING *`,
         [
           current?.id ?? randomUUID(),
           organizationId,
@@ -2454,8 +2727,15 @@ export async function mutateOrganizationPerson(
           proposed.title,
           proposed.department,
           proposed.state,
+          opts.expected_version,
         ],
       );
+      if (!rows[0]) {
+        throw Object.assign(
+          Error("organization contact link changed before it could be updated"),
+          { code: 409 },
+        );
+      }
       await insertActivity(client, {
         organization_id: organizationId,
         person_id: personId,
@@ -3025,14 +3305,44 @@ export async function mutateExternalReference(
     getPool(),
     opts.organization,
   );
-  const personId = opts.person
+  const resolvedPersonId = opts.person
     ? await resolvePersonId(getPool(), opts.person)
     : null;
+  const personId =
+    opts.object_kind === "person" && opts.action === "reject"
+      ? null
+      : resolvedPersonId;
+  if (opts.object_kind === "person" && opts.opportunity) {
+    throw Error("opportunity is not allowed for a person external reference");
+  }
   const opportunityId = opts.opportunity
     ? await resolveOpportunityId(getPool(), opts.opportunity)
     : null;
   assertEnum(opts.provider, CRM_EXTERNAL_PROVIDERS, "provider");
   assertEnum(opts.object_kind, CRM_EXTERNAL_OBJECT_KINDS, "object_kind");
+  if (opts.action !== "remove" && personId) {
+    await assertPersonOrganizationRelationship(
+      getPool(),
+      organizationId,
+      personId,
+    );
+  }
+  if (opts.action !== "remove" && opportunityId) {
+    await assertOpportunityOrganization(
+      getPool(),
+      organizationId,
+      opportunityId,
+    );
+  }
+  if (
+    opts.object_kind === "person" &&
+    opts.action !== "reject" &&
+    opts.action !== "remove"
+  ) {
+    if (!personId) {
+      throw Error("person is required for a person external reference");
+    }
+  }
   let externalId = bounded(opts.external_id, "external_id", 500);
   if (opts.provider === "cocalc" && opts.object_kind === "commercial_order") {
     const { rows } = await getPool().query<{
@@ -3100,6 +3410,20 @@ export async function mutateExternalReference(
       },
     );
   }
+  if (
+    opts.object_kind === "person" &&
+    opts.action !== "reject" &&
+    opts.action !== "remove" &&
+    current?.person_id != null &&
+    current.person_id !== personId
+  ) {
+    throw Object.assign(
+      Error(
+        `${opts.provider} person '${externalId}' is already linked to another person; remove that reviewed link before reassigning it`,
+      ),
+      { code: 409, current_person_id: current.person_id },
+    );
+  }
   const state =
     opts.action === "verify"
       ? "verified"
@@ -3138,12 +3462,43 @@ export async function mutateExternalReference(
     organizationId,
     proposed,
     resultType: "external-reference",
-    currentVersion: async () => current?.version ?? 0,
+    currentVersion: async (db) => {
+      const { rows } = await db.query<{ version: number }>(
+        "SELECT version FROM crm_external_references WHERE provider=$1 AND object_kind=$2 AND external_id=$3",
+        [proposed.provider, proposed.object_kind, proposed.external_id],
+      );
+      return rows[0]?.version ?? 0;
+    },
     apply: async (client, eventId) => {
+      if (opts.action !== "remove" && personId) {
+        await assertPersonOrganizationRelationship(
+          client,
+          organizationId,
+          personId,
+          true,
+        );
+      }
+      if (opts.action !== "remove" && opportunityId) {
+        await assertOpportunityOrganization(
+          client,
+          organizationId,
+          opportunityId,
+          true,
+        );
+      }
       if (opts.action === "remove") {
-        await client.query("DELETE FROM crm_external_references WHERE id=$1", [
-          current!.id,
-        ]);
+        const removed = await client.query(
+          `DELETE FROM crm_external_references
+            WHERE id=$1 AND organization_id=$2 AND version=$3
+            RETURNING *`,
+          [current!.id, organizationId, opts.expected_version],
+        );
+        if (!removed.rows[0]) {
+          throw Object.assign(
+            Error("CRM external reference changed before it could be removed"),
+            { code: 409 },
+          );
+        }
         if (
           opts.provider === "cocalc" &&
           opts.object_kind === "commercial_order"
@@ -3157,10 +3512,27 @@ export async function mutateExternalReference(
             "UPDATE site_licenses SET crm_organization_id=NULL WHERE id=$1 AND crm_organization_id=$2",
             [externalId, organizationId],
           );
-        return current!;
+        return externalReferenceRow(removed.rows[0]);
       }
       const { rows } = await client.query(
-        `INSERT INTO crm_external_references(id,organization_id,person_id,opportunity_id,provider,object_kind,external_id,label,metadata,verification_state,created_by_account_id,updated_by_account_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11) ON CONFLICT(provider,object_kind,external_id) DO UPDATE SET organization_id=EXCLUDED.organization_id,person_id=EXCLUDED.person_id,opportunity_id=EXCLUDED.opportunity_id,label=EXCLUDED.label,metadata=EXCLUDED.metadata,verification_state=EXCLUDED.verification_state,updated_by_account_id=EXCLUDED.updated_by_account_id,updated_at=NOW(),version=crm_external_references.version+1 RETURNING *`,
+        `INSERT INTO crm_external_references(id,organization_id,person_id,opportunity_id,provider,object_kind,external_id,label,metadata,verification_state,created_by_account_id,updated_by_account_id)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)
+         ON CONFLICT(provider,object_kind,external_id) DO UPDATE SET
+           person_id=EXCLUDED.person_id,
+           opportunity_id=EXCLUDED.opportunity_id,
+           label=EXCLUDED.label,
+           metadata=EXCLUDED.metadata,
+           verification_state=EXCLUDED.verification_state,
+           updated_by_account_id=EXCLUDED.updated_by_account_id,
+           updated_at=NOW(),
+           version=crm_external_references.version+1
+         WHERE crm_external_references.organization_id=EXCLUDED.organization_id
+           AND crm_external_references.version=$12
+           AND (EXCLUDED.verification_state='rejected'
+             OR crm_external_references.object_kind<>'person'
+             OR crm_external_references.person_id IS NULL
+             OR crm_external_references.person_id=EXCLUDED.person_id)
+         RETURNING *`,
         [
           current?.id ?? randomUUID(),
           organizationId,
@@ -3173,19 +3545,65 @@ export async function mutateExternalReference(
           proposed.metadata,
           proposed.verification_state,
           opts.account_id,
+          opts.expected_version,
         ],
       );
-      if (opts.provider === "cocalc" && opts.object_kind === "commercial_order")
-        await client.query(
-          "UPDATE commercial_orders SET crm_organization_id=$1 WHERE id=$2",
-          [organizationId, externalId],
+      if (!rows[0]) {
+        const conflict = await client.query<{
+          organization_id: string;
+          version: number;
+        }>(
+          "SELECT organization_id,version FROM crm_external_references WHERE provider=$1 AND object_kind=$2 AND external_id=$3",
+          [proposed.provider, proposed.object_kind, proposed.external_id],
         );
-      if (opts.provider === "cocalc" && opts.object_kind === "site_license")
-        await client.query(
-          "UPDATE site_licenses SET crm_organization_id=$1 WHERE id=$2",
-          [organizationId, externalId],
+        const actual = conflict.rows[0];
+        const message =
+          actual?.organization_id !== organizationId
+            ? `${opts.provider} ${opts.object_kind} '${externalId}' became linked to another customer`
+            : "CRM external reference changed before it could be updated";
+        throw Object.assign(Error(message), {
+          code: 409,
+          expected_version: opts.expected_version,
+          current_version: actual?.version,
+          current_organization_id: actual?.organization_id,
+        });
+      }
+      if (
+        opts.provider === "cocalc" &&
+        ["commercial_order", "site_license"].includes(opts.object_kind)
+      ) {
+        const table =
+          opts.object_kind === "commercial_order"
+            ? "commercial_orders"
+            : "site_licenses";
+        const backlink = await client.query(
+          `UPDATE ${table}
+              SET crm_organization_id=$1
+            WHERE id=$2
+              AND (crm_organization_id IS NULL OR crm_organization_id=$3)
+            RETURNING id`,
+          [
+            proposed.verification_state === "verified" ? organizationId : null,
+            externalId,
+            organizationId,
+          ],
         );
+        if (!backlink.rows[0]) {
+          throw Object.assign(
+            Error(
+              `${opts.object_kind} changed or was linked to another customer`,
+            ),
+            { code: 409 },
+          );
+        }
+      }
       const result = externalReferenceRow(rows[0]);
+      const activityVerb =
+        proposed.verification_state === "verified"
+          ? "Verified"
+          : proposed.verification_state === "rejected"
+            ? "Rejected"
+            : "Suggested";
       await insertActivity(client, {
         organization_id: organizationId,
         person_id: personId,
@@ -3206,7 +3624,7 @@ export async function mutateExternalReference(
               : "mutation",
         source: "crm",
         source_id: eventId,
-        summary: `Linked ${opts.provider} ${opts.object_kind} ${externalId}`,
+        summary: `${activityVerb} ${opts.provider} ${opts.object_kind} ${externalId}`,
         details: opts.reason,
         actor_account_id: opts.account_id,
         occurred_at: new Date().toISOString(),
@@ -3551,6 +3969,7 @@ export async function getDiagnostics(
   await prepareRead(opts.reason);
   const limit = Math.min(opts.limit ?? 100, 500);
   const [
+    runtimeContract,
     duplicates,
     conflicts,
     unowned,
@@ -3566,6 +3985,7 @@ export async function getDiagnostics(
     failedExternalSync,
     stale,
   ] = await Promise.all([
+    getCrmRuntimeContract(),
     getPool().query(
       `SELECT normalized_domain,array_agg(organization_id) organization_ids,count(*)::integer count FROM crm_organization_domains WHERE state='verified' GROUP BY normalized_domain HAVING count(*)>1 LIMIT $1`,
       [limit],
@@ -3650,6 +4070,7 @@ export async function getDiagnostics(
   ]);
   return {
     checked_at: new Date().toISOString(),
+    runtime_contract: runtimeContract,
     duplicate_verified_domains: duplicates.rows,
     conflicting_external_references: conflicts.rows,
     active_organizations_without_owner: unowned.organizations,
@@ -3879,7 +4300,7 @@ export async function backfill(
         const preview = await mutateExternalReference({
           account_id: actor,
           organization: organization.id,
-          action: "add",
+          action: "verify",
           ...reference,
           reason: opts.reason,
         });
@@ -3887,7 +4308,7 @@ export async function backfill(
         await mutateExternalReference({
           account_id: actor,
           organization: organization.id,
-          action: "add",
+          action: "verify",
           ...reference,
           reason: opts.reason,
           commit: true,
@@ -3959,7 +4380,7 @@ export async function exportData(
     bytes += size;
   }
   return {
-    schema_version: 1,
+    schema_version: CRM_SCHEMA_CONTRACT_VERSION,
     generated_at: new Date().toISOString(),
     sensitive: true,
     organizations,

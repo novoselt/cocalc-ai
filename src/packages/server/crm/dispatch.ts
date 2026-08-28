@@ -22,6 +22,7 @@ import {
   getSupportContext,
   getTask,
   getTimeline,
+  listExternalReferences,
   listOpportunities,
   listOrganizations,
   listPeople,
@@ -96,6 +97,8 @@ export async function dispatchCrmSeedRequest(
       return await getOrganization(opts);
     case "getCustomerTimeline":
       return await getTimeline(opts);
+    case "listExternalReferences":
+      return await listExternalReferences(opts);
     case "listPeople":
     case "searchPeople":
       return await listPeople(opts);

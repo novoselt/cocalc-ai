@@ -35,6 +35,7 @@ import type {
   CrmExternalObjectKind,
   CrmExternalProvider,
   CrmExternalReference,
+  CrmExternalReferenceListItem,
   CrmLifecycleStage,
   CrmMutationResult,
   CrmOpportunity,
@@ -111,6 +112,22 @@ export interface CrmOrganizationSearchRequest
   zendesk_ticket_id?: number;
   commercial_order?: string;
   site_license_id?: string;
+}
+
+export interface CrmExternalReferenceListRequest extends CrmPageRequest {
+  provider?: CrmExternalProvider;
+  object_kind?: CrmExternalObjectKind;
+  external_id?: string;
+  external_id_prefix?: string;
+  organization?: string;
+  verification_state?: CrmExternalReference["verification_state"];
+}
+
+export interface CrmExternalReferenceListResponse {
+  external_references: CrmExternalReferenceListItem[];
+  next_cursor?: string;
+  truncated: boolean;
+  result_bytes: number;
 }
 
 export interface CrmSupportContextRequest extends CrmReadRequest {
@@ -217,7 +234,7 @@ export interface CrmExportRequest extends CrmPageRequest {
 }
 
 export interface CrmExportResponse {
-  schema_version: 1;
+  schema_version: typeof import("@cocalc/util/crm").CRM_SCHEMA_CONTRACT_VERSION;
   generated_at: string;
   sensitive: true;
   organizations: CrmCustomer360[];
@@ -702,6 +719,9 @@ export interface AdminCrmApi {
   getCustomerTimeline: (
     opts: CrmTimelineRequest,
   ) => Promise<CrmTimelineResponse>;
+  listExternalReferences: (
+    opts: CrmExternalReferenceListRequest,
+  ) => Promise<CrmExternalReferenceListResponse>;
   listPeople: (opts: CrmPersonListRequest) => Promise<CrmPersonListResponse>;
   searchPeople: (opts: CrmPersonListRequest) => Promise<CrmPersonListResponse>;
   getPerson: (opts: CrmPersonGetRequest) => Promise<CrmPerson>;
@@ -856,6 +876,7 @@ export const adminCrm = {
   getSupportContext: authFirstRequireAccount,
   getOrganization: authFirstRequireAccount,
   getCustomerTimeline: authFirstRequireAccount,
+  listExternalReferences: authFirstRequireAccount,
   listPeople: authFirstRequireAccount,
   searchPeople: authFirstRequireAccount,
   getPerson: authFirstRequireAccount,

@@ -3,6 +3,50 @@
  *  License: MS-RSL - see LICENSE.md for details
  */
 
+import type { BuildIdentity } from "./build-identity";
+
+/**
+ * Increment when an importer must treat the CRM data/API shape as a new
+ * contract rather than replaying a plan prepared against an older shape.
+ */
+export const CRM_SCHEMA_CONTRACT_VERSION = 1 as const;
+
+export const CRM_FEATURE_FLAGS = {
+  visible: "crm_visible",
+  mutate: "crm_mutations_enabled",
+  pipeline: "crm_pipeline_mutations_enabled",
+  zendesk: "crm_zendesk_linking_enabled",
+  commercial: "crm_commercial_integration_enabled",
+  metrics: "crm_metric_projections_enabled",
+  export: "crm_exports_enabled",
+  backfill: "crm_backfill_enabled",
+  outreach: "crm_outreach_enabled",
+  outreachMutate: "crm_outreach_mutations_enabled",
+  outreachDelivery: "crm_outreach_delivery_enabled",
+  outreachWebhook: "crm_outreach_webhook_enabled",
+  outreachReadReceipts: "crm_outreach_read_receipts_enabled",
+} as const;
+
+export type CrmCapability = keyof typeof CRM_FEATURE_FLAGS;
+export type CrmFeatureFlagName = (typeof CRM_FEATURE_FLAGS)[CrmCapability];
+export type CrmFeatureFlagSnapshot = Record<CrmFeatureFlagName, boolean>;
+
+export type CrmServerBuildIdentity = {
+  source:
+    | "launchpad-environment"
+    | "star-release-metadata"
+    | "star-environment"
+    | "package-metadata";
+} & {
+  [Key in keyof BuildIdentity]-?: NonNullable<BuildIdentity[Key]> | null;
+};
+
+export interface CrmRuntimeContract {
+  crm_schema_contract_version: typeof CRM_SCHEMA_CONTRACT_VERSION;
+  server_build: CrmServerBuildIdentity;
+  feature_flags: CrmFeatureFlagSnapshot;
+}
+
 export const CRM_ORGANIZATION_TYPES = [
   "university",
   "college",
@@ -131,6 +175,7 @@ export type CrmExternalProvider = (typeof CRM_EXTERNAL_PROVIDERS)[number];
 
 export const CRM_EXTERNAL_OBJECT_KINDS = [
   "organization",
+  "person",
   "requester",
   "ticket",
   "customer",
@@ -140,6 +185,15 @@ export const CRM_EXTERNAL_OBJECT_KINDS = [
   "project",
 ] as const;
 export type CrmExternalObjectKind = (typeof CRM_EXTERNAL_OBJECT_KINDS)[number];
+
+export const CRM_EXTERNAL_REFERENCE_VERIFICATION_STATES = [
+  "suggested",
+  "verified",
+  "rejected",
+  "retired",
+] as const;
+export type CrmExternalReferenceVerificationState =
+  (typeof CRM_EXTERNAL_REFERENCE_VERIFICATION_STATES)[number];
 
 export interface CrmOrganization {
   id: string;
@@ -249,12 +303,21 @@ export interface CrmExternalReference {
   external_id: string;
   label?: string | null;
   metadata: Record<string, unknown>;
-  verification_state: "suggested" | "verified" | "rejected" | "retired";
+  verification_state: CrmExternalReferenceVerificationState;
   created_by_account_id: string;
   updated_by_account_id: string;
   created_at: string;
   updated_at: string;
   version: number;
+}
+
+export interface CrmExternalReferenceListItem {
+  reference: CrmExternalReference;
+  organization: {
+    id: string;
+    customer_number: string;
+    display_name: string;
+  };
 }
 
 export interface CrmOpportunity {
@@ -396,6 +459,7 @@ export interface CrmCustomer360 {
 
 export interface CrmDiagnostics {
   checked_at: string;
+  runtime_contract: CrmRuntimeContract;
   duplicate_verified_domains: Array<Record<string, unknown>>;
   conflicting_external_references: Array<Record<string, unknown>>;
   active_organizations_without_owner: CrmOrganizationSummary[];
