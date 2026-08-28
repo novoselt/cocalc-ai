@@ -2,6 +2,35 @@
 
 ## Reporting a Vulnerability
 
-Please report suspected security vulnerabilities to [security@cocalc.ai](mailto:security@cocalc.ai) or draft a [security advisory](https://github.com/sagemathinc/cocalc/security/advisories/new)
+Please report suspected security vulnerabilities using
+[GitHub's private vulnerability reporting form](https://github.com/sagemathinc/cocalc-ai/security/advisories/new).
+If you cannot use GitHub's private reporting workflow, email
+[security@cocalc.ai](mailto:security@cocalc.ai).
 
-We do not offer a bug bounty program.
+Do not disclose a suspected vulnerability in a public issue, discussion, pull
+request, commit, or branch before coordinating with the maintainers. Include
+enough information for us to understand and reproduce the issue, such as the
+affected component, impact, reproduction steps, and any relevant logs or
+screenshots. Do not include credentials, personal data, or data belonging to
+other users.
+
+We will coordinate disclosure with the reporter after a fix or mitigation is
+available. We do not offer a bug bounty program.
+
+## Maintainer Workflow
+
+Maintainers must handle non-public security fixes through a draft repository
+security advisory:
+
+1. Create or accept a draft advisory under the repository's Security tab.
+2. Add only the collaborators needed to investigate and review the issue.
+3. Create the advisory's temporary private fork and develop the fix there.
+4. Open the pull request from the advisory page. Do not push the fix or its
+   details to the public repository before deployment.
+5. Validate locally because GitHub Actions and other integrations do not run
+   on temporary private forks.
+6. Merge the advisory pull request, deploy the mitigation promptly, and only
+   then publish the advisory or otherwise disclose the vulnerability.
+
+See GitHub's documentation on
+[collaborating in a temporary private fork](https://docs.github.com/code-security/security-advisories/working-with-repository-security-advisories/collaborating-in-a-temporary-private-fork-to-resolve-a-repository-security-vulnerability).
