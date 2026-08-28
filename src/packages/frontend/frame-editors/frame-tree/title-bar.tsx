@@ -47,6 +47,7 @@ import { AvailableFeatures } from "@cocalc/frontend/project_configuration";
 import { copy, field_cmp, path_split, trunc_middle } from "@cocalc/util/misc";
 import { COLORS } from "@cocalc/util/theme";
 import { BaseEditorActions as Actions } from "../base-editor/actions-base";
+import { useMinimapSettingsRevision } from "@cocalc/frontend/components/minimap/settings";
 import { is_safari } from "../generic/browser";
 import AgentTitleBarButton from "../ai/agent-title-bar-button";
 import {
@@ -65,9 +66,11 @@ import { ConnectionStatus, EditorDescription, EditorSpec } from "./types";
 import {
   frameTitleBarAgentButtonVisible,
   frameTitleBarMenuVisible,
+  frameTitleBarRunButtonVisible,
   frameTitleBarTerminalButtonVisible,
   frameTitleBarTimeTravelButtonVisible,
 } from "./read-only-title-bar";
+import RunButton from "./run-button";
 
 // Certain special frame editors (e.g., for latex) have extra
 // actions that are not defined in the base code editor actions.
@@ -250,6 +253,10 @@ export function FrameTitleBar(props: FrameTitleBarProps) {
   ]);
   const rtc_status: "loading" | "live" | "error" | "reconnecting" | undefined =
     useRedux([props.editor_actions.name, "rtc_status"]);
+
+  // Minimap preferences live in localStorage, not redux, so the Minimap menu
+  // needs an explicit nudge to re-render with the current state.
+  useMinimapSettingsRevision();
 
   const manageCommands = useMemo(
     () =>
@@ -619,6 +626,32 @@ export function FrameTitleBar(props: FrameTitleBarProps) {
     );
   }
 
+  function renderRunButton(noLabel): Rendered {
+    if (
+      !frameTitleBarRunButtonVisible({
+        readOnlyPreview: read_only_preview,
+        terminalsDisabled: !!student_project_functionality.disableTerminals,
+      }) ||
+      !manageCommands.isVisible("run_code")
+    ) {
+      return;
+    }
+    return (
+      <RunButton
+        key={"run-button"}
+        id={props.id}
+        // A cm frame can show a different file than the main editor (e.g. a
+        // LaTeX \input'ed subfile), and that is the file we run.
+        path={props.editor_actions?.path ?? props.path}
+        actions={props.actions}
+        documentActions={props.editor_actions}
+        noLabel={noLabel}
+        size={button_size()}
+        style={button_style()}
+      />
+    );
+  }
+
   function renderTimeTravel(noLabel): Rendered {
     if (
       !frameTitleBarTimeTravelButtonVisible({
@@ -751,6 +784,8 @@ export function FrameTitleBar(props: FrameTitleBarProps) {
     if ((x = renderSaveButton(noLabel))) v.push(x);
     if ((x = renderTimeTravel(noLabel))) v.push(x);
     if ((x = renderAssistant(noLabel, where))) v.push(x);
+    // Run goes last, so adding it does not shift the buttons users know.
+    if ((x = renderRunButton(noLabel))) v.push(x);
     if (v.length == 1) return v[0];
     if (v.length > 0) {
       return (
@@ -1064,6 +1099,7 @@ export function FrameTitleBar(props: FrameTitleBarProps) {
         >
           <Button
             type="text"
+            aria-label="More frame actions"
             style={{
               fontSize: "14pt",
               padding: "0 5px",
@@ -1071,7 +1107,7 @@ export function FrameTitleBar(props: FrameTitleBarProps) {
               background: popoverOpen ? "#eee" : undefined,
             }}
           >
-            <Icon name="ellipsis" rotate="90" />
+            <Icon name="ellipsis-vertical" />
           </Button>
         </div>
       </Popover>

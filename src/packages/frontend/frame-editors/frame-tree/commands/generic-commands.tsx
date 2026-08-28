@@ -15,12 +15,9 @@ import { Icon } from "@cocalc/frontend/components";
 import AIAvatar from "@cocalc/frontend/components/ai-avatar";
 import { IS_MACOS } from "@cocalc/frontend/feature";
 import { FORMAT_SOURCE_ICON } from "@cocalc/frontend/frame-editors/frame-tree/config";
-import {
-  adjustCodeMirrorMinimapWidth,
-  openCodeMirrorMinimapSettingsDialog,
-  setCodeMirrorMinimapEnabled,
-  toggleCodeMirrorMinimapEnabled,
-} from "@cocalc/frontend/frame-editors/code-editor/minimap-settings";
+import { canRunFile } from "@cocalc/frontend/frame-editors/code-editor/run-commands";
+import { codeMirrorMinimapSettings } from "@cocalc/frontend/frame-editors/code-editor/minimap-settings";
+import { minimapMenuChildren } from "./minimap-menu";
 import {
   redo as chatRedo,
   undo as chatUndo,
@@ -327,66 +324,27 @@ addCommands({
     icon: "arrow-down",
     label: "Scroll to bottom",
   },
-  toggle_minimap: {
+  minimap: {
     group: "minimap",
     pos: 0,
     icon: "bars",
+    search: "minimap scrollbar overview map show hide width",
     label: defineMessage({
-      id: "command.generic.toggle_minimap.label",
-      defaultMessage: "Toggle Minimap",
+      id: "command.generic.minimap.label",
+      defaultMessage: "Minimap",
+      description:
+        'Label of the Minimap submenu in the editor\'s View menu. The minimap is the narrow overview of the whole document shown beside the editor; use the same word for "minimap" in every minimap string.',
     }),
     title: defineMessage({
       id: "command.generic.toggle_minimap.title",
       defaultMessage: "Show or hide the code editor minimap.",
+      description:
+        'Tooltip of the Minimap submenu in the editor\'s View menu. The minimap is the narrow overview of the whole document shown beside the editor; use the same word for "minimap" in every minimap string.',
     }),
-    onClick: () => toggleCodeMirrorMinimapEnabled(),
-  },
-  show_minimap: {
-    group: "minimap",
-    pos: 1,
-    label: defineMessage({
-      id: "command.generic.show_minimap.label",
-      defaultMessage: "Show Minimap",
-    }),
-    onClick: () => setCodeMirrorMinimapEnabled(true),
-  },
-  hide_minimap: {
-    group: "minimap",
-    pos: 2,
-    label: defineMessage({
-      id: "command.generic.hide_minimap.label",
-      defaultMessage: "Hide Minimap",
-    }),
-    onClick: () => setCodeMirrorMinimapEnabled(false),
-  },
-  increase_minimap_width: {
-    group: "minimap",
-    pos: 3,
-    stayOpenOnClick: true,
-    label: defineMessage({
-      id: "command.generic.increase_minimap_width.label",
-      defaultMessage: "Increase Minimap Width",
-    }),
-    onClick: () => adjustCodeMirrorMinimapWidth(12),
-  },
-  decrease_minimap_width: {
-    group: "minimap",
-    pos: 4,
-    stayOpenOnClick: true,
-    label: defineMessage({
-      id: "command.generic.decrease_minimap_width.label",
-      defaultMessage: "Decrease Minimap Width",
-    }),
-    onClick: () => adjustCodeMirrorMinimapWidth(-12),
-  },
-  minimap_settings: {
-    group: "minimap",
-    pos: 5,
-    label: defineMessage({
-      id: "command.generic.minimap_settings.label",
-      defaultMessage: "Minimap Settings...",
-    }),
-    onClick: () => openCodeMirrorMinimapSettingsDialog(),
+    onClick: () => {},
+    // built per render, so the entries show the current preference
+    children: ({ intl }) =>
+      minimapMenuChildren({ api: codeMirrorMinimapSettings, intl }),
   },
   undo: {
     disabled: ({ readOnly }) => readOnly,
@@ -708,6 +666,31 @@ addCommands({
     }),
     icon: FORMAT_SOURCE_ICON,
     keyboard: `${IS_MACOS ? "⌘" : "control"} + shift + F`,
+  },
+
+  run_code: {
+    group: "build",
+    pos: -1,
+    disable: "disableTerminals",
+    label: labels.run,
+    title: defineMessage({
+      id: "command.generic.run_code.title",
+      defaultMessage:
+        "Run this file in a terminal using the appropriate interpreter or compiler.",
+      description: "Tooltip of the Run button for a code file",
+    }),
+    icon: "play-circle",
+    keyboard: "shift + enter",
+    // NOTE: a function isVisible replaces the editor spec check, so we have
+    // to do it ourselves -- otherwise Run also shows up in the menu of, e.g.,
+    // the terminal frame of a .py file.
+    isVisible: ({ props }) =>
+      !!props.spec.commands?.["run_code"] &&
+      canRunFile(props.editor_actions?.path ?? props.path),
+    onClick: ({ props }) => {
+      // editor_actions is the file the frame shows, actions owns the frames.
+      props.actions.run_code(props.id, props.editor_actions);
+    },
   },
 
   build: {

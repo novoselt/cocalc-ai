@@ -31,6 +31,7 @@ const FAST_OPEN_SYNCSTRING_STATUS = "Loading live collaboration...";
 const FAST_OPEN_HANDOFF_DIFF_STATUS =
   "Updated to the latest live collaboration state.";
 const ANCHOR_CHAT_READY_TIMEOUT_MS = 8000;
+const RUN_CODE_TERMINAL = "run_code_terminal";
 
 type ProgrammaticLineNavigation = {
   line: number;
@@ -136,6 +137,7 @@ import {
 import type { PageActions } from "@cocalc/frontend/app/actions";
 import { normalizeUserFacingError } from "@cocalc/frontend/components/user-facing-error";
 import { get_buffer, set_buffer } from "@cocalc/frontend/copy-paste-buffer";
+import { getStudentProjectFunctionality } from "@cocalc/frontend/course/configuration/customize-student-project-functionality";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
 import { filenameMode } from "@cocalc/frontend/file-associations";
 import { canUseSyncDocHistory } from "@cocalc/frontend/lib/syncdoc-history";
@@ -166,7 +168,7 @@ import { getSyncDocDescriptor } from "@cocalc/sync/editor/doctypes";
 import { from_str as immerdbFromString } from "@cocalc/sync/editor/immer-db/doc";
 import { apply_patch, make_patch } from "@cocalc/util/patch";
 import type { SyncString } from "@cocalc/sync/editor/string/sync";
-import { once } from "@cocalc/util/async-utils";
+import { once, until } from "@cocalc/util/async-utils";
 import {
   Options as FormatterOptions,
   Exts as FormatterExts,
@@ -240,6 +242,7 @@ import {
 import { DEFAULT_TERM_ENV } from "../code-editor/const";
 import * as cm_doc_cache from "../code-editor/doc";
 import { SHELLS } from "../code-editor/editor";
+import { buildRunCommand } from "../code-editor/run-commands";
 import { test_line } from "../code-editor/simulate_typing";
 import { misspelled_words } from "../code-editor/spell-check";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
@@ -3975,6 +3978,140 @@ export class BaseEditorActions<
     await delay(1);
     if (this.isClosed()) return;
     this.set_active_id(shell_id);
+  }
+
+  //////////////////////////////////////////
+  // run_code:
+  //    Run the file being edited in a terminal frame, using the interpreter
+  //    or compiler for its extension.  This is the "Run" button, i.e., what
+  //    the shell above is deliberately not: an explicit, visible command in a
+  //    plain shell, so the user can see it, interact with the program, and
+  //    run it again after editing.
+  //////////////////////////////////////////
+
+  public async run_code(
+    id?: string,
+    // The actions of the file the frame actually shows, when that differs
+    // from this editor (a cm subframe can edit another file).  We run and
+    // save that document, but the frames all belong to this frame tree.
+    documentActions?: BaseEditorActions<any>,
+    // shift+enter runs without taking the keyboard away: the user is in the
+    // middle of editing and should be able to run again after typing more.
+    { keepFocus }: { keepFocus?: boolean } = {},
+  ): Promise<void> {
+    const docActions: BaseEditorActions<any> = documentActions ?? this;
+    const cmd = buildRunCommand(docActions.path);
+    if (cmd == null) {
+      // no interpreter/compiler for this extension
+      return;
+    }
+    if (getStudentProjectFunctionality(this.project_id).disableTerminals) {
+      // running a file means opening a terminal, which is off in this project
+      return;
+    }
+    if (this.readOnlyPreview || docActions.readOnlyPreview) {
+      // A read-only preview has no syncstring, so save() below is a no-op and
+      // we would run whatever happens to be on disk.  Hiding the button is
+      // not enough -- shift+enter reaches this directly.
+      return;
+    }
+
+    // We run the file on disk, so it has to be saved first.
+    await docActions.save(true);
+    if (this.isClosed() || docActions.isClosed()) return;
+    if (docActions._syncstring?.has_unsaved_changes?.()) {
+      // save() reports its own error and returns normally, so this is how we
+      // notice: running now would run stale contents from disk.
+      return;
+    }
+
+    let terminalId = this.getRunTerminalId();
+    const reusedRunTerminal = terminalId != null;
+    if (terminalId == null) {
+      terminalId = this.split_frame(
+        "col",
+        id,
+        "terminal",
+        { [RUN_CODE_TERMINAL]: true },
+        undefined,
+        keepFocus, // no_focus
+      );
+      if (terminalId == null) return;
+    }
+
+    // De-maximize if in full screen mode, so the terminal is actually visible.
+    this.unset_frame_full();
+    await delay(1);
+    if (this.isClosed()) return;
+    if (keepFocus) {
+      if (id != null) {
+        this.set_active_id(id);
+        this.focus(id);
+      }
+    } else {
+      // The program may want input, and the user needs to see the output.
+      this.set_active_id(terminalId);
+    }
+
+    const terminal = await this.waitForTerminal(terminalId);
+    if (terminal == null) return;
+    if (reusedRunTerminal) {
+      // This terminal belongs exclusively to Run. Restarting it gives reruns
+      // deterministic semantics: stop the previous program (whether it is at
+      // a prompt or reading stdin), start a fresh shell, then run the new
+      // command. Ordinary user terminals are never selected or touched.
+      await terminal.kill();
+      if (this.isClosed() || docActions.isClosed()) return;
+    }
+    terminal.conn_write(`${cmd}\n`);
+
+    if (keepFocus && id != null && this._get_active_id() == id) {
+      // a terminal frame that just mounted can take the keyboard; give it back
+      this.focus(id);
+    }
+  }
+
+  // The terminal frame to run a file in. It must have been created and marked
+  // by Run itself: an ordinary terminal may contain half-typed input or a
+  // program reading stdin, and must never be cleared, killed, or written to.
+  private getRunTerminalId(): string | undefined {
+    return this._get_most_recent_active_frame_id((node) => {
+      if (node.get("type").slice(0, 8) != "terminal") {
+        return false;
+      }
+      return node.get(RUN_CODE_TERMINAL) === true && !node.get("command");
+    });
+  }
+
+  // A terminal frame has no Terminal object until its React component mounts,
+  // so a frame we just split off is not writable yet.  (Once it exists,
+  // conn_write itself buffers until the pty is ready, so this is the only
+  // wait we need.)
+  private async waitForTerminal(id: string): Promise<Terminal<T> | undefined> {
+    let terminal = this.terminals?.get(id);
+    if (terminal != null) {
+      return terminal;
+    }
+    try {
+      await until(
+        () => {
+          if (this.isClosed()) {
+            return true;
+          }
+          if (this._get_frame_node(id) == null) {
+            // the frame was closed again
+            return true;
+          }
+          terminal = this.terminals?.get(id);
+          return terminal != null;
+        },
+        { start: 50, decay: 1.5, max: 500, timeout: 30000 },
+      );
+    } catch {
+      // it never mounted
+      return undefined;
+    }
+    return this.isClosed() ? undefined : terminal;
   }
 
   public clear_terminal_command(id: string): void {
