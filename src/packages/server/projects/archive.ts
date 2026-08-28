@@ -189,6 +189,12 @@ async function createFinalAutomaticArchiveBackup({
         .slice(0, index)
         .every(({ result }) => isArchiveBackupFailureReopenSafe(result)),
   );
+  const unresolvedHistoricalBarrier = history.some(
+    (entry) =>
+      entry !== active &&
+      (entry.status === "succeeded" ||
+        !isArchiveBackupFailureReopenSafe(entry.result)),
+  );
   if (active) {
     onBackupBarrierMayExist?.();
     summary = await waitForDurableLroCompletion({
@@ -234,7 +240,8 @@ async function createFinalAutomaticArchiveBackup({
   if (summary.status !== "succeeded") {
     throw new FinalAutomaticArchiveBackupError(
       `final automatic archive backup failed: ${summary.error ?? summary.status}`,
-      isArchiveBackupFailureReopenSafe(summary.result),
+      !unresolvedHistoricalBarrier &&
+        isArchiveBackupFailureReopenSafe(summary.result),
     );
   }
   const result = summary.result ?? {};

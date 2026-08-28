@@ -650,6 +650,43 @@ describe("projects.archiveProject", () => {
   });
 
   it.each([
+    ["not started", { archive_freeze_recovery: "not-started" }],
+    ["released", { archive_freeze_recovery: "released" }],
+  ])(
+    "does not let a new %s failure override older uncertain freeze history",
+    async (_case, result) => {
+      listLrosByDedupeMock.mockResolvedValueOnce([
+        {
+          op_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          scope_type: "project",
+          scope_id: AUTOMATIC_PROJECT_ID,
+          status: "failed",
+          result: { archive_freeze_recovery: "uncertain" },
+        },
+      ]);
+      waitForDurableLroCompletionMock.mockResolvedValueOnce({
+        status: "failed",
+        error: "new retry failed safely",
+        result,
+      });
+      poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+
+      const { archiveProjectStorage, ProjectArchiveStorageError } =
+        await import("@cocalc/server/projects/archive");
+      const error = await archiveProjectStorage({
+        project_id: AUTOMATIC_PROJECT_ID,
+        mode: "automatic",
+        job_id: AUTOMATIC_JOB_ID,
+        reason: "free-inactive",
+        expected_host_id: AUTOMATIC_HOST_ID,
+      }).catch((err) => err);
+
+      expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+      expect(error.reopenSafe).toBe(false);
+    },
+  );
+
+  it.each([
     ["uncertain", { archive_freeze_recovery: "uncertain" }, false],
     ["released", { archive_freeze_recovery: "released" }, true],
   ])(
