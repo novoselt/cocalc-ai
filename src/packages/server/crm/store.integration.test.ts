@@ -220,6 +220,14 @@ describePglite("integrated CRM store", () => {
         .map(({ id }) => id)
         .sort(),
     ).toEqual([...organizationIds].sort());
+    await pool.query(
+      "DELETE FROM crm_opportunities WHERE organization_id = ANY($1::uuid[])",
+      [organizationIds],
+    );
+    await pool.query(
+      "DELETE FROM crm_organizations WHERE id = ANY($1::uuid[])",
+      [organizationIds],
+    );
   });
 
   it("enforces versions and evidence-based domain identity", async () => {
