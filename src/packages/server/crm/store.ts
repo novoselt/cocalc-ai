@@ -956,6 +956,13 @@ export async function searchOrganizations(
     );
   }
   appendOrganizationQueueFilters(opts, values, clauses);
+  const cursor = decodeCursor(opts.cursor);
+  if (cursor) {
+    values.push(cursor.updated_at, cursor.id);
+    clauses.push(
+      `(o.updated_at,o.id)<($${values.length - 1}::timestamptz,$${values.length}::uuid)`,
+    );
+  }
   values.push(limit + 1);
   const { rows } = await getPool().query(
     `SELECT DISTINCT o.* FROM crm_organizations o ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
@@ -968,9 +975,15 @@ export async function searchOrganizations(
       .map((row) => summaryForOrganization(getPool(), organizationRow(row))),
   );
   const boundedRows = truncateRows(summaries, byteLimit(opts.max_bytes));
+  const hasMore = rows.length > limit;
+  const last = boundedRows.rows.at(-1);
   return {
     organizations: boundedRows.rows,
-    truncated: rows.length > limit || boundedRows.truncated,
+    next_cursor:
+      last && (hasMore || boundedRows.truncated)
+        ? encodeCursor(last.updated_at, last.id)
+        : undefined,
+    truncated: hasMore || boundedRows.truncated,
     result_bytes: boundedRows.bytes,
   };
 }

@@ -171,6 +171,57 @@ describePglite("integrated CRM store", () => {
     expect(created.customer_number).toMatch(/^CRM-\d{4}-\d{6}$/);
   });
 
+  it("paginates filtered organization searches", async () => {
+    const query = `Pagination University ${randomUUID()}`;
+    const organizationIds = [randomUUID(), randomUUID()];
+    for (const [index, organizationId] of organizationIds.entries()) {
+      await pool.query(
+        `INSERT INTO crm_organizations
+           (id,customer_number,display_name,organization_type,lifecycle_stage,
+            created_by_account_id,updated_by_account_id,created_at,updated_at,version)
+         VALUES ($1,$2,$3,'university','customer',$4,$4,NOW(),NOW() - ($5::int * INTERVAL '1 second'),1)`,
+        [organizationId, `TEST-${organizationId}`, query, actor, index],
+      );
+      await pool.query(
+        `INSERT INTO crm_opportunities
+           (id,organization_id,name,kind,stage,owner_account_id,
+            expected_close_date,created_by_account_id,updated_by_account_id,
+            created_at,updated_at,version)
+         VALUES ($1,$2,'Annual renewal','renewal','discovery',$3,
+                 '2027-01-31',$3,$3,NOW(),NOW(),1)`,
+        [randomUUID(), organizationId, actor],
+      );
+    }
+
+    const first = await store.searchOrganizations({
+      account_id: actor,
+      query,
+      opportunity_kinds: ["renewal"],
+      limit: 1,
+      reason: "review first filtered search page",
+    });
+    expect(first.organizations).toHaveLength(1);
+    expect(first.next_cursor).toBeTruthy();
+    expect(first.truncated).toBe(true);
+
+    const second = await store.searchOrganizations({
+      account_id: actor,
+      query,
+      opportunity_kinds: ["renewal"],
+      cursor: first.next_cursor,
+      limit: 1,
+      reason: "review second filtered search page",
+    });
+    expect(second.organizations).toHaveLength(1);
+    expect(second.next_cursor).toBeUndefined();
+    expect(second.truncated).toBe(false);
+    expect(
+      [...first.organizations, ...second.organizations]
+        .map(({ id }) => id)
+        .sort(),
+    ).toEqual([...organizationIds].sort());
+  });
+
   it("enforces versions and evidence-based domain identity", async () => {
     const createdPreview = await store.createOrganization({
       account_id: actor,

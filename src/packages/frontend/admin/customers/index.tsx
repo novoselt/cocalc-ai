@@ -1168,14 +1168,20 @@ function CustomerQueue({
   const [search, setSearch] = useState("");
   const [draftSearch, setDraftSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string>();
   const [error, setError] = useState<unknown>("");
   const [diagnostics, setDiagnostics] = useState<any>(null);
   const ownerNames = useAccountDisplayNames(
     customers.map((x) => x.relationship_owner_account_id),
   );
 
-  async function load() {
-    setLoading(true);
+  async function load(append = false) {
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+    }
     setError("");
     try {
       const result = search
@@ -1184,17 +1190,26 @@ function CustomerQueue({
             ...viewRequest(view),
             reason: "Search CRM customer queue",
             limit: 100,
+            cursor: append ? nextCursor : undefined,
           })
         : await api.listOrganizations({
             ...viewRequest(view),
             reason: "Review CRM customer queue",
             limit: 100,
+            cursor: append ? nextCursor : undefined,
           });
-      setCustomers(result.organizations);
+      setCustomers((current) =>
+        append ? [...current, ...result.organizations] : result.organizations,
+      );
+      setNextCursor(result.next_cursor);
     } catch (err) {
       setError(err);
     } finally {
-      setLoading(false);
+      if (append) {
+        setLoadingMore(false);
+      } else {
+        setLoading(false);
+      }
     }
   }
 
@@ -1323,16 +1338,25 @@ function CustomerQueue({
       {loading ? (
         <Spin description="Loading customers" />
       ) : customers.length ? (
-        <div className="crm-record-grid">
-          {customers.map((customer) => (
-            <CustomerCard
-              key={customer.id}
-              customer={customer}
-              names={ownerNames}
-              onOpen={() => onOpen(customer.id)}
-            />
-          ))}
-        </div>
+        <>
+          <div className="crm-record-grid">
+            {customers.map((customer) => (
+              <CustomerCard
+                key={customer.id}
+                customer={customer}
+                names={ownerNames}
+                onOpen={() => onOpen(customer.id)}
+              />
+            ))}
+          </div>
+          {nextCursor ? (
+            <Flex justify="center">
+              <Button loading={loadingMore} onClick={() => void load(true)}>
+                Load more customers
+              </Button>
+            </Flex>
+          ) : null}
+        </>
       ) : (
         <div className="crm-empty-panel">
           <Empty description={emptyViewDescription(view, !!search)} />
