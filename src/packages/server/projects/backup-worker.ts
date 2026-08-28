@@ -176,6 +176,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
     const updated = await updateLro({
       op_id,
       status: "failed",
+      if_status: ["running"],
       error: "backup op missing project_id",
       result: archiveBackupFreezeFailureResult({
         enabled: freeze_source,
@@ -194,6 +195,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
     const updated = await updateLro({
       op_id,
       status: "failed",
+      if_status: ["running"],
       error: `backup op exceeded timeout of ${BACKUP_TIMEOUT_MS}ms before execution`,
       result: archiveBackupFreezeFailureResult({
         enabled: freeze_source,
@@ -284,12 +286,12 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
     const running = await updateLro({
       op_id,
       status: "running",
+      if_status: ["running"],
       error: null,
       progress_summary: { phase: "validate" },
     });
-    if (running) {
-      await publishSummarySafe(running, "set-running");
-    }
+    if (!running) return;
+    await publishSummarySafe(running, "set-running");
     progress({
       step: "validate",
       message: "starting backup",
@@ -299,11 +301,11 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
     const started = Date.now();
     const backupRunning = await updateLro({
       op_id,
+      if_status: ["running"],
       progress_summary: { phase: "backup" },
     });
-    if (backupRunning) {
-      await publishSummarySafe(backupRunning, "set-backup-phase");
-    }
+    if (!backupRunning) return;
+    await publishSummarySafe(backupRunning, "set-backup-phase");
     progress({
       step: "backup",
       message: externalMigration
@@ -411,6 +413,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
     const updated = await updateLro({
       op_id,
       status: "succeeded",
+      if_status: ["running"],
       result,
       progress_summary: {
         phase: "done",
@@ -464,6 +467,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
       const updated = await updateLro({
         op_id,
         status: "failed",
+        if_status: ["running"],
         error: `${err}`,
         // A late checked release upgrades this initial uncertainty durably.
         result: archiveBackupFreezeFailureResult({
@@ -748,6 +752,7 @@ export function startBackupLroWorker({
           const updated = await updateLro({
             op_id: op.op_id,
             status: "failed",
+            if_status: ["running"],
             error: `${err}`,
             result: archiveBackupFreezeFailureResult({
               enabled: op.input?.freeze_source === true,
