@@ -1,6 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import { ActiveUsersMapAdmin } from "./active-users-map";
+import {
+  ActiveUsersMapAdmin,
+  activeUsersMapDrawerTitle,
+} from "./active-users-map";
 import { ActiveUsersMapSummary } from "./active-users-map-summary";
 
 const mockGetActiveUserMap = jest.fn();
@@ -123,5 +126,16 @@ describe("ActiveUsersMapAdmin", () => {
     expect(
       screen.queryByRole("checkbox", { name: "Group by city" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("activeUsersMapDrawerTitle", () => {
+  it("describes named and unavailable locations with user counts", () => {
+    expect(activeUsersMapDrawerTitle("Canada", 34)).toBe(
+      "Canada: 34 active users",
+    );
+    expect(activeUsersMapDrawerTitle("Location unavailable", 1)).toBe(
+      "Location unavailable: 1 active user",
+    );
   });
 });

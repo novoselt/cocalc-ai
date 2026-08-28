@@ -126,6 +126,13 @@ function locationLabel(user: ActiveUserMapUser): string {
     .join(", ");
 }
 
+export function activeUsersMapDrawerTitle(
+  location: string,
+  count: number,
+): string {
+  return `${location}: ${count} active ${count === 1 ? "user" : "users"}`;
+}
+
 function UserList({
   users,
   onSelect,
@@ -384,12 +391,16 @@ export function ActiveUsersMapAdmin() {
     }
   }
 
-  const drawerTitle =
+  const drawerLocation =
     selectedGroup === "unknown"
       ? "Location unavailable"
       : selectedLocation
-        ? `${activeUsersMapLocationName(selectedLocation)} (${selectedLocation.count})`
-        : "Active users";
+        ? activeUsersMapLocationName(selectedLocation)
+        : "Selected location";
+  const drawerTitle = activeUsersMapDrawerTitle(
+    drawerLocation,
+    selectedUsers.length,
+  );
   const failedBays = overview?.bays.filter(({ ok }) => !ok) ?? [];
   const disabledBays =
     overview?.bays.filter(({ ok, enabled }) => ok && enabled === false) ?? [];
