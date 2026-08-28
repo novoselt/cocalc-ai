@@ -14,8 +14,11 @@ import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { createBackup } from "@cocalc/server/conat/api/project-backups";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { resolveProjectBay } from "@cocalc/server/inter-bay/directory";
+import {
+  attestReleasedLroDedupeSuccesses,
+  listLrosByDedupe,
+} from "@cocalc/server/lro/lro-db";
 import { waitForDurableLroCompletion } from "@cocalc/server/lro/wait";
-import { listLrosByDedupe } from "@cocalc/server/lro/lro-db";
 import {
   deleteProjectDataOnHost,
   deleteProjectDataOnHostAfterBackup,
@@ -70,6 +73,10 @@ type ArchiveRow = Omit<
 >;
 
 const FINAL_ARCHIVE_BACKUP_TAG = "automatic-project-archive-final";
+
+function finalArchiveBackupDedupeKey(job_id: string): string {
+  return `${FINAL_ARCHIVE_BACKUP_TAG}:${job_id}`;
+}
 
 class FinalAutomaticArchiveBackupError extends Error {
   readonly reopenSafe: boolean;
@@ -162,7 +169,7 @@ async function createFinalAutomaticArchiveBackup({
   beforeCreateNew: () => Promise<void>;
   onBackupBarrierMayExist?: () => void;
 }): Promise<ProjectArchiveLifecycleFinalBackup> {
-  const dedupeKey = `${FINAL_ARCHIVE_BACKUP_TAG}:${job_id}`;
+  const dedupeKey = finalArchiveBackupDedupeKey(job_id);
   let history: LroSummary[];
   try {
     history = await listLrosByDedupe({
@@ -183,17 +190,19 @@ async function createFinalAutomaticArchiveBackup({
   );
   // An unresolved newer attempt may have replaced and pruned an older backup.
   const succeeded = history.find(
-    ({ status }, index) =>
+    ({ status, result }, index) =>
       status === "succeeded" &&
+      !isArchiveBackupFailureReopenSafe(result) &&
       history
         .slice(0, index)
-        .every(({ result }) => isArchiveBackupFailureReopenSafe(result)),
+        .every(
+          ({ status, result }) =>
+            status !== "succeeded" && isArchiveBackupFailureReopenSafe(result),
+        ),
   );
   const unresolvedHistoricalBarrier = history.some(
     (entry) =>
-      entry !== active &&
-      (entry.status === "succeeded" ||
-        !isArchiveBackupFailureReopenSafe(entry.result)),
+      entry !== active && !isArchiveBackupFailureReopenSafe(entry.result),
   );
   if (active) {
     onBackupBarrierMayExist?.();
@@ -560,15 +569,26 @@ export async function archiveProjectStorage({
           hostCleanupCompleted = true;
         } else {
           if (expectedArchiveBackupId) {
+            const history = await attestReleasedLroDedupeSuccesses({
+              scope_type: "project",
+              scope_id: project_id,
+              dedupe_key: finalArchiveBackupDedupeKey(jobId),
+              expected_result_id: expectedArchiveBackupId,
+              expected_generation: expectedArchiveGeneration,
+            });
             await clearProjectArchiveLifecycleFinalBackup({
               job_id: jobId,
               backup_id: expectedArchiveBackupId,
               backup_generation: expectedArchiveGeneration,
             });
+            reopenSafe = !history.some(
+              ({ status, result }) =>
+                status !== "succeeded" &&
+                !isArchiveBackupFailureReopenSafe(result),
+            );
           }
-          // The generation-checked host RPC restored the source and local
-          // snapshots. Reopen only after any durable deletion marker is gone.
-          reopenSafe = true;
+          // Reopen only after the checked host release, durable LRO
+          // attestation, marker rollback, and historical safety check agree.
         }
       } catch (releaseErr) {
         log.warn("unable to release automatic archive volume freeze", {

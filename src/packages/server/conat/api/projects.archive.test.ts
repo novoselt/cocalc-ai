@@ -23,6 +23,7 @@ let clearProjectArchiveLifecycleFinalBackupMock: jest.Mock;
 let createBackupMock: jest.Mock;
 let waitForDurableLroCompletionMock: jest.Mock;
 let listLrosByDedupeMock: jest.Mock;
+let attestReleasedLroDedupeSuccessesMock: jest.Mock;
 
 const AUTOMATIC_PROJECT_ID = "11111111-1111-4111-8111-111111111111";
 const AUTOMATIC_HOST_ID = "22222222-2222-4222-8222-222222222222";
@@ -173,6 +174,8 @@ jest.mock("@cocalc/server/lro/lro-db", () => ({
   createLro: jest.fn(),
   updateLro: jest.fn(),
   listLrosByDedupe: (...args: any[]) => listLrosByDedupeMock(...args),
+  attestReleasedLroDedupeSuccesses: (...args: any[]) =>
+    attestReleasedLroDedupeSuccessesMock(...args),
 }));
 
 jest.mock("@cocalc/server/projects/start-lro-progress", () => ({
@@ -283,6 +286,7 @@ describe("projects.archiveProject", () => {
       async () => undefined,
     );
     listLrosByDedupeMock = jest.fn(async () => []);
+    attestReleasedLroDedupeSuccessesMock = jest.fn(async () => []);
     createBackupMock = jest.fn(async (_input, opts) => {
       opts?.on_lro_create_started?.();
       return {
@@ -568,6 +572,41 @@ describe("projects.archiveProject", () => {
       expected_previous_backup_id: null,
     });
     expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse a succeeded final-backup LRO after its freeze was released", async () => {
+    listLrosByDedupeMock.mockResolvedValueOnce([
+      {
+        op_id: "88888888-8888-4888-8888-888888888888",
+        scope_type: "project",
+        scope_id: AUTOMATIC_PROJECT_ID,
+        status: "succeeded",
+        result: {
+          id: "released-final-backup-id",
+          time: "2026-06-15T05:30:00.000Z",
+          generation: 10,
+          archive_freeze_recovery: "released",
+        },
+      },
+    ]);
+    poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: AUTOMATIC_PROJECT_ID,
+        mode: "automatic",
+        job_id: AUTOMATIC_JOB_ID,
+        reason: "free-inactive",
+        expected_host_id: AUTOMATIC_HOST_ID,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(createBackupMock).toHaveBeenCalledTimes(1);
+    expect(recordProjectArchiveLifecycleFinalBackupMock).toHaveBeenCalledWith(
+      expect.objectContaining({ backup_id: "final-backup-id" }),
+    );
   });
 
   it("resumes an active final-backup LRO instead of creating another", async () => {
@@ -956,6 +995,52 @@ describe("projects.archiveProject", () => {
       );
     },
   );
+
+  it("does not reopen after release while another LRO remains uncertain", async () => {
+    const row = automaticArchiveRow();
+    poolQueryMock.mockResolvedValue({ rows: [row] });
+    deleteProjectDataOnHostAfterBackupMock.mockRejectedValueOnce(
+      new Error("host response lost"),
+    );
+    releaseProjectDataArchiveFreezeOnHostMock.mockResolvedValueOnce({
+      status: "released",
+    });
+    attestReleasedLroDedupeSuccessesMock.mockResolvedValueOnce([
+      {
+        op_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        status: "failed",
+        result: { archive_freeze_recovery: "uncertain" },
+      },
+      {
+        op_id: "88888888-8888-4888-8888-888888888888",
+        status: "succeeded",
+        result: { id: "final-backup-id", generation: 10 },
+      },
+    ]);
+
+    const { archiveProjectStorage, ProjectArchiveStorageError } =
+      await import("@cocalc/server/projects/archive");
+    const error = await archiveProjectStorage({
+      project_id: AUTOMATIC_PROJECT_ID,
+      mode: "automatic",
+      job_id: AUTOMATIC_JOB_ID,
+      reason: "free-inactive",
+      expected_host_id: AUTOMATIC_HOST_ID,
+    }).catch((err) => err);
+
+    expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+    expect(error.reopenSafe).toBe(false);
+    expect(attestReleasedLroDedupeSuccessesMock).toHaveBeenCalledWith({
+      scope_type: "project",
+      scope_id: AUTOMATIC_PROJECT_ID,
+      dedupe_key: `automatic-project-archive-final:${AUTOMATIC_JOB_ID}`,
+      expected_result_id: "final-backup-id",
+      expected_generation: 10,
+    });
+    expect(clearProjectArchiveLifecycleFinalBackupMock).toHaveBeenCalledTimes(
+      1,
+    );
+  });
 
   it("automatic archive replaces a stale final-backup marker after reopening", async () => {
     const jobId = "77777777-7777-4777-8777-777777777777";

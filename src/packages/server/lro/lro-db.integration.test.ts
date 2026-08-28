@@ -6,6 +6,7 @@
 import { after, before, getPool } from "@cocalc/server/test";
 import { uuid } from "@cocalc/util/misc";
 import {
+  attestReleasedLroDedupeSuccesses,
   createLro,
   ensureLroSchema,
   expireDueLros,
@@ -102,5 +103,68 @@ describe("LRO database maintenance integration", () => {
       expect.objectContaining({ op_id: second.op_id, status: "queued" }),
       expect.objectContaining({ op_id: first.op_id, status: "succeeded" }),
     ]);
+  });
+
+  it("attests every successful operation released under the dedupe lock", async () => {
+    const scope_id = uuid();
+    const dedupe_key = `archive-release:${uuid()}`;
+    const succeeded = await createLro({
+      kind: "project-backup",
+      scope_type: "project",
+      scope_id,
+      dedupe_key,
+    });
+    await updateLro({
+      op_id: succeeded.op_id,
+      status: "succeeded",
+      result: { id: "backup-release", generation: 17 },
+    });
+    const uncertain = await createLro({
+      kind: "project-backup",
+      scope_type: "project",
+      scope_id,
+      dedupe_key,
+    });
+    await updateLro({
+      op_id: uncertain.op_id,
+      status: "failed",
+      result: { archive_freeze_recovery: "uncertain" },
+    });
+
+    await expect(
+      attestReleasedLroDedupeSuccesses({
+        scope_type: "project",
+        scope_id,
+        dedupe_key,
+        expected_result_id: "backup-release",
+        expected_generation: 18,
+      }),
+    ).rejects.toThrow("does not match the final backup");
+    await expect(getLro(succeeded.op_id)).resolves.toMatchObject({
+      result: { id: "backup-release", generation: 17 },
+    });
+
+    await expect(
+      attestReleasedLroDedupeSuccesses({
+        scope_type: "project",
+        scope_id,
+        dedupe_key,
+        expected_result_id: "backup-release",
+        expected_generation: 17,
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ op_id: succeeded.op_id }),
+        expect.objectContaining({ op_id: uncertain.op_id }),
+      ]),
+    );
+    await expect(getLro(succeeded.op_id)).resolves.toMatchObject({
+      status: "succeeded",
+      result: {
+        id: "backup-release",
+        generation: 17,
+        archive_freeze_recovery: "released",
+      },
+    });
   });
 });
