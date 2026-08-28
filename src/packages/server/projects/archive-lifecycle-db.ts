@@ -353,6 +353,45 @@ export async function claimProjectArchiveLifecycleJob(
   return (result.rowCount ?? 0) === 1;
 }
 
+export async function claimRetainedProjectArchiveLifecycleJob(
+  job_id: string,
+): Promise<boolean> {
+  await ensureProjectArchiveLifecycleSchema();
+  const result = await getPool().query(
+    `UPDATE ${PROJECT_ARCHIVE_LIFECYCLE_TABLE} job
+        SET status = 'running',
+            attempts = attempts + 1,
+            claimed_at = NOW(),
+            completed_at = NULL,
+            next_attempt_at = NULL,
+            failure_category = NULL,
+            error = NULL,
+            updated_at = NOW()
+      WHERE job.id = $1
+        AND job.reason <> 'manual'
+        AND job.report_only IS FALSE
+        AND (
+          job.status IN ('queued', 'stale', 'canceled', 'completed')
+          OR (
+            job.status = 'failed'
+            AND (job.next_attempt_at IS NULL OR job.next_attempt_at <= NOW())
+          ) OR (
+            job.status = 'running'
+            AND job.updated_at <= NOW() - INTERVAL '10 minutes'
+          )
+        )
+        AND EXISTS (
+          SELECT 1
+            FROM projects project
+           WHERE project.project_id = job.project_id
+             AND project.archive_lifecycle_job_id = job.id
+             AND project.state ->> 'state' = 'archiving'
+        )`,
+    [job_id],
+  );
+  return (result.rowCount ?? 0) === 1;
+}
+
 export async function listQueuedProjectArchiveLifecycleJobs(
   limit: number,
 ): Promise<ProjectArchiveLifecycleJob[]> {
@@ -375,6 +414,41 @@ export async function listQueuedProjectArchiveLifecycleJobs(
         )
       ORDER BY CASE WHEN reason = 'all-collaborators-banned' THEN 0 ELSE 1 END,
                created_at ASC
+      LIMIT $1`,
+    [Math.max(1, Math.floor(limit))],
+  );
+  return rows;
+}
+
+export async function listRecoverableProjectArchiveLifecycleJobs(
+  limit: number,
+): Promise<ProjectArchiveLifecycleJob[]> {
+  await ensureProjectArchiveLifecycleSchema();
+  const { rows } = await getPool().query<ProjectArchiveLifecycleJob>(
+    `SELECT job.id, job.project_id, job.owning_bay_id, job.host_id,
+            job.reason, job.policy_version, job.status, job.report_only,
+            job.attempts, job.thresholds, job.final_backup_id,
+            job.backup_generation, job.backup_time
+       FROM ${PROJECT_ARCHIVE_LIFECYCLE_TABLE} job
+       JOIN projects project
+         ON project.project_id = job.project_id
+        AND project.archive_lifecycle_job_id = job.id
+        AND project.state ->> 'state' = 'archiving'
+      WHERE job.reason <> 'manual'
+        AND job.report_only IS FALSE
+        AND (
+          job.status IN ('queued', 'stale', 'canceled', 'completed')
+          OR
+          (
+            job.status = 'failed'
+            AND (job.next_attempt_at IS NULL OR job.next_attempt_at <= NOW())
+          ) OR (
+            job.status = 'running'
+            AND job.updated_at <= NOW() - INTERVAL '10 minutes'
+          )
+        )
+      ORDER BY CASE WHEN job.reason = 'all-collaborators-banned' THEN 0 ELSE 1 END,
+               job.created_at ASC
       LIMIT $1`,
     [Math.max(1, Math.floor(limit))],
   );

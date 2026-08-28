@@ -17,10 +17,12 @@ import { archiveProjectStorage, ProjectArchiveStorageError } from "./archive";
 import { resolveArchiveLifecycleAccountStatuses } from "./archive-lifecycle-accounts";
 import {
   claimProjectArchiveLifecycleJob,
+  claimRetainedProjectArchiveLifecycleJob,
   countRecentAutomaticArchives,
   countRunningArchivesByHost,
   createProjectArchiveLifecycleJob,
   listQueuedProjectArchiveLifecycleJobs,
+  listRecoverableProjectArchiveLifecycleJobs,
   type ProjectArchiveLifecycleJob,
   updateProjectArchiveLifecycleJob,
 } from "./archive-lifecycle-db";
@@ -499,31 +501,23 @@ async function executeJob({
   job: ProjectArchiveLifecycleJob;
   config: ProjectArchiveLifecycleConfig;
 }): Promise<"completed" | "stale" | "failed" | "rate-limited"> {
-  const thresholds = job.thresholds ?? {};
-  const jobPolicyMatches =
-    Number(thresholds.free_after_days) === config.freeAfterDays &&
-    Number(thresholds.banned_after_days) === config.bannedAfterDays &&
-    JSON.stringify(thresholds.canary_bays ?? []) ===
-      JSON.stringify(config.canaryBays) &&
-    JSON.stringify(thresholds.canary_hosts ?? []) ===
-      JSON.stringify(config.canaryHosts);
-  if (
-    job.policy_version !== PROJECT_ARCHIVE_POLICY_VERSION ||
-    !jobPolicyMatches
-  ) {
-    await updateProjectArchiveLifecycleJob({ job_id: job.id, status: "stale" });
-    return "stale";
-  }
-  if (!job.host_id) {
-    await updateProjectArchiveLifecycleJob({ job_id: job.id, status: "stale" });
-    return "stale";
-  }
   const existing = await loadSnapshot(job.project_id);
   if (
     existing?.state?.state === "archiving" &&
     existing.archive_lifecycle_job_id === job.id
   ) {
-    if (!(await claimProjectArchiveLifecycleJob(job.id))) return "stale";
+    if (!job.host_id) {
+      await updateProjectArchiveLifecycleJob({
+        job_id: job.id,
+        status: "failed",
+        failure_category: "archive-recovery-missing-host",
+        error: "claimed automatic archive job has no recorded project host",
+      });
+      return "failed";
+    }
+    if (!(await claimRetainedProjectArchiveLifecycleJob(job.id))) {
+      return "stale";
+    }
     try {
       await archiveProjectStorage({
         project_id: job.project_id,
@@ -555,6 +549,26 @@ async function executeJob({
       });
       return "failed";
     }
+  }
+
+  const thresholds = job.thresholds ?? {};
+  const jobPolicyMatches =
+    Number(thresholds.free_after_days) === config.freeAfterDays &&
+    Number(thresholds.banned_after_days) === config.bannedAfterDays &&
+    JSON.stringify(thresholds.canary_bays ?? []) ===
+      JSON.stringify(config.canaryBays) &&
+    JSON.stringify(thresholds.canary_hosts ?? []) ===
+      JSON.stringify(config.canaryHosts);
+  if (
+    job.policy_version !== PROJECT_ARCHIVE_POLICY_VERSION ||
+    !jobPolicyMatches
+  ) {
+    await updateProjectArchiveLifecycleJob({ job_id: job.id, status: "stale" });
+    return "stale";
+  }
+  if (!job.host_id) {
+    await updateProjectArchiveLifecycleJob({ job_id: job.id, status: "stale" });
+    return "stale";
   }
   const [recent, onHost] = await Promise.all([
     countRecentAutomaticArchives(),
@@ -665,6 +679,13 @@ export async function runProjectArchiveLifecycleOnce(): Promise<ProjectArchiveLi
   await ensureProjectArchiveLifecycleSchema();
   const config = await loadProjectArchiveLifecycleConfig();
   const summary = emptySummary(config);
+  const recoverable = await listRecoverableProjectArchiveLifecycleJobs(
+    config.batchLimit,
+  );
+  for (const job of recoverable) {
+    const result = await executeJob({ job, config });
+    summary[result === "rate-limited" ? "rate_limited" : result] += 1;
+  }
   if (!config.enabled) return summary;
   if (
     config.canaryBays.length > 0 &&
@@ -708,7 +729,9 @@ export async function runProjectArchiveLifecycleOnce(): Promise<ProjectArchiveLi
 
   if (config.reportOnly) return summary;
   const queued = await listQueuedProjectArchiveLifecycleJobs(config.batchLimit);
+  const recoveredIds = new Set(recoverable.map(({ id }) => id));
   for (const job of queued) {
+    if (recoveredIds.has(job.id)) continue;
     const result = await executeJob({ job, config });
     summary[result === "rate-limited" ? "rate_limited" : result] += 1;
     if (result === "rate-limited") break;

@@ -16,9 +16,11 @@ jest.mock("./archive-lifecycle-schema", () => ({
 }));
 
 import {
+  claimRetainedProjectArchiveLifecycleJob,
   clearProjectArchiveLifecycleFinalBackup,
   createProjectArchiveLifecycleJob,
   getProjectArchiveLifecycleFinalBackup,
+  listRecoverableProjectArchiveLifecycleJobs,
   recordProjectArchiveLifecycleFinalBackup,
   updateProjectArchiveLifecycleJob,
 } from "./archive-lifecycle-db";
@@ -143,5 +145,39 @@ describe("project archive lifecycle job persistence", () => {
       "final-backup-id",
       42,
     ]);
+  });
+
+  it("selects only retained archiving claims for policy-independent recovery", async () => {
+    query.mockResolvedValueOnce({ rows: [] });
+
+    await listRecoverableProjectArchiveLifecycleJobs(25);
+
+    const [sql, parameters] = query.mock.calls[0];
+    expect(sql).toContain("project.archive_lifecycle_job_id = job.id");
+    expect(sql).toContain("project.state ->> 'state' = 'archiving'");
+    expect(sql).toContain("job.status = 'failed'");
+    expect(sql).toContain("job.status = 'running'");
+    expect(sql).toContain(
+      "job.status IN ('queued', 'stale', 'canceled', 'completed')",
+    );
+    expect(parameters).toEqual([25]);
+  });
+
+  it("claims retained project state independently of the old job status", async () => {
+    query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    await expect(
+      claimRetainedProjectArchiveLifecycleJob(
+        "66666666-6666-4666-8666-666666666666",
+      ),
+    ).resolves.toBe(true);
+
+    const [sql, parameters] = query.mock.calls[0];
+    expect(sql).toContain("project.archive_lifecycle_job_id = job.id");
+    expect(sql).toContain("project.state ->> 'state' = 'archiving'");
+    expect(sql).toContain(
+      "job.status IN ('queued', 'stale', 'canceled', 'completed')",
+    );
+    expect(parameters).toEqual(["66666666-6666-4666-8666-666666666666"]);
   });
 });
