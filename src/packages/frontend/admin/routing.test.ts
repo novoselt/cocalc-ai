@@ -67,6 +67,10 @@ describe("admin routing", () => {
       kind: "customer-detail",
       id: "customer-id",
     });
+    expect(parseAdminRoute("admin/site-licenses/license-id")).toEqual({
+      kind: "site-license-detail",
+      id: "license-id",
+    });
     expect(getAdminTargetPath({ kind: "index", section: "user-search" })).toBe(
       "admin/user-search",
     );
@@ -88,6 +92,15 @@ describe("admin routing", () => {
     expect(
       getAdminTargetPath({ kind: "customer-detail", id: "customer/id" }),
     ).toBe("admin/customers/customer%2Fid");
+  });
+
+  it("serializes site license detail routes", () => {
+    expect(
+      getAdminTargetPath({
+        kind: "site-license-detail",
+        id: "license/id",
+      }),
+    ).toBe("admin/site-licenses/license%2Fid");
   });
 
   it("normalizes immutable admin routes from redux state", () => {

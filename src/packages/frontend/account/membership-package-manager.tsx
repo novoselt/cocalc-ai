@@ -1842,19 +1842,24 @@ export function SiteLicenseManager({
 export function SiteLicenseAdminPanel({
   tiers,
   onChanged,
+  siteLicenseId,
+  onSiteLicenseIdChange,
 }: {
   tiers: MembershipTierLike[];
   onChanged?: () => void;
+  siteLicenseId?: string;
+  onSiteLicenseIdChange?: (id: string | undefined) => void;
 }) {
   const dashboardDrawerTitleId = useId();
   const account_id = useTypedRedux("account", "account_id");
   const [overviews, setOverviews] = useState<SiteLicenseOverview[]>([]);
   const [loading, setLoading] = useState(false);
+  const [overviewsLoaded, setOverviewsLoaded] = useState(false);
   const [error, setError] = useState("");
   const [refreshToken, setRefreshToken] = useState(0);
   const [provisionOpen, setProvisionOpen] = useState(false);
   const [licenseSearch, setLicenseSearch] = useState("");
-  const [selectedSiteLicenseId, setSelectedSiteLicenseId] = useState("");
+  const [localSiteLicenseId, setLocalSiteLicenseId] = useState("");
   const [editTarget, setEditTarget] = useState<MembershipPackageDetails | null>(
     null,
   );
@@ -1865,12 +1870,24 @@ export function SiteLicenseAdminPanel({
   const [accountNames, setAccountNames] = useState<AccountNames>({});
   const [reviewingRequestId, setReviewingRequestId] = useState("");
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
+  const selectedSiteLicenseId = onSiteLicenseIdChange
+    ? (siteLicenseId ?? "")
+    : localSiteLicenseId;
+
+  function selectSiteLicense(id: string | undefined) {
+    if (onSiteLicenseIdChange) {
+      onSiteLicenseIdChange(id);
+    } else {
+      setLocalSiteLicenseId(id ?? "");
+    }
+  }
 
   async function refreshOverviews() {
     if (!account_id) {
       setOverviews([]);
       setError("");
       setLoading(false);
+      setOverviewsLoaded(true);
       return;
     }
     setLoading(true);
@@ -1882,6 +1899,7 @@ export function SiteLicenseAdminPanel({
       setError(`${err}`);
     } finally {
       setLoading(false);
+      setOverviewsLoaded(true);
     }
   }
 
@@ -1973,23 +1991,6 @@ export function SiteLicenseAdminPanel({
     window.addEventListener("resize", clampSavedWidth);
     return () => window.removeEventListener("resize", clampSavedWidth);
   }, []);
-
-  useEffect(() => {
-    if (filteredOverviews.length === 0) {
-      if (selectedSiteLicenseId) {
-        setSelectedSiteLicenseId("");
-      }
-      return;
-    }
-    if (
-      selectedSiteLicenseId &&
-      !filteredOverviews.some(
-        (overview) => overview.site_license.id === selectedSiteLicenseId,
-      )
-    ) {
-      setSelectedSiteLicenseId("");
-    }
-  }, [filteredOverviews, selectedSiteLicenseId]);
 
   const renderAdminDashboard = (dashboardOverviews: SiteLicenseOverview[]) => (
     <SiteLicenseDashboard
@@ -2128,10 +2129,8 @@ export function SiteLicenseAdminPanel({
           selectedSiteLicenseId={selectedSiteLicenseId}
           totalCount={overviews.length}
           onCustomerChanged={handleChanged}
-          onToggle={(siteLicenseId) =>
-            setSelectedSiteLicenseId((currentSiteLicenseId) =>
-              currentSiteLicenseId === siteLicenseId ? "" : siteLicenseId,
-            )
+          onToggle={(id) =>
+            selectSiteLicense(selectedSiteLicenseId === id ? undefined : id)
           }
           onTrigger={(trigger) => {
             dashboardTriggerRef.current = trigger;
@@ -2146,6 +2145,17 @@ export function SiteLicenseAdminPanel({
           description="Clear the search to show all configured site licenses."
         />
       ) : null}
+      {overviewsLoaded &&
+      !loading &&
+      selectedSiteLicenseId &&
+      !selectedOverview ? (
+        <Alert
+          type="warning"
+          showIcon
+          title="Site license not found"
+          description={`No site license with id ${selectedSiteLicenseId} is available on this deployment.`}
+        />
+      ) : null}
       <Drawer
         aria-labelledby={dashboardDrawerTitleId}
         afterOpenChange={(open) => {
@@ -2153,7 +2163,7 @@ export function SiteLicenseAdminPanel({
         }}
         destroyOnHidden
         onClose={() => {
-          setSelectedSiteLicenseId("");
+          selectSiteLicense(undefined);
           setEditTarget(null);
         }}
         open={selectedOverview != null}

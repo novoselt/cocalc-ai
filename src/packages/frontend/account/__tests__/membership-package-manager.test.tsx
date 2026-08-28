@@ -6,6 +6,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { useState } from "react";
 
 import {
   ClaimableMembershipPackagesPanel,
@@ -883,6 +884,19 @@ describe("membership package managers", () => {
 
   it("opens the selected admin site-license dashboard in a keyboard-accessible drawer", async () => {
     isAdmin = true;
+    function RoutedSiteLicenseAdminPanel() {
+      const [siteLicenseId, setSiteLicenseId] = useState<string>();
+      return (
+        <>
+          <output data-testid="selected-site-license">{siteLicenseId}</output>
+          <SiteLicenseAdminPanel
+            tiers={TIERS}
+            siteLicenseId={siteLicenseId}
+            onSiteLicenseIdChange={setSiteLicenseId}
+          />
+        </>
+      );
+    }
     listSiteLicenseOverviews.mockResolvedValue([
       {
         site_license: {
@@ -1000,7 +1014,7 @@ describe("membership package managers", () => {
       },
     ]);
 
-    render(<SiteLicenseAdminPanel tiers={TIERS} />);
+    render(<RoutedSiteLicenseAdminPanel />);
 
     await waitFor(() => {
       expect(screen.getByText("Showing 2 of 2")).toBeTruthy();
@@ -1021,6 +1035,9 @@ describe("membership package managers", () => {
     const campusDrawer = await screen.findByRole("dialog", {
       name: "Manage Campus License - Example University site license",
     });
+    expect(screen.getByTestId("selected-site-license")).toHaveTextContent(
+      "license-1",
+    );
     expect(within(campusDrawer).getByText("Students")).toBeVisible();
     expect(campusRow).toHaveAttribute("aria-expanded", "true");
 
@@ -1036,6 +1053,7 @@ describe("membership package managers", () => {
       ).toBeNull();
     });
     expect(search).toHaveValue("License");
+    expect(screen.getByTestId("selected-site-license")).toBeEmptyDOMElement();
     expect(campusRow).toHaveAttribute("aria-expanded", "false");
     expect(campusRow).toHaveFocus();
 
@@ -1044,6 +1062,9 @@ describe("membership package managers", () => {
     const researchDrawer = await screen.findByRole("dialog", {
       name: "Manage Research License - Research Institute site license",
     });
+    expect(screen.getByTestId("selected-site-license")).toHaveTextContent(
+      "license-2",
+    );
     expect(
       within(researchDrawer).getAllByText("Researchers").length,
     ).toBeGreaterThan(0);

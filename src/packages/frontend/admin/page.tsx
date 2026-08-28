@@ -147,6 +147,10 @@ export function AdminPage({
     navigate({ kind: "customer-detail", id });
   }
 
+  function navigateToSiteLicense(id: string) {
+    navigate({ kind: "site-license-detail", id });
+  }
+
   function navigateToNewReceivable() {
     navigate({ kind: "receivables-create" });
   }
@@ -160,6 +164,7 @@ export function AdminPage({
     navigateToNewReceivable,
     navigateToReceivable,
     navigateToCustomer,
+    navigateToSiteLicense,
     navigateToSection,
   }).filter(
     (section) =>
@@ -177,12 +182,14 @@ export function AdminPage({
   const activeSectionKey =
     route.kind === "customer-detail"
       ? "customers"
-      : route.kind === "receivables-detail" ||
-          route.kind === "receivables-create"
-        ? "receivables"
-        : route.kind === "index"
-          ? route.section
-          : undefined;
+      : route.kind === "site-license-detail"
+        ? "site-licenses"
+        : route.kind === "receivables-detail" ||
+            route.kind === "receivables-create"
+          ? "receivables"
+          : route.kind === "index"
+            ? route.section
+            : undefined;
   const activeSection = activeSectionKey
     ? sectionByKey.get(activeSectionKey)
     : undefined;
@@ -345,6 +352,15 @@ export function AdminPage({
         />
       );
     }
+    if (route.kind === "site-license-detail") {
+      return (
+        <SiteLicensesAdmin
+          siteLicenseId={route.id}
+          onOpenSiteLicense={navigateToSiteLicense}
+          onCloseSiteLicense={() => navigateToSection("site-licenses")}
+        />
+      );
+    }
     if (route.kind !== "index") {
       return <NewsAdminPage route={route} />;
     }
@@ -473,12 +489,14 @@ function getAdminSections({
   navigateToNewReceivable,
   navigateToReceivable,
   navigateToCustomer,
+  navigateToSiteLicense,
   navigateToSection,
 }: {
   closeSiteSettings: () => void;
   navigateToNewReceivable: () => void;
   navigateToReceivable: (id: string) => void;
   navigateToCustomer: (id: string) => void;
+  navigateToSiteLicense: (id: string) => void;
   navigateToSection: (section: AdminSection) => void;
 }): AdminSectionDefinition[] {
   return [
@@ -686,7 +704,12 @@ function getAdminSections({
       description: "Manage site license records and institutional access.",
       icon: "users",
       group: "commercial",
-      component: () => <SiteLicensesAdmin />,
+      component: () => (
+        <SiteLicensesAdmin
+          onOpenSiteLicense={navigateToSiteLicense}
+          onCloseSiteLicense={() => navigateToSection("site-licenses")}
+        />
+      ),
     },
     {
       key: "site-license-claims",
@@ -775,6 +798,7 @@ function getOrderedNavigationItems(
 
 function getActiveMenuKey(route: AdminRoute): AdminMenuKey {
   if (route.kind === "customer-detail") return "customers";
+  if (route.kind === "site-license-detail") return "site-licenses";
   if (
     route.kind === "receivables-detail" ||
     route.kind === "receivables-create"
