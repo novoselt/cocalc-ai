@@ -23,7 +23,10 @@ import {
   computeHostAvailableBackupSlots,
   selectBackupClaimCandidateIds,
 } from "./backup-admission";
-import { createBackupFreezeRecovery } from "./backup-freeze-recovery";
+import {
+  archiveBackupFreezeFailureResult,
+  createBackupFreezeRecovery,
+} from "./backup-freeze-recovery";
 import {
   BACKUP_LRO_KIND,
   BACKUP_TIMEOUT_MS,
@@ -172,6 +175,11 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
       op_id,
       status: "failed",
       error: "backup op missing project_id",
+      result: archiveBackupFreezeFailureResult({
+        enabled: freeze_source,
+        hostOperationStarted: false,
+        error: undefined,
+      }),
     });
     if (updated) {
       await publishSummarySafe(updated, "missing-project-id");
@@ -184,6 +192,11 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
       op_id,
       status: "failed",
       error: `backup op exceeded timeout of ${BACKUP_TIMEOUT_MS}ms before execution`,
+      result: archiveBackupFreezeFailureResult({
+        enabled: freeze_source,
+        hostOperationStarted: false,
+        error: undefined,
+      }),
     });
     if (updated) {
       await publishSummarySafe(updated, "timed-out-before-start");
@@ -221,6 +234,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
     hostWatch.promise.catch(reject);
   });
   let backupOperation: Promise<any> | undefined;
+  let hostBackupOperationStarted = false;
   const freezeRecovery = createBackupFreezeRecovery({
     enabled: freeze_source,
     op_id,
@@ -313,6 +327,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
         scope_id: op.scope_id,
       };
       if (externalMigration) {
+        hostBackupOperationStarted = true;
         return await client.backupProjectToExternalRepository({
           project_id,
           destination_project_id: `${externalMigration.destination_project_id ?? ""}`,
@@ -324,6 +339,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
           managed_egress_override,
         });
       }
+      hostBackupOperationStarted = true;
       return await client.createBackup({
         project_id,
         limit,
@@ -428,6 +444,13 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
       op_id,
       status: "failed",
       error: `${err}`,
+      // This attestation is durable LRO state. Transport/timeout failures stay
+      // uncertain even if a best-effort late-response cleanup is still active.
+      result: archiveBackupFreezeFailureResult({
+        enabled: freeze_source,
+        hostOperationStarted: hostBackupOperationStarted,
+        error: err,
+      }),
     });
     if (updated) {
       await publishSummarySafe(updated, "set-failed");
@@ -688,6 +711,11 @@ export function startBackupLroWorker({
             op_id: op.op_id,
             status: "failed",
             error: `${err}`,
+            result: archiveBackupFreezeFailureResult({
+              enabled: op.input?.freeze_source === true,
+              hostOperationStarted: false,
+              error: err,
+            }),
           });
           if (updated) {
             await publishSummarySafe(updated, "handler-catch");

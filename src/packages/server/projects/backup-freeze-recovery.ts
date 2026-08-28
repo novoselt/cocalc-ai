@@ -4,6 +4,7 @@
  */
 
 import getLogger from "@cocalc/backend/logger";
+import { ARCHIVE_BACKUP_SOURCE_RELEASED_ERROR_CODE } from "@cocalc/conat/files/file-server";
 import { releaseProjectDataArchiveFreezeOnHost } from "@cocalc/server/project-host/control";
 
 const logger = getLogger("server:projects:backup-freeze-recovery");
@@ -14,6 +15,48 @@ type FrozenBackupResult = {
 };
 
 type ReleaseArchiveFreeze = typeof releaseProjectDataArchiveFreezeOnHost;
+
+export type ArchiveBackupFreezeFailure =
+  | "not-started"
+  | "released"
+  | "uncertain";
+
+const ARCHIVE_BACKUP_FREEZE_RECOVERY_RESULT_KEY = "archive_freeze_recovery";
+
+export function classifyArchiveBackupFreezeFailure({
+  enabled,
+  hostOperationStarted,
+  error,
+}: {
+  enabled: boolean;
+  hostOperationStarted: boolean;
+  error: unknown;
+}): ArchiveBackupFreezeFailure | undefined {
+  if (!enabled) return;
+  if (!hostOperationStarted) return "not-started";
+  if (
+    `${(error as { code?: unknown })?.code ?? ""}` ===
+    ARCHIVE_BACKUP_SOURCE_RELEASED_ERROR_CODE
+  ) {
+    return "released";
+  }
+  return "uncertain";
+}
+
+export function archiveBackupFreezeFailureResult(
+  opts: Parameters<typeof classifyArchiveBackupFreezeFailure>[0],
+): Record<string, ArchiveBackupFreezeFailure> | undefined {
+  const status = classifyArchiveBackupFreezeFailure(opts);
+  if (!status) return;
+  return { [ARCHIVE_BACKUP_FREEZE_RECOVERY_RESULT_KEY]: status };
+}
+
+export function isArchiveBackupFailureReopenSafe(result: unknown): boolean {
+  const status = (result as Record<string, unknown> | null)?.[
+    ARCHIVE_BACKUP_FREEZE_RECOVERY_RESULT_KEY
+  ];
+  return status === "not-started" || status === "released";
+}
 
 export function createBackupFreezeRecovery({
   enabled,

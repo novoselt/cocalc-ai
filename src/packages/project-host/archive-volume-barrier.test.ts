@@ -123,7 +123,7 @@ describe("archive volume barrier", () => {
     fsReaddirMock.mockResolvedValueOnce(["daily-1"]);
     const vol = volume(jest.fn(async () => []));
 
-    await releaseArchiveVolumeFreeze(vol);
+    await expect(releaseArchiveVolumeFreeze(vol)).resolves.toBe("released");
 
     expect(sudoMock).toHaveBeenCalledWith({
       command: "mv",
@@ -193,7 +193,9 @@ describe("archive volume barrier", () => {
       }
       return { stdout: "" };
     });
-    await releaseArchiveVolumeFreeze(volume(jest.fn(async () => [])));
+    await expect(
+      releaseArchiveVolumeFreeze(volume(jest.fn(async () => []))),
+    ).resolves.toBe("released");
     expect(btrfsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         args: ["property", "set", "-ts", "/mnt/project-1", "ro", "false"],

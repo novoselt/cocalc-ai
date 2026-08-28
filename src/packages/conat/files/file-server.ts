@@ -43,6 +43,11 @@ import { isValidUUID } from "@cocalc/util/misc";
 
 const SUBJECT = "file-server";
 
+// Returned only when a freeze-capable backup failed and the project host
+// confirmed that the source is writable with staged snapshots restored.
+export const ARCHIVE_BACKUP_SOURCE_RELEASED_ERROR_CODE =
+  "archive-backup-source-released";
+
 export type RestoreMode = "none" | "auto" | "recover" | "required";
 export type SnapshotRestoreMode = "home" | "rootfs" | "both";
 

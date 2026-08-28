@@ -166,19 +166,22 @@ export async function freezeVolumeForArchiveBackup(
 
 export async function releaseArchiveVolumeFreeze(
   volume: Subvolume,
-): Promise<void> {
-  await withBtrfsMutationLock({
+): Promise<"absent" | "already-writable" | "released"> {
+  return await withBtrfsMutationLock({
     mount: volume.filesystem.opts.mount,
     operation: "archive-volume-unfreeze",
     run: async () => {
       if (!(await exists(volume.path))) {
         await deleteStagedArchiveSnapshotsUnlocked(volume);
-        return;
+        return "absent" as const;
       }
       if (await isSubvolumeReadonly(volume.path)) {
         await setSubvolumeReadonlyUnlocked(volume.path, false);
+        await restoreLocalSnapshotsUnlocked(volume);
+        return "released" as const;
       }
       await restoreLocalSnapshotsUnlocked(volume);
+      return "already-writable" as const;
     },
   });
 }

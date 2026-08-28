@@ -702,51 +702,59 @@ describe("projects.archiveProject", () => {
     expect(deleteProjectDataOnHostAfterBackupMock).toHaveBeenCalledTimes(1);
   });
 
-  it("automatic archive preserves host data when the final backup fails", async () => {
-    const jobId = "77777777-7777-4777-8777-777777777777";
-    poolQueryMock.mockResolvedValue({
-      rows: [
-        {
-          project_id: "11111111-1111-4111-8111-111111111111",
-          owning_bay_id: "bay-1",
-          host_id: "22222222-2222-4222-8222-222222222222",
-          backup_repo_id: "33333333-3333-4333-8333-333333333333",
-          provisioned: true,
-          state: { state: "archiving" },
-          host_status: "active",
-          last_changed: new Date("2026-06-15T04:00:00.000Z"),
-          last_changed_generation: 10,
-          last_backup: new Date("2026-06-15T05:00:00.000Z"),
-          last_backup_generation: 10,
-          archive_lifecycle_job_id: jobId,
-        },
-      ],
-    });
-    waitForDurableLroCompletionMock.mockResolvedValueOnce({
-      status: "failed",
-      error: "R2 unavailable",
-    });
+  it.each([
+    ["not started", { archive_freeze_recovery: "not-started" }, true],
+    ["confirmed released", { archive_freeze_recovery: "released" }, true],
+    ["uncertain", { archive_freeze_recovery: "uncertain" }, false],
+  ])(
+    "automatic archive preserves host data after a %s final-backup failure",
+    async (_case, result, reopenSafe) => {
+      const jobId = "77777777-7777-4777-8777-777777777777";
+      poolQueryMock.mockResolvedValue({
+        rows: [
+          {
+            project_id: "11111111-1111-4111-8111-111111111111",
+            owning_bay_id: "bay-1",
+            host_id: "22222222-2222-4222-8222-222222222222",
+            backup_repo_id: "33333333-3333-4333-8333-333333333333",
+            provisioned: true,
+            state: { state: "archiving" },
+            host_status: "active",
+            last_changed: new Date("2026-06-15T04:00:00.000Z"),
+            last_changed_generation: 10,
+            last_backup: new Date("2026-06-15T05:00:00.000Z"),
+            last_backup_generation: 10,
+            archive_lifecycle_job_id: jobId,
+          },
+        ],
+      });
+      waitForDurableLroCompletionMock.mockResolvedValueOnce({
+        status: "failed",
+        error: "R2 unavailable",
+        result,
+      });
 
-    const { archiveProjectStorage, ProjectArchiveStorageError } =
-      await import("@cocalc/server/projects/archive");
-    const error = await archiveProjectStorage({
-      project_id: "11111111-1111-4111-8111-111111111111",
-      mode: "automatic",
-      job_id: jobId,
-      reason: "free-inactive",
-      expected_host_id: "22222222-2222-4222-8222-222222222222",
-    }).catch((err) => err);
+      const { archiveProjectStorage, ProjectArchiveStorageError } =
+        await import("@cocalc/server/projects/archive");
+      const error = await archiveProjectStorage({
+        project_id: "11111111-1111-4111-8111-111111111111",
+        mode: "automatic",
+        job_id: jobId,
+        reason: "free-inactive",
+        expected_host_id: "22222222-2222-4222-8222-222222222222",
+      }).catch((err) => err);
 
-    expect(error).toBeInstanceOf(ProjectArchiveStorageError);
-    expect(error.message).toContain(
-      "final automatic archive backup failed: R2 unavailable",
-    );
-    expect(error.hostCleanupCompleted).toBe(false);
-    expect(error.reopenSafe).toBe(false);
-    expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
-    expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
-    expect(releaseProjectDataArchiveFreezeOnHostMock).not.toHaveBeenCalled();
-  });
+      expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+      expect(error.message).toContain(
+        "final automatic archive backup failed: R2 unavailable",
+      );
+      expect(error.hostCleanupCompleted).toBe(false);
+      expect(error.reopenSafe).toBe(reopenSafe);
+      expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
+      expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+      expect(releaseProjectDataArchiveFreezeOnHostMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("automatic archive revalidates generation coverage after final backup", async () => {
     const jobId = "77777777-7777-4777-8777-777777777777";

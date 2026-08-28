@@ -20,6 +20,7 @@ import {
 } from "node:fs/promises";
 import { executeCode } from "@cocalc/backend/execute-code";
 import {
+  ARCHIVE_BACKUP_SOURCE_RELEASED_ERROR_CODE,
   server as createFileServer,
   client as createFileClient,
   type Fileserver,
@@ -4040,6 +4041,12 @@ async function backupProjectToExternalRepository({
   }
 }
 
+function archiveBackupSourceReleasedError(err: unknown): ConatError {
+  return new ConatError(err instanceof Error ? err.message : `${err}`, {
+    code: ARCHIVE_BACKUP_SOURCE_RELEASED_ERROR_CODE,
+  });
+}
+
 async function createBackup({
   project_id,
   limit,
@@ -4058,12 +4065,20 @@ async function createBackup({
   freeze_source?: boolean;
 }): Promise<{ time: Date; id: string; generation: number | null }> {
   const progress = createLroRusticReporter(lro, "backup");
+  // The hub may reopen only when the host explicitly proves this stayed false
+  // or returned to false after restoring the source and staged snapshots.
+  let archiveFreezeMayExist = false;
   const managedBackupPolicy = await checkManagedBackupAllowedBestEffort({
     project_id,
     managed_egress_override,
+  }).catch((err) => {
+    if (freeze_source) throw archiveBackupSourceReleasedError(err);
+    throw err;
   });
   if (!managedBackupPolicy.allowed) {
-    throw new Error(managedBackupPolicy.message);
+    const err = new Error(managedBackupPolicy.message);
+    if (freeze_source) throw archiveBackupSourceReleasedError(err);
+    throw err;
   }
   const result = await withBackupParallelLimit({
     project_id,
@@ -4098,6 +4113,7 @@ async function createBackup({
             | undefined;
           let backupResult: Awaited<ReturnType<(typeof vol.rustic)["backup"]>>;
           try {
+            archiveFreezeMayExist = freeze_source === true;
             archiveFreeze = freeze_source
               ? await freezeVolumeForArchiveBackup(vol)
               : undefined;
@@ -4170,17 +4186,25 @@ async function createBackup({
             };
           } catch (err) {
             if (freeze_source) {
-              await releaseArchiveVolumeFreeze(vol).catch((releaseErr) => {
+              try {
+                const releaseStatus = await releaseArchiveVolumeFreeze(vol);
+                archiveFreezeMayExist = releaseStatus === "absent";
+              } catch (releaseErr) {
                 logger.error("unable to release failed archive backup freeze", {
                   project_id,
                   err: `${releaseErr}`,
                 });
-              });
+              }
             }
             throw err;
           }
         },
       }),
+  }).catch((err) => {
+    if (freeze_source && !archiveFreezeMayExist) {
+      throw archiveBackupSourceReleasedError(err);
+    }
+    throw err;
   });
   try {
     await rusticBackupBrowser.markStale(await resolveRusticRepo(project_id));

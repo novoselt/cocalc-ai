@@ -28,6 +28,7 @@ import {
   type ProjectArchiveLifecycleFinalBackup,
   updateProjectArchiveLifecycleJob,
 } from "./archive-lifecycle-db";
+import { isArchiveBackupFailureReopenSafe } from "./backup-freeze-recovery";
 import { isProjectArchiveBackupCurrent } from "./archive-lifecycle-policy";
 import type {
   ArchiveLifecycleProjectSnapshot,
@@ -67,6 +68,16 @@ type ArchiveRow = Omit<
 >;
 
 const FINAL_ARCHIVE_BACKUP_TAG = "automatic-project-archive-final";
+
+class FinalAutomaticArchiveBackupError extends Error {
+  readonly reopenSafe: boolean;
+
+  constructor(message: string, reopenSafe: boolean) {
+    super(message);
+    this.name = "FinalAutomaticArchiveBackupError";
+    this.reopenSafe = reopenSafe;
+  }
+}
 
 async function loadArchiveRow(project_id: string): Promise<ArchiveRow> {
   const { rows } = await getPool().query<ArchiveRow>(
@@ -169,8 +180,9 @@ async function createFinalAutomaticArchiveBackup({
     timeout_ms: BACKUP_TIMEOUT_MS + 60_000,
   });
   if (summary.status !== "succeeded") {
-    throw new Error(
+    throw new FinalAutomaticArchiveBackupError(
       `final automatic archive backup failed: ${summary.error ?? summary.status}`,
+      isArchiveBackupFailureReopenSafe(summary.result),
     );
   }
   const result = summary.result ?? {};
@@ -461,7 +473,9 @@ export async function archiveProjectStorage({
     // A queued freeze-capable backup continues on the project host when the
     // worker times out or loses its response. Without a returned generation,
     // keep the project claimed so a lifecycle retry can recover the barrier.
-    let reopenSafe = !finalBackupQueued;
+    let reopenSafe =
+      !finalBackupQueued ||
+      (err instanceof FinalAutomaticArchiveBackupError && err.reopenSafe);
     if (
       automatic &&
       !hostCleanupCompleted &&

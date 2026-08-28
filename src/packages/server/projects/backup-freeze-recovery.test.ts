@@ -1,4 +1,9 @@
-import { createBackupFreezeRecovery } from "./backup-freeze-recovery";
+import { ARCHIVE_BACKUP_SOURCE_RELEASED_ERROR_CODE } from "@cocalc/conat/files/file-server";
+import {
+  archiveBackupFreezeFailureResult,
+  createBackupFreezeRecovery,
+  isArchiveBackupFailureReopenSafe,
+} from "./backup-freeze-recovery";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -80,5 +85,39 @@ describe("backup freeze recovery", () => {
     );
 
     expect(releaseArchiveFreeze).not.toHaveBeenCalled();
+  });
+
+  it("attests only failures that never reached the host or were explicitly released", () => {
+    const notStarted = archiveBackupFreezeFailureResult({
+      enabled: true,
+      hostOperationStarted: false,
+      error: new Error("host unavailable"),
+    });
+    const released = archiveBackupFreezeFailureResult({
+      enabled: true,
+      hostOperationStarted: true,
+      error: Object.assign(new Error("R2 unavailable"), {
+        code: ARCHIVE_BACKUP_SOURCE_RELEASED_ERROR_CODE,
+      }),
+    });
+    const uncertain = archiveBackupFreezeFailureResult({
+      enabled: true,
+      hostOperationStarted: true,
+      error: new Error("timeout"),
+    });
+
+    expect(notStarted).toEqual({ archive_freeze_recovery: "not-started" });
+    expect(released).toEqual({ archive_freeze_recovery: "released" });
+    expect(uncertain).toEqual({ archive_freeze_recovery: "uncertain" });
+    expect(isArchiveBackupFailureReopenSafe(notStarted)).toBe(true);
+    expect(isArchiveBackupFailureReopenSafe(released)).toBe(true);
+    expect(isArchiveBackupFailureReopenSafe(uncertain)).toBe(false);
+    expect(
+      archiveBackupFreezeFailureResult({
+        enabled: false,
+        hostOperationStarted: false,
+        error: undefined,
+      }),
+    ).toBeUndefined();
   });
 });
