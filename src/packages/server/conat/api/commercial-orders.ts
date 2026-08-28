@@ -20,6 +20,7 @@ import type {
   CommercialManualPaymentRequest,
   CommercialOrderAssignRequest,
   CommercialOrderCreateRequest,
+  CommercialOrderCreatePreview,
   CommercialOrderEventsRequest,
   CommercialOrderEventsResponse,
   CommercialOrderGetRequest,
@@ -205,6 +206,12 @@ export async function create(
   opts: CommercialOrderCreateRequest,
 ): Promise<CommercialOrder> {
   return await invoke("create", opts, { fresh: true, capability: "mutate" });
+}
+
+export async function createPreview(
+  opts: CommercialOrderCreateRequest,
+): Promise<CommercialOrderCreatePreview> {
+  return await invoke("createPreview", opts);
 }
 
 export async function update(

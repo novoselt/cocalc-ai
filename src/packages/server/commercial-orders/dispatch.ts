@@ -10,6 +10,7 @@ import {
   backfillCommercialOrders,
   cancelCommercialOrder,
   createCommercialOrder,
+  previewCommercialOrderCreate,
   commercialQuotePreview,
   getCommercialOrder,
   getCommercialInvoice,
@@ -104,6 +105,8 @@ export async function dispatchCommercialSeedRequest(
       return await listCommercialOrderEvents(opts);
     case "create":
       return await createCommercialOrder(opts);
+    case "createPreview":
+      return previewCommercialOrderCreate(opts);
     case "update":
       return await updateCommercialOrder(opts);
     case "revise":

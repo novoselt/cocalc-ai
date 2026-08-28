@@ -93,6 +93,47 @@ describePglite("commercial order store", () => {
     }
   });
 
+  it("previews normalized create terms without writing an order", async () => {
+    const before = await pool.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM commercial_orders",
+    );
+    const preview = store.previewCommercialOrderCreate(
+      request({
+        agreed_subtotal: "3900.00",
+        next_action_due_at: "2026-09-01T00:00:00Z",
+        contacts: [],
+      }),
+    );
+    const after = await pool.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM commercial_orders",
+    );
+
+    expect(after.rows[0].count).toBe(before.rows[0].count);
+    expect(preview.normalized_request.agreed_subtotal).toBe("3900.0000000000");
+    expect(preview.normalized_request.next_action_due_at).toBe(
+      "2026-09-01T00:00:00.000Z",
+    );
+    expect(preview.normalized_request.account_id).toBeUndefined();
+    expect(preview.approval_ready).toBe(false);
+    expect(preview.approval_blockers).toEqual([
+      "exactly one billing contact is required before approval",
+    ]);
+
+    expect(() =>
+      store.previewCommercialOrderCreate(
+        request({ next_action: "Call Alice about the PO" as any }),
+      ),
+    ).toThrow("next_action is invalid");
+    expect(() =>
+      store.previewCommercialOrderCreate(
+        request({ next_action_due_at: "not-a-date" }),
+      ),
+    ).toThrow("next_action_due_at must be an ISO-8601 timestamp");
+    expect(() =>
+      store.previewCommercialOrderCreate(request({ items: [] })),
+    ).toThrow("at least one line item is required");
+  });
+
   it("creates an idempotent seed-global order and immutable event", async () => {
     const opts = request();
     const first = await store.createCommercialOrder(opts);

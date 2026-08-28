@@ -139,6 +139,19 @@ export interface CommercialOrderCreateRequest extends CommercialMutationRequest 
   contacts: CommercialOrderContactInput[];
 }
 
+export type CommercialOrderNormalizedCreateRequest = Omit<
+  CommercialOrderCreateRequest,
+  "items"
+> & {
+  items: Array<CommercialOrderItemInput & { position: number }>;
+};
+
+export interface CommercialOrderCreatePreview {
+  normalized_request: CommercialOrderNormalizedCreateRequest;
+  approval_ready: boolean;
+  approval_blockers: string[];
+}
+
 export interface CommercialOrderUpdateRequest extends CommercialMutationRequest {
   id: string;
   changes: Partial<
@@ -454,6 +467,9 @@ export interface CommercialOrdersApi {
   events: (
     opts: CommercialOrderEventsRequest,
   ) => Promise<CommercialOrderEventsResponse>;
+  createPreview: (
+    opts: CommercialOrderCreateRequest,
+  ) => Promise<CommercialOrderCreatePreview>;
   create: (opts: CommercialOrderCreateRequest) => Promise<CommercialOrder>;
   update: (opts: CommercialOrderUpdateRequest) => Promise<CommercialOrder>;
   revise: (opts: CommercialOrderRevisionRequest) => Promise<CommercialOrder>;
@@ -552,6 +568,7 @@ export const commercialOrders = {
   get: authFirstRequireAccount,
   listAssignees: authFirstRequireAccount,
   events: authFirstRequireAccount,
+  createPreview: authFirstRequireAccount,
   create: authFirstRequireAccount,
   update: authFirstRequireAccount,
   revise: authFirstRequireAccount,

@@ -35,6 +35,7 @@ export const COMMERCIAL_ACTION_CAPABILITIES = {
   reconcilePreview: "visible",
   fulfillmentPreview: "visible",
   diagnostics: "visible",
+  createPreview: "visible",
   create: "mutate",
   update: "mutate",
   revise: "mutate",

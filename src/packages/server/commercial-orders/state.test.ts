@@ -71,6 +71,51 @@ describe("commercial order state", () => {
     });
     expect(normalized.agreed_subtotal).toBe("3900.0000000000");
     expect(normalized.contacts[0].email_snapshot).toBe("payable@example.edu");
+    expect(normalized.next_action_due_at).toBe("2026-09-01T00:00:00.000Z");
+  });
+
+  it("rejects incomplete create terms before any database write", () => {
+    const valid = {
+      reason: "accepted pilot",
+      organization_name: "Example University",
+      agreed_subtotal: "3900",
+      next_action: "Confirm billing details" as const,
+      next_action_due_at: "2026-09-01T00:00:00Z",
+      items: [
+        {
+          description: "Campus adoption pilot",
+          quantity: "1",
+          unit_amount: "3900",
+          subtotal: "3900",
+          product_kind: "site_license",
+        },
+      ],
+      contacts: [],
+    };
+    expect(() =>
+      normalizeCreateRequest({ ...valid, next_action: "Call Alice" as any }),
+    ).toThrow("next_action is invalid");
+    expect(() =>
+      normalizeCreateRequest({ ...valid, next_action_due_at: undefined }),
+    ).toThrow("next_action_due_at is required");
+    expect(() =>
+      normalizeCreateRequest({ ...valid, next_action_due_at: "tomorrowish" }),
+    ).toThrow("next_action_due_at must be an ISO-8601 timestamp");
+    expect(() => normalizeCreateRequest({ ...valid, items: [] })).toThrow(
+      "at least one line item is required",
+    );
+    expect(() =>
+      normalizeCreateRequest({
+        ...valid,
+        contacts: [
+          {
+            role: "billing",
+            name_snapshot: "Accounts Payable",
+            email_snapshot: "not-an-email",
+          },
+        ],
+      }),
+    ).toThrow("needs a valid email address");
   });
 
   it("rejects illegal workflow and stale optimistic versions", () => {

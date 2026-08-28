@@ -669,7 +669,16 @@ function registerOrderMutationCommands(
         opts.idempotencyKey,
       );
       if (!opts.commit) {
-        return preview("create", undefined, request as unknown as JsonObject);
+        const validated = await ctx.hub.commercialOrders.createPreview(request);
+        return preview(
+          "create",
+          undefined,
+          validated.normalized_request as unknown as JsonObject,
+          {
+            approval_ready: validated.approval_ready,
+            approval_blockers: validated.approval_blockers,
+          },
+        );
       }
       return await ctx.hub.commercialOrders.create(request);
     });

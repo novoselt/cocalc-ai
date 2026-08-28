@@ -61,6 +61,7 @@ jest.mock("./dangerous-session-auth", () => ({
 import {
   approve,
   create,
+  createPreview,
   createInvoiceDraft,
   issueManualInvoice,
   list,
@@ -157,6 +158,33 @@ describe("commercial orders public Conat API", () => {
         reason: "List eligible receivables assignees",
         source: "admin-ui",
       },
+    });
+  });
+
+  it("validates create previews as a read without fresh auth", async () => {
+    mockDispatchCommercialSeedRequest.mockResolvedValue({
+      normalized_request: { organization_name: "Example University" },
+      approval_ready: false,
+      approval_blockers: ["exactly one billing contact is required"],
+    });
+
+    await createPreview({
+      ...BASE,
+      organization_name: "Example University",
+    } as any);
+
+    expect(mockRequireDangerousSessionAuth).not.toHaveBeenCalled();
+    expect(mockAssertCommercialReceivablesCapability).toHaveBeenCalledWith(
+      "visible",
+    );
+    expect(mockDispatchCommercialSeedRequest).toHaveBeenCalledWith({
+      action: "createPreview",
+      actor_account_id: "admin-1",
+      payload: expect.objectContaining({
+        organization_name: "Example University",
+        reason: BASE.reason,
+        source: "admin-ui",
+      }),
     });
   });
 

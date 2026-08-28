@@ -19,7 +19,9 @@ import type {
   CommercialMutationRequest,
   CommercialOrderAssignRequest,
   CommercialOrderContactInput,
+  CommercialOrderCreatePreview,
   CommercialOrderCreateRequest,
+  CommercialOrderNormalizedCreateRequest,
   CommercialOrderEventsRequest,
   CommercialOrderEventsResponse,
   CommercialOrderItemInput,
@@ -607,8 +609,7 @@ async function insertContacts(
 export async function createCommercialOrder(
   opts: CommercialOrderCreateRequest,
 ): Promise<CommercialOrder> {
-  const reason = requireReason(opts.reason);
-  const normalized = normalizeCreateRequest(opts);
+  const { normalized_request: normalized } = previewCommercialOrderCreate(opts);
   const key = commercialIdempotencyKey("create", opts as any);
   return await withTransaction(async (client) => {
     const replay = await replayOrderId(client, key, {
@@ -656,7 +657,7 @@ export async function createCommercialOrder(
         opts.terms_snapshot ?? {},
         opts.assignee_account_id ?? opts.account_id,
         normalized.next_action,
-        opts.next_action_due_at ?? null,
+        normalized.next_action_due_at ?? null,
         opts.account_id,
       ],
     );
@@ -668,13 +669,46 @@ export async function createCommercialOrder(
       event_type: "order-created",
       actor_account_id: opts.account_id,
       source: opts.source ?? "cli",
-      reason,
+      reason: normalized.reason,
       idempotency_key: key,
       after: order as any,
       identity_payload: opts as any,
     });
     return order;
   });
+}
+
+export function previewCommercialOrderCreate(
+  opts: CommercialOrderCreateRequest,
+): CommercialOrderCreatePreview {
+  assertSeedAuthority();
+  const reason = requireReason(opts.reason);
+  if (!opts.account_id) throw Error("account_id is required");
+  const normalized = normalizeCreateRequest(opts);
+  const {
+    account_id: _accountId,
+    browser_id: _browserId,
+    session_hash: _sessionHash,
+    ...publicRequest
+  } = opts;
+  const normalizedRequest: CommercialOrderNormalizedCreateRequest = {
+    ...publicRequest,
+    ...normalized,
+    reason,
+  };
+  const approvalBlockers: string[] = [];
+  if (
+    normalized.contacts.filter(({ role }) => role === "billing").length !== 1
+  ) {
+    approvalBlockers.push(
+      "exactly one billing contact is required before approval",
+    );
+  }
+  return {
+    normalized_request: normalizedRequest,
+    approval_ready: approvalBlockers.length === 0,
+    approval_blockers: approvalBlockers,
+  };
 }
 
 function decodeCursor(

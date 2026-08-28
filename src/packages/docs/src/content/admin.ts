@@ -204,6 +204,13 @@ Run \`cocalc admin receivables --help\` and the relevant nested command's
 \`--help\` before a mutation. Mutations preview by default. Review the preview,
 then repeat with the displayed version, a concrete reason, and \`--commit\`.
 
+Order creation previews are validated by the same seed-authoritative code used
+for commits. They reject nonstandard next actions, missing or invalid due dates,
+malformed contacts, and invalid or inconsistent line items. The preview also
+normalizes amounts, email addresses, and timestamps. A draft may be created
+before its billing contact is known, but \`approval_ready\` remains false and
+\`approval_blockers\` explains that exactly one billing contact is required.
+
 ## Rollout controls
 
 Enable these site settings independently under **Billing & Commerce / Accounts
