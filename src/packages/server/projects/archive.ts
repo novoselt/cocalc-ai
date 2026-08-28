@@ -8,12 +8,14 @@ import getLogger from "@cocalc/backend/logger";
 import getPool from "@cocalc/database/pool";
 import { appendProjectOutboxEventForProject } from "@cocalc/database/postgres/project-events-outbox";
 import { assertProjectNotRehoming } from "@cocalc/database/postgres/project-rehome-fence";
+import type { LroSummary } from "@cocalc/conat/hub/api/lro";
 import { publishProjectAccountFeedEventsBestEffort } from "@cocalc/server/account/project-feed";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { createBackup } from "@cocalc/server/conat/api/project-backups";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { resolveProjectBay } from "@cocalc/server/inter-bay/directory";
 import { waitForDurableLroCompletion } from "@cocalc/server/lro/wait";
+import { listLrosByDedupe } from "@cocalc/server/lro/lro-db";
 import {
   deleteProjectDataOnHost,
   deleteProjectDataOnHostAfterBackup,
@@ -152,33 +154,76 @@ function assertAutomaticArchiveCanCreateBackup(row: ArchiveRow): void {
 async function createFinalAutomaticArchiveBackup({
   project_id,
   job_id,
-  onBackupQueued,
+  beforeCreateNew,
+  onBackupBarrierMayExist,
 }: {
   project_id: string;
   job_id: string;
-  onBackupQueued?: () => void;
+  beforeCreateNew: () => Promise<void>;
+  onBackupBarrierMayExist?: () => void;
 }): Promise<ProjectArchiveLifecycleFinalBackup> {
-  const op = await createBackup(
-    {
-      project_id,
-      tags: [FINAL_ARCHIVE_BACKUP_TAG],
-    },
-    {
-      skip_collab_check: true,
-      skip_rootfs_portability_check: true,
-      replace_oldest_at_limit: true,
-      freeze_source: true,
-      dedupe_key: `${FINAL_ARCHIVE_BACKUP_TAG}:${job_id}`,
-    },
+  const dedupeKey = `${FINAL_ARCHIVE_BACKUP_TAG}:${job_id}`;
+  let history: LroSummary[];
+  try {
+    history = await listLrosByDedupe({
+      scope_type: "project",
+      scope_id: project_id,
+      dedupe_key: dedupeKey,
+    });
+  } catch (err) {
+    // A lifecycle retry cannot reopen while it cannot rule out a prior
+    // succeeded-but-unrecorded freeze for this durable job identity.
+    onBackupBarrierMayExist?.();
+    throw err;
+  }
+
+  let summary: LroSummary;
+  const active = history.find(({ status }) =>
+    ["queued", "running"].includes(status),
   );
-  onBackupQueued?.();
-  const summary = await waitForDurableLroCompletion({
-    op_id: op.op_id,
-    scope_type: op.scope_type,
-    scope_id: op.scope_id,
-    client: conat(),
-    timeout_ms: BACKUP_TIMEOUT_MS + 60_000,
-  });
+  const succeeded = history.find(({ status }) => status === "succeeded");
+  if (active) {
+    onBackupBarrierMayExist?.();
+    summary = await waitForDurableLroCompletion({
+      op_id: active.op_id,
+      scope_type: active.scope_type,
+      scope_id: active.scope_id,
+      client: conat(),
+      timeout_ms: BACKUP_TIMEOUT_MS + 60_000,
+    });
+  } else if (succeeded) {
+    onBackupBarrierMayExist?.();
+    summary = succeeded;
+  } else {
+    if (
+      history.some(({ result }) => !isArchiveBackupFailureReopenSafe(result))
+    ) {
+      onBackupBarrierMayExist?.();
+    }
+    await beforeCreateNew();
+    const op = await createBackup(
+      {
+        project_id,
+        tags: [FINAL_ARCHIVE_BACKUP_TAG],
+      },
+      {
+        skip_collab_check: true,
+        skip_rootfs_portability_check: true,
+        replace_oldest_at_limit: true,
+        freeze_source: true,
+        dedupe_key: dedupeKey,
+        on_lro_create_started: onBackupBarrierMayExist,
+      },
+    );
+    onBackupBarrierMayExist?.();
+    summary = await waitForDurableLroCompletion({
+      op_id: op.op_id,
+      scope_type: op.scope_type,
+      scope_id: op.scope_id,
+      client: conat(),
+      timeout_ms: BACKUP_TIMEOUT_MS + 60_000,
+    });
+  }
   if (summary.status !== "succeeded") {
     throw new FinalAutomaticArchiveBackupError(
       `final automatic archive backup failed: ${summary.error ?? summary.status}`,
@@ -330,7 +375,7 @@ export async function archiveProjectStorage({
   let hostCleanupCompleted = false;
   let expectedArchiveGeneration: number | undefined;
   let expectedArchiveBackupId: string | undefined;
-  let finalBackupQueued = false;
+  let finalBackupBarrierMayExist = false;
   let finalBackup: ProjectArchiveLifecycleFinalBackup | undefined;
   try {
     if (!row.backup_repo_id) {
@@ -355,9 +400,6 @@ export async function archiveProjectStorage({
       if (finalBackup && finalBackupCurrent) {
         expectedArchiveGeneration = Number(finalBackup.generation);
         expectedArchiveBackupId = finalBackup.id;
-      }
-      if (row.provisioned !== false && !finalBackupCurrent) {
-        assertAutomaticArchiveCanCreateBackup(row);
       }
     } else if (!hostDeprovisioned && row.last_backup == null) {
       throw new Error(
@@ -388,8 +430,17 @@ export async function archiveProjectStorage({
         finalBackup = await createFinalAutomaticArchiveBackup({
           project_id,
           job_id: jobId,
-          onBackupQueued: () => {
-            finalBackupQueued = true;
+          beforeCreateNew: async () => {
+            row = await loadArchiveRow(project_id);
+            assertAutomaticArchiveClaimCurrent({
+              row,
+              job_id: jobId,
+              expected_host_id,
+            });
+            assertAutomaticArchiveCanCreateBackup(row);
+          },
+          onBackupBarrierMayExist: () => {
+            finalBackupBarrierMayExist = true;
           },
         });
         expectedArchiveGeneration = Number(finalBackup.generation);
@@ -470,11 +521,11 @@ export async function archiveProjectStorage({
       status: "completed",
     });
   } catch (err) {
-    // A queued freeze-capable backup continues on the project host when the
-    // worker times out or loses its response. Without a returned generation,
-    // keep the project claimed so a lifecycle retry can recover the barrier.
+    // A prior or current freeze-capable backup can continue on the project
+    // host when the worker times out or loses its response. Without a returned
+    // generation, keep the claim so a lifecycle retry can recover the barrier.
     let reopenSafe =
-      !finalBackupQueued ||
+      !finalBackupBarrierMayExist ||
       (err instanceof FinalAutomaticArchiveBackupError && err.reopenSafe);
     if (
       automatic &&

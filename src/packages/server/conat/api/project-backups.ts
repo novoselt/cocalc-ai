@@ -297,6 +297,7 @@ export async function createBackup(
     replace_oldest_at_limit?: boolean;
     freeze_source?: boolean;
     dedupe_key?: string;
+    on_lro_create_started?: () => void;
   },
 ): Promise<{
   op_id: string;
@@ -320,6 +321,7 @@ export async function createBackup(
       throw new Error(`project ${project_id} not found`);
     }
     if (ownership.bay_id !== getConfiguredBayId()) {
+      opts?.on_lro_create_started?.();
       const op = await createBackupLro({
         account_id,
         project_id,
@@ -364,6 +366,7 @@ export async function createBackup(
       operation: "backup",
     });
   }
+  opts?.on_lro_create_started?.();
   const op = await createBackupLro({
     account_id,
     project_id,

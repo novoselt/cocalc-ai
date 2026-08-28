@@ -453,6 +453,28 @@ export async function getLro(op_id: string): Promise<LroSummary | undefined> {
   return rows[0] as LroSummary | undefined;
 }
 
+export async function listLrosByDedupe({
+  scope_type,
+  scope_id,
+  dedupe_key,
+}: {
+  scope_type: LroScopeType;
+  scope_id: string;
+  dedupe_key: string;
+}): Promise<LroSummary[]> {
+  await ensureLroSchema();
+  const { rows } = await pool().query(
+    `SELECT *
+       FROM long_running_operations
+      WHERE scope_type=$1
+        AND scope_id=$2
+        AND dedupe_key=$3
+      ORDER BY created_at DESC`,
+    [scope_type, scope_id, dedupe_key],
+  );
+  return rows as LroSummary[];
+}
+
 export async function listChildLro({
   parent_id,
 }: {

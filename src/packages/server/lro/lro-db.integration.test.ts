@@ -5,7 +5,14 @@
 
 import { after, before, getPool } from "@cocalc/server/test";
 import { uuid } from "@cocalc/util/misc";
-import { createLro, ensureLroSchema, expireDueLros, getLro } from "./lro-db";
+import {
+  createLro,
+  ensureLroSchema,
+  expireDueLros,
+  getLro,
+  listLrosByDedupe,
+  updateLro,
+} from "./lro-db";
 
 beforeAll(async () => {
   await before();
@@ -56,5 +63,44 @@ describe("LRO database maintenance integration", () => {
     );
     expect(rows[0]?.indexdef).toContain("expires_at");
     expect(rows[0]?.indexdef).toContain("dismissed_at IS NULL");
+  });
+
+  it("lists all operations for a durable dedupe identity newest first", async () => {
+    const scope_id = uuid();
+    const dedupe_key = `archive-final:${uuid()}`;
+    const first = await createLro({
+      kind: "project-backup",
+      scope_type: "project",
+      scope_id,
+      dedupe_key,
+    });
+    await updateLro({
+      op_id: first.op_id,
+      status: "succeeded",
+      result: { id: "backup-1", generation: 1 },
+    });
+    await getPool().query(
+      `UPDATE long_running_operations
+          SET created_at = created_at - interval '1 minute'
+        WHERE op_id=$1`,
+      [first.op_id],
+    );
+    const second = await createLro({
+      kind: "project-backup",
+      scope_type: "project",
+      scope_id,
+      dedupe_key,
+    });
+
+    await expect(
+      listLrosByDedupe({
+        scope_type: "project",
+        scope_id,
+        dedupe_key,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ op_id: second.op_id, status: "queued" }),
+      expect.objectContaining({ op_id: first.op_id, status: "succeeded" }),
+    ]);
   });
 });

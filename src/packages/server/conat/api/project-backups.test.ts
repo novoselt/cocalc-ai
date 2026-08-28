@@ -216,20 +216,43 @@ describe("project-backups.createBackup", () => {
       },
     });
     const { createBackup } = await import("./project-backups");
+    const onLroCreateStarted = jest.fn();
 
     await expect(
-      createBackup({
-        account_id: "acct-1",
-        project_id: "proj-1",
-      }),
+      createBackup(
+        {
+          account_id: "acct-1",
+          project_id: "proj-1",
+        },
+        { on_lro_create_started: onLroCreateStarted },
+      ),
     ).rejects.toThrow("Limit triggered by the 7-day network usage window.");
 
     expect(getManagedProjectEgressPolicyMock).toHaveBeenCalledWith({
       project_id: "proj-1",
       category: "backup-upload",
     });
+    expect(onLroCreateStarted).not.toHaveBeenCalled();
     expect(createLroMock).not.toHaveBeenCalled();
     expect(triggerBackupLroWorkerMock).not.toHaveBeenCalled();
+  });
+
+  it("signals immediately before durable backup LRO creation", async () => {
+    const { createBackup } = await import("./project-backups");
+    const onLroCreateStarted = jest.fn();
+
+    await createBackup(
+      {
+        account_id: "acct-1",
+        project_id: "proj-1",
+      },
+      { on_lro_create_started: onLroCreateStarted },
+    );
+
+    expect(onLroCreateStarted).toHaveBeenCalledTimes(1);
+    expect(onLroCreateStarted.mock.invocationCallOrder[0]).toBeLessThan(
+      createLroMock.mock.invocationCallOrder[0],
+    );
   });
 
   it("allows the internal admin host drain override to bypass the managed egress preflight", async () => {
