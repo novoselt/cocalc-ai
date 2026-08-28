@@ -16,13 +16,13 @@ import {
 import dayjs from "dayjs";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
+import type { SiteLicenseRevenueAnalytics } from "@cocalc/conat/hub/api/commercial-orders";
 import type {
   AdminMembershipTierRow,
   ComputeRevenueProduct,
   ComputeRevenueSeries,
   MembershipAllocationChannel,
   MembershipAllocationSeries,
-  SiteLicenseRevenueSeries,
 } from "@cocalc/conat/hub/api/purchases";
 import { Tooltip } from "@cocalc/frontend/components";
 import ShowError from "@cocalc/frontend/components/error";
@@ -55,7 +55,12 @@ import {
   type MembershipAnalyticsSummaryRow,
   type MembershipAnalyticsTier,
 } from "./membership-analytics-view";
-import { addSiteLicenseRevenueToAnalyticsView } from "./site-license-revenue-analytics-view";
+import {
+  addSiteLicenseRevenueToAnalyticsView,
+  buildSiteLicenseAccountingView,
+  SITE_LICENSE_REVENUE_MEASURES,
+  siteLicenseAccountingTotals,
+} from "./site-license-revenue-analytics-view";
 
 const { Text, Title } = Typography;
 const DAYS_IN_YEAR_COMPARISON = 364;
@@ -292,14 +297,14 @@ export function siteLicenseAnalyticsTableRowExplanation(
 ): string | undefined {
   if (row.countApplicable === false) {
     return breakdown === "channel" || breakdown === "source"
-      ? "Site license revenue is shown for the license as a whole. This row does not represent an assigned membership count."
-      : "Site license revenue is shown for the license as a whole. Membership counts are included in the tier breakdown.";
+      ? "Contracted site license value is shown for the license as a whole. This row does not represent an assigned membership count."
+      : "Contracted site license value is shown for the license as a whole. Membership counts are included in the tier breakdown.";
   }
   if (
     row.channel === "site" &&
     (breakdown === "channel-tier" || breakdown === "tier-channel")
   ) {
-    return "Site license memberships are shown by tier. Revenue is shown separately for the license as a whole.";
+    return "Site license memberships are shown by tier. Contracted value is shown separately for the license as a whole.";
   }
 }
 
@@ -522,7 +527,7 @@ export function RevenueAnalyticsDashboard({
   const [computeAllocation, setComputeAllocation] =
     useState<ComputeRevenueSeries | null>(null);
   const [siteLicenseRevenue, setSiteLicenseRevenue] =
-    useState<SiteLicenseRevenueSeries | null>(null);
+    useState<SiteLicenseRevenueAnalytics | null>(null);
   const [tiers, setTiers] = useState<MembershipAnalyticsTier[]>([]);
   const [period, setPeriod] = useState<Period>("year");
   const [comparison, setComparison] = useState<Comparison>(364);
@@ -554,10 +559,13 @@ export function RevenueAnalyticsDashboard({
             start,
             end: todayUtc(),
           }),
-          webapp_client.conat_client.hub.purchases.getSiteLicenseRevenueSeries({
-            start,
-            end,
-          }),
+          webapp_client.conat_client.hub.commercialOrders.siteLicenseRevenueAnalytics(
+            {
+              start,
+              end,
+              reason: "Review site license revenue analytics",
+            },
+          ),
           webapp_client.conat_client.hub.purchases.getMembershipTierAdminOverview(
             {},
           ),
@@ -688,6 +696,33 @@ export function RevenueAnalyticsDashboard({
           comparisonDays: comparison,
         })
       : baseView;
+  const siteAccountingRows = selectedSiteLicenseRevenue.filter(({ day }) => {
+    const key = new Date(day).toISOString().slice(0, 10);
+    return key >= start && key <= end;
+  });
+  const siteAccountingView =
+    selectedChannels.has("site") && end && start <= end
+      ? buildSiteLicenseAccountingView({
+          rows: selectedSiteLicenseRevenue,
+          start,
+          end,
+          comparisonDays: comparison,
+        })
+      : undefined;
+  const siteAccountingVisuals = siteAccountingView
+    ? buildMembershipAnalyticsSeriesVisuals({
+        series: siteAccountingView.series,
+        tiers: [],
+        breakdown: "source",
+      })
+    : [];
+  const siteAccountingTotals = siteAccountingView
+    ? siteLicenseAccountingTotals({
+        rows: selectedSiteLicenseRevenue,
+        start,
+        end,
+      })
+    : undefined;
   const visuals = view
     ? buildMembershipAnalyticsSeriesVisuals({
         series: view.series,
@@ -865,7 +900,7 @@ export function RevenueAnalyticsDashboard({
 
           <Space vertical style={{ width: "100%" }}>
             <Title level={4} style={{ margin: 0 }}>
-              Recognized revenue per day
+              Revenue per day
             </Title>
             <MembershipAnalyticsPlot
               view={view}
@@ -931,6 +966,69 @@ export function RevenueAnalyticsDashboard({
               : "Select at least one membership or compute product."
           }
         />
+      ) : null}
+
+      {siteAccountingView && siteAccountingRows.length ? (
+        <Space vertical size="middle" style={{ width: "100%" }}>
+          <Space vertical size={0}>
+            <Title level={4} style={{ margin: 0 }}>
+              Site license accounting
+            </Title>
+            <Text type="secondary">
+              These are distinct measures and must not be added together. The
+              chart uses lines rather than stacking for that reason.
+            </Text>
+          </Space>
+          <MembershipAnalyticsLegend
+            visuals={siteAccountingVisuals}
+            breakdown="source"
+            comparisonLabel={
+              comparison > 0 && siteAccountingView.comparisonAvailable
+                ? comparisonLabel(comparison)
+                : undefined
+            }
+            chartMode="lines"
+          />
+          <MembershipAnalyticsPlot
+            view={siteAccountingView}
+            visuals={siteAccountingVisuals}
+            metric="revenue"
+            chartMode="lines"
+            hoverDay={hoverDay}
+            onHoverDay={setHoverDay}
+            comparisonLabel={
+              comparison > 0 && siteAccountingView.comparisonAvailable
+                ? comparisonLabel(comparison)
+                : undefined
+            }
+          />
+          <Table
+            aria-label="Site license accounting totals"
+            bordered
+            size="small"
+            pagination={false}
+            rowKey="measure"
+            dataSource={SITE_LICENSE_REVENUE_MEASURES}
+            columns={[
+              {
+                title: "Measure",
+                dataIndex: "label",
+                render: (label: string, row) => (
+                  <Tooltip title={row.description}>
+                    <span tabIndex={0}>{label}</span>
+                  </Tooltip>
+                ),
+              },
+              {
+                title: "Selected period",
+                dataIndex: "measure",
+                align: "right",
+                render: (measure) =>
+                  formatMoneyCents(siteAccountingTotals?.[measure] ?? 0),
+              },
+            ]}
+          />
+        </Space>
       ) : null}
     </Space>
   );

@@ -4,7 +4,18 @@
  */
 
 import { buildMembershipAnalyticsView } from "./membership-analytics-view";
-import { addSiteLicenseRevenueToAnalyticsView } from "./site-license-revenue-analytics-view";
+import {
+  addSiteLicenseRevenueToAnalyticsView,
+  buildSiteLicenseAccountingView,
+  siteLicenseAccountingTotals,
+} from "./site-license-revenue-analytics-view";
+
+const contracted = (day: string, amount_cents: number) => ({
+  day,
+  measure: "contracted" as const,
+  amount_cents,
+  source_count: 1,
+});
 
 const tiers = [{ id: "pro", label: "Pro", priority: 30 }];
 const siteAssignment = {
@@ -30,7 +41,7 @@ describe("site-license revenue analytics view", () => {
         start: "2026-08-24",
         end: "2026-08-24",
       }),
-      rows: [{ day: "2026-08-24", revenue_cents: 1250 }],
+      rows: [contracted("2026-08-24", 1250)],
       breakdown: "tier",
       comparisonDays: 0,
     });
@@ -65,7 +76,7 @@ describe("site-license revenue analytics view", () => {
         start: "2026-08-24",
         end: "2026-08-24",
       }),
-      rows: [{ day: "2026-08-24", revenue_cents: 1250 }],
+      rows: [contracted("2026-08-24", 1250)],
       breakdown: "channel",
       comparisonDays: 0,
     });
@@ -76,5 +87,46 @@ describe("site-license revenue analytics view", () => {
       activeMemberships: 2,
       revenueCents: 1250,
     });
+  });
+
+  it("keeps the three accounting measures as distinct series and totals", () => {
+    const rows = [
+      contracted("2026-08-23", 100),
+      contracted("2026-08-24", 150),
+      {
+        day: "2026-08-24",
+        measure: "invoiced" as const,
+        amount_cents: 500,
+        source_count: 1,
+      },
+      {
+        day: "2026-08-24",
+        measure: "collected" as const,
+        amount_cents: 450,
+        source_count: 1,
+      },
+    ];
+    const view = buildSiteLicenseAccountingView({
+      rows,
+      start: "2026-08-23",
+      end: "2026-08-24",
+      comparisonDays: 0,
+    });
+
+    expect(view.series.map(({ label }) => label)).toEqual([
+      "Contracted",
+      "Invoiced",
+      "Cash collected (gross)",
+    ]);
+    expect(
+      view.series.map(({ current }) => current.at(-1)?.revenueCents),
+    ).toEqual([150, 500, 450]);
+    expect(
+      siteLicenseAccountingTotals({
+        rows,
+        start: "2026-08-23",
+        end: "2026-08-24",
+      }),
+    ).toEqual({ contracted: 250, invoiced: 500, collected: 450 });
   });
 });

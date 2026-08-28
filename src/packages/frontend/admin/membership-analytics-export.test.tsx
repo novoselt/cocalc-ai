@@ -152,7 +152,9 @@ describe("membership analytics export", () => {
       siteLicenseRevenueRows: [
         {
           day: "2026-08-10",
-          revenue_cents: 900,
+          measure: "contracted",
+          amount_cents: 900,
+          source_count: 1,
         },
       ],
       membershipChannels: ["personal"],
@@ -170,12 +172,14 @@ describe("membership analytics export", () => {
       membership_rows: [{ day: "2026-08-10" }],
       compute_revenue_rows: [{ day: "2026-08-10", revenue_cents: 1250 }],
       compute_usage_rows: [{ day: "2026-08-10", running_unit_seconds: 86_400 }],
-      site_license_revenue_rows: [{ day: "2026-08-10", revenue_cents: 900 }],
+      site_license_revenue_rows: [
+        { day: "2026-08-10", measure: "contracted", amount_cents: 900 },
+      ],
     });
     const csv = revenueAnalyticsDailyExportCsv(combined);
     expect(csv).toContain("compute-revenue");
     expect(csv).toContain("compute-usage");
-    expect(csv).toContain("site-license-revenue");
+    expect(csv).toContain("site-license-accounting");
     expect(csv).not.toContain("account_id");
   });
 });

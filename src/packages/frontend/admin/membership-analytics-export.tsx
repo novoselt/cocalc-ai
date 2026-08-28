@@ -6,6 +6,7 @@
 import { Button, Popover, Space } from "antd";
 import { stringify as csvStringify } from "csv-stringify/sync";
 
+import type { SiteLicenseRevenueAnalyticsRow } from "@cocalc/conat/hub/api/commercial-orders";
 import {
   MEMBERSHIP_ALLOCATION_DAILY_EXPORT_FORMAT,
   MEMBERSHIP_ALLOCATION_DAILY_EXPORT_VERSION,
@@ -16,7 +17,6 @@ import {
   type ComputeRevenueDailyRow,
   type ComputeRevenueProduct,
   type ComputeUsageDailyRow,
-  type SiteLicenseRevenueDailyRow,
 } from "@cocalc/conat/hub/api/purchases";
 import { Icon } from "@cocalc/frontend/components/icon";
 
@@ -48,11 +48,14 @@ const REVENUE_CSV_COLUMNS = [
   "product",
   "provider",
   "cost_component",
+  "measure",
   "active_memberships",
   "purchased_capacity",
   "running_unit_seconds",
   "distinct_running_units",
   "revenue_cents",
+  "amount_cents",
+  "source_count",
   "purchase_count",
   "fact_count",
 ] as const;
@@ -158,7 +161,7 @@ export interface RevenueAnalyticsDailyExport {
     Omit<ComputeUsageDailyRow, "day"> & { day: string }
   >;
   site_license_revenue_rows: Array<
-    Omit<SiteLicenseRevenueDailyRow, "day"> & { day: string }
+    Omit<SiteLicenseRevenueAnalyticsRow, "day"> & { day: string }
   >;
 }
 
@@ -177,7 +180,7 @@ export function buildRevenueAnalyticsDailyExport({
   membershipRows: MembershipAllocationDailyRow[];
   computeRevenueRows: ComputeRevenueDailyRow[];
   computeUsageRows: ComputeUsageDailyRow[];
-  siteLicenseRevenueRows: SiteLicenseRevenueDailyRow[];
+  siteLicenseRevenueRows: SiteLicenseRevenueAnalyticsRow[];
   membershipChannels: MembershipAllocationChannel[];
   computeProducts: ComputeRevenueProduct[];
   tiers: MembershipAllocationDailyExportTier[];
@@ -233,7 +236,7 @@ export function revenueAnalyticsDailyExportCsv(
     rows.push({ record_type: "compute-usage", ...row });
   }
   for (const row of payload.site_license_revenue_rows) {
-    rows.push({ record_type: "site-license-revenue", ...row });
+    rows.push({ record_type: "site-license-accounting", ...row });
   }
   return csvStringify(rows, {
     header: true,

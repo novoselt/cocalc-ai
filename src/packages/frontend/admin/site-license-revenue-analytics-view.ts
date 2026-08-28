@@ -3,7 +3,10 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import type { SiteLicenseRevenueDailyRow } from "@cocalc/conat/hub/api/purchases";
+import type {
+  SiteLicenseRevenueAnalyticsRow,
+  SiteLicenseRevenueMeasure,
+} from "@cocalc/conat/hub/api/commercial-orders";
 
 import type {
   MembershipAnalyticsBreakdown,
@@ -16,6 +19,31 @@ import { shiftMembershipAnalyticsDay } from "./membership-analytics-view";
 
 const SITE_LICENSE_REVENUE_KEY = "site-license-revenue";
 
+export const SITE_LICENSE_REVENUE_MEASURES: Array<{
+  measure: SiteLicenseRevenueMeasure;
+  label: string;
+  description: string;
+}> = [
+  {
+    measure: "contracted",
+    label: "Contracted",
+    description:
+      "Approved, non-complimentary site-license line-item value allocated exactly across its service dates. Taxes are excluded.",
+  },
+  {
+    measure: "invoiced",
+    label: "Invoiced",
+    description:
+      "Issued site-license invoice subtotal on the invoice issue date. Draft, void, and failed invoices and taxes are excluded.",
+  },
+  {
+    measure: "collected",
+    label: "Cash collected (gross)",
+    description:
+      "Cash received for site licenses on the payment date. This is gross collection history, including payments later refunded.",
+  },
+];
+
 function dayKey(value: Date | string): string {
   const date = new Date(value);
   if (!Number.isFinite(date.valueOf())) {
@@ -24,11 +52,15 @@ function dayKey(value: Date | string): string {
   return date.toISOString().slice(0, 10);
 }
 
-function revenueByDay(rows: SiteLicenseRevenueDailyRow[]): Map<string, number> {
+function revenueByDay(
+  rows: SiteLicenseRevenueAnalyticsRow[],
+  measure: SiteLicenseRevenueMeasure,
+): Map<string, number> {
   const values = new Map<string, number>();
   for (const row of rows) {
+    if (row.measure !== measure) continue;
     const day = dayKey(row.day);
-    values.set(day, (values.get(day) ?? 0) + Number(row.revenue_cents || 0));
+    values.set(day, (values.get(day) ?? 0) + Number(row.amount_cents || 0));
   }
   return values;
 }
@@ -92,11 +124,11 @@ export function addSiteLicenseRevenueToAnalyticsView({
   comparisonDays,
 }: {
   view: MembershipAnalyticsView;
-  rows: SiteLicenseRevenueDailyRow[];
+  rows: SiteLicenseRevenueAnalyticsRow[];
   breakdown: MembershipAnalyticsBreakdown;
   comparisonDays: number;
 }): MembershipAnalyticsView {
-  const values = revenueByDay(rows);
+  const values = revenueByDay(rows, "contracted");
   const days = viewDays(view);
   const comparisonDay = shiftMembershipAnalyticsDay(
     view.latestDay,
@@ -192,4 +224,85 @@ export function addSiteLicenseRevenueToAnalyticsView({
       summary,
     ],
   };
+}
+
+export function buildSiteLicenseAccountingView({
+  rows,
+  start,
+  end,
+  comparisonDays,
+}: {
+  rows: SiteLicenseRevenueAnalyticsRow[];
+  start: string;
+  end: string;
+  comparisonDays: number;
+}): MembershipAnalyticsView {
+  const days: string[] = [];
+  for (let day = start; day <= end; day = shiftMembershipAnalyticsDay(day, 1)) {
+    days.push(day);
+  }
+  const series = SITE_LICENSE_REVENUE_MEASURES.map(
+    ({ measure, label }, order): MembershipAnalyticsSeries => {
+      const values = revenueByDay(rows, measure);
+      return {
+        key: `site-license-${measure}`,
+        label,
+        priority: 0,
+        order,
+        current: days.map((displayDay) =>
+          revenuePoint({ displayDay, actualDay: displayDay, values }),
+        ),
+        comparison:
+          comparisonDays > 0
+            ? days.map((displayDay) =>
+                revenuePoint({
+                  displayDay,
+                  actualDay: shiftMembershipAnalyticsDay(
+                    displayDay,
+                    -comparisonDays,
+                  ),
+                  values,
+                }),
+              )
+            : [],
+      };
+    },
+  );
+  const earliest = rows.length
+    ? [...rows].sort((a, b) => dayKey(a.day).localeCompare(dayKey(b.day)))[0]
+        .day
+    : start;
+  return {
+    start,
+    end,
+    latestDay: end,
+    comparisonAvailable:
+      comparisonDays === 0 ||
+      dayKey(earliest) <= shiftMembershipAnalyticsDay(start, -comparisonDays),
+    series,
+    summary: [],
+  };
+}
+
+export function siteLicenseAccountingTotals({
+  rows,
+  start,
+  end,
+}: {
+  rows: SiteLicenseRevenueAnalyticsRow[];
+  start: string;
+  end: string;
+}): Record<SiteLicenseRevenueMeasure, number> {
+  const totals: Record<SiteLicenseRevenueMeasure, number> = {
+    contracted: 0,
+    invoiced: 0,
+    collected: 0,
+  };
+  for (const row of rows) {
+    const day = dayKey(row.day);
+    if (day >= start && day <= end) {
+      totals[row.measure] += Number(row.amount_cents || 0);
+    }
+  }
+  return totals;
 }

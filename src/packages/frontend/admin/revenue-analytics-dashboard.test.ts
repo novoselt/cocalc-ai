@@ -40,7 +40,7 @@ describe("membership analytics breakdown choices", () => {
         "tier-channel",
       ),
     ).toBe(
-      "Site license memberships are shown by tier. Revenue is shown separately for the license as a whole.",
+      "Site license memberships are shown by tier. Contracted value is shown separately for the license as a whole.",
     );
     expect(
       siteLicenseAnalyticsTableRowExplanation(
@@ -58,7 +58,7 @@ describe("membership analytics breakdown choices", () => {
         "tier-channel",
       ),
     ).toBe(
-      "Site license revenue is shown for the license as a whole. Membership counts are included in the tier breakdown.",
+      "Contracted site license value is shown for the license as a whole. Membership counts are included in the tier breakdown.",
     );
   });
 
