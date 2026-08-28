@@ -157,7 +157,9 @@ import {
 } from "./sqlite/project-volumes";
 import {
   assertProjectVolumeLifecycleGeneration,
+  currentProjectVolumeLifecycleGeneration,
   invalidateProjectVolumeLifecycle,
+  withCurrentProjectVolumeLifecycleLock,
   withProjectVolumeLifecycleLock,
 } from "./project-volume-lifecycle";
 import { INTERNAL_SSH_CONFIG } from "@cocalc/conat/project/runner/constants";
@@ -4678,20 +4680,52 @@ export async function runScheduledBackupMaintenance({
   counts: Partial<SnapshotCounts>;
   limit?: number;
 }): Promise<void> {
+  const expectedLifecycleGeneration =
+    currentProjectVolumeLifecycleGeneration(project_id);
   await withBackupParallelLimit({
     project_id,
     op: "runScheduledBackupMaintenance",
     queue_if_busy: false,
-    run: async () =>
-      await withProjectVolumeLifecycleLock(
+    run: async () => {
+      const result = await withCurrentProjectVolumeLifecycleLock(
         project_id,
-        async () =>
+        expectedLifecycleGeneration,
+        async () => {
+          const volume = await getVolumeUnchecked(project_id);
+          if (!(await exists(volume.path))) {
+            logger.info(
+              "skipping scheduled backup because project data is unavailable",
+              { project_id },
+            );
+            return true;
+          }
+          if (await isSubvolumeReadonly(volume.path)) {
+            logger.info(
+              "skipping scheduled backup because project archival is in progress",
+              { project_id },
+            );
+            return true;
+          }
           await updateBackups({
             project_id,
             counts,
             limit,
-          }),
-      ),
+          });
+          return true;
+        },
+      );
+      if (result === undefined) {
+        logger.info(
+          "skipping stale scheduled backup after project volume lifecycle changed",
+          {
+            project_id,
+            expected_lifecycle_generation: expectedLifecycleGeneration,
+            current_lifecycle_generation:
+              currentProjectVolumeLifecycleGeneration(project_id),
+          },
+        );
+      }
+    },
   });
 }
 
