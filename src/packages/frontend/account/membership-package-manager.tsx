@@ -30,6 +30,7 @@ import {
   type CSSProperties,
   type ReactNode,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -108,10 +109,15 @@ import type { LineItem } from "@cocalc/util/stripe/types";
 const { Paragraph, Text, Title } = Typography;
 const TEAM_LICENSE_FINALIZATION_TIMEOUT_MS = 75_000;
 const TEAM_LICENSE_FINALIZATION_POLL_MS = 6_000;
+const SITE_LICENSE_ADMIN_DRAWER_WIDTH_KEY =
+  "cocalc-site-license-admin-dashboard-width";
+const DEFAULT_SITE_LICENSE_ADMIN_DRAWER_WIDTH =
+  "min(calc(100vw - 32px), max(720px, calc(100vw - 280px)))";
+const MIN_SITE_LICENSE_ADMIN_DRAWER_WIDTH = 720;
 const SITE_LICENSE_USERS_DRAWER_WIDTH_KEY = "cocalc-site-license-users-width";
-const DEFAULT_SITE_LICENSE_USERS_DRAWER_WIDTH = 760;
+const DEFAULT_SITE_LICENSE_USERS_DRAWER_WIDTH =
+  DEFAULT_SITE_LICENSE_ADMIN_DRAWER_WIDTH;
 const MIN_SITE_LICENSE_USERS_DRAWER_WIDTH = 520;
-const MAX_SITE_LICENSE_USERS_DRAWER_WIDTH = 1280;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -125,34 +131,55 @@ function retryDelayFromError(err: unknown, fallbackMs: number): number {
   return fallbackMs;
 }
 
-function clampSiteLicenseUsersDrawerWidth(value: number): number {
-  if (!Number.isFinite(value)) {
-    return DEFAULT_SITE_LICENSE_USERS_DRAWER_WIDTH;
+function clampDrawerWidth(value: number, minimumWidth: number): number {
+  if (typeof window === "undefined") {
+    return Math.max(minimumWidth, Math.round(value));
   }
-  return Math.max(
-    MIN_SITE_LICENSE_USERS_DRAWER_WIDTH,
-    Math.min(MAX_SITE_LICENSE_USERS_DRAWER_WIDTH, Math.round(value)),
+  const maximum = Math.max(320, window.innerWidth - 32);
+  const minimum = Math.min(minimumWidth, maximum);
+  return Math.min(maximum, Math.max(minimum, Math.round(value)));
+}
+
+function readDrawerWidth(
+  key: string,
+  minimumWidth: number,
+): number | undefined {
+  if (typeof window === "undefined") return;
+  try {
+    const stored = localStorage.getItem(key);
+    if (stored == null) return;
+    const value = Number(stored);
+    return Number.isFinite(value) && value > 0
+      ? clampDrawerWidth(value, minimumWidth)
+      : undefined;
+  } catch {
+    return;
+  }
+}
+
+function persistDrawerWidth(
+  key: string,
+  value: number,
+  minimumWidth: number,
+): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(key, `${clampDrawerWidth(value, minimumWidth)}`);
+  } catch {}
+}
+
+function readSiteLicenseAdminDrawerWidth(): number | undefined {
+  return readDrawerWidth(
+    SITE_LICENSE_ADMIN_DRAWER_WIDTH_KEY,
+    MIN_SITE_LICENSE_ADMIN_DRAWER_WIDTH,
   );
 }
 
-function readSiteLicenseUsersDrawerWidth(): number {
-  try {
-    const value = Number(
-      localStorage.getItem(SITE_LICENSE_USERS_DRAWER_WIDTH_KEY),
-    );
-    return clampSiteLicenseUsersDrawerWidth(value);
-  } catch {
-    return DEFAULT_SITE_LICENSE_USERS_DRAWER_WIDTH;
-  }
-}
-
-function persistSiteLicenseUsersDrawerWidth(value: number): void {
-  try {
-    localStorage.setItem(
-      SITE_LICENSE_USERS_DRAWER_WIDTH_KEY,
-      `${clampSiteLicenseUsersDrawerWidth(value)}`,
-    );
-  } catch {}
+function readSiteLicenseUsersDrawerWidth(): number | undefined {
+  return readDrawerWidth(
+    SITE_LICENSE_USERS_DRAWER_WIDTH_KEY,
+    MIN_SITE_LICENSE_USERS_DRAWER_WIDTH,
+  );
 }
 
 interface Props {
@@ -1819,6 +1846,7 @@ export function SiteLicenseAdminPanel({
   tiers: MembershipTierLike[];
   onChanged?: () => void;
 }) {
+  const dashboardDrawerTitleId = useId();
   const account_id = useTypedRedux("account", "account_id");
   const [overviews, setOverviews] = useState<SiteLicenseOverview[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1830,6 +1858,10 @@ export function SiteLicenseAdminPanel({
   const [editTarget, setEditTarget] = useState<MembershipPackageDetails | null>(
     null,
   );
+  const [dashboardDrawerWidth, setDashboardDrawerWidth] = useState<
+    number | undefined
+  >(readSiteLicenseAdminDrawerWidth);
+  const dashboardTriggerRef = useRef<HTMLElement | null>(null);
   const [accountNames, setAccountNames] = useState<AccountNames>({});
   const [reviewingRequestId, setReviewingRequestId] = useState("");
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
@@ -1927,6 +1959,20 @@ export function SiteLicenseAdminPanel({
     overviews.find(
       (overview) => overview.site_license.id === editTargetSiteLicenseId,
     )?.site_license.allowed_domains ?? [];
+  const selectedOverview = overviews.find(
+    (overview) => overview.site_license.id === selectedSiteLicenseId,
+  );
+
+  useEffect(() => {
+    const clampSavedWidth = () =>
+      setDashboardDrawerWidth((width) =>
+        width == null
+          ? undefined
+          : clampDrawerWidth(width, MIN_SITE_LICENSE_ADMIN_DRAWER_WIDTH),
+      );
+    window.addEventListener("resize", clampSavedWidth);
+    return () => window.removeEventListener("resize", clampSavedWidth);
+  }, []);
 
   useEffect(() => {
     if (filteredOverviews.length === 0) {
@@ -2058,6 +2104,7 @@ export function SiteLicenseAdminPanel({
           <Icon name="refresh" /> Refresh list
         </Button>
         <Input.Search
+          aria-label="Search site licenses"
           allowClear
           placeholder="Find by license, organization, domain, or bay"
           style={{ width: 360 }}
@@ -2086,7 +2133,9 @@ export function SiteLicenseAdminPanel({
               currentSiteLicenseId === siteLicenseId ? "" : siteLicenseId,
             )
           }
-          renderExpandedRow={(overview) => renderAdminDashboard([overview])}
+          onTrigger={(trigger) => {
+            dashboardTriggerRef.current = trigger;
+          }}
         />
       ) : null}
       {overviews.length > 0 && filteredOverviews.length === 0 ? (
@@ -2097,6 +2146,61 @@ export function SiteLicenseAdminPanel({
           description="Clear the search to show all configured site licenses."
         />
       ) : null}
+      <Drawer
+        aria-labelledby={dashboardDrawerTitleId}
+        afterOpenChange={(open) => {
+          if (!open) dashboardTriggerRef.current?.focus();
+        }}
+        destroyOnHidden
+        onClose={() => {
+          setSelectedSiteLicenseId("");
+          setEditTarget(null);
+        }}
+        open={selectedOverview != null}
+        placement="right"
+        resizable={{
+          onResize: (value) => {
+            const next = clampDrawerWidth(
+              value,
+              MIN_SITE_LICENSE_ADMIN_DRAWER_WIDTH,
+            );
+            setDashboardDrawerWidth(next);
+            persistDrawerWidth(
+              SITE_LICENSE_ADMIN_DRAWER_WIDTH_KEY,
+              next,
+              MIN_SITE_LICENSE_ADMIN_DRAWER_WIDTH,
+            );
+          },
+        }}
+        size={dashboardDrawerWidth ?? DEFAULT_SITE_LICENSE_ADMIN_DRAWER_WIDTH}
+        styles={{ body: { padding: 16 } }}
+        title={
+          <Space id={dashboardDrawerTitleId}>
+            <Icon name="users" />
+            <span>
+              {selectedOverview
+                ? `Manage ${getSiteLicenseDisplayTitle(
+                    selectedOverview.site_license,
+                  )} site license`
+                : "Manage site license"}
+            </span>
+          </Space>
+        }
+      >
+        {selectedOverview ? renderAdminDashboard([selectedOverview]) : null}
+        <EditSiteLicenseModal
+          open={editTarget != null}
+          membershipPackage={editTarget}
+          inheritedDomains={editTargetLicenseDomains}
+          tiers={tiers}
+          onClose={() => setEditTarget(null)}
+          onUpdated={async () => {
+            setEditTarget(null);
+            await handleChanged();
+          }}
+        />
+        <FreshAuthModal {...freshAuthModalProps} />
+      </Drawer>
       <ProvisionSiteLicenseModal
         open={provisionOpen}
         tiers={tiers}
@@ -2106,18 +2210,6 @@ export function SiteLicenseAdminPanel({
           await handleChanged();
         }}
       />
-      <EditSiteLicenseModal
-        open={editTarget != null}
-        membershipPackage={editTarget}
-        inheritedDomains={editTargetLicenseDomains}
-        tiers={tiers}
-        onClose={() => setEditTarget(null)}
-        onUpdated={async () => {
-          setEditTarget(null);
-          await handleChanged();
-        }}
-      />
-      <FreshAuthModal {...freshAuthModalProps} />
     </Space>
   );
 }
@@ -2128,14 +2220,14 @@ function SiteLicenseSummaryTable({
   totalCount,
   onCustomerChanged,
   onToggle,
-  renderExpandedRow,
+  onTrigger,
 }: {
   overviews: SiteLicenseOverview[];
   selectedSiteLicenseId: string;
   totalCount: number;
   onCustomerChanged: () => void | Promise<void>;
   onToggle: (siteLicenseId: string) => void;
-  renderExpandedRow: (overview: SiteLicenseOverview) => ReactNode;
+  onTrigger: (trigger: HTMLElement) => void;
 }) {
   return (
     <Card size="small">
@@ -2148,23 +2240,40 @@ function SiteLicenseSummaryTable({
         </Space>
         <Table<SiteLicenseOverview>
           dataSource={overviews}
-          expandable={{
-            expandedRowKeys: selectedSiteLicenseId
-              ? [selectedSiteLicenseId]
-              : [],
-            expandedRowRender: (overview) =>
-              selectedSiteLicenseId === overview.site_license.id
-                ? renderExpandedRow(overview)
-                : null,
-            showExpandColumn: false,
-          }}
           pagination={false}
           rowKey={(overview) => overview.site_license.id}
           onRow={(overview) => ({
             "aria-expanded": selectedSiteLicenseId === overview.site_license.id,
+            "aria-haspopup": "dialog",
+            "aria-label": `Manage ${getSiteLicenseDisplayTitle(
+              overview.site_license,
+            )}`,
             "data-site-license-id": overview.site_license.id,
-            onClick: () => onToggle(overview.site_license.id),
+            onClick: (event) => {
+              if (
+                event.target instanceof Element &&
+                event.target.closest(
+                  "a, button, input, select, textarea, [role='button'], [role='combobox'], [role='link']",
+                )
+              ) {
+                return;
+              }
+              onTrigger(event.currentTarget);
+              onToggle(overview.site_license.id);
+            },
+            onKeyDown: (event) => {
+              if (
+                event.target !== event.currentTarget ||
+                (event.key !== "Enter" && event.key !== " ")
+              ) {
+                return;
+              }
+              event.preventDefault();
+              onTrigger(event.currentTarget);
+              onToggle(overview.site_license.id);
+            },
             style: { cursor: "pointer" },
+            tabIndex: 0,
           })}
           scroll={{ x: true }}
           size="small"
@@ -3601,7 +3710,8 @@ function PoolUsersDrawer({
   setRevokingSeat: (value: string) => void;
   setSearch: (value: string) => void;
 }) {
-  const [drawerWidth, setDrawerWidth] = useState<number>(
+  const drawerTitleId = useId();
+  const [drawerWidth, setDrawerWidth] = useState<number | undefined>(
     readSiteLicenseUsersDrawerWidth,
   );
   const activeAssignments = useMemo(
@@ -3625,23 +3735,42 @@ function PoolUsersDrawer({
         ? "No users match this search."
         : "No active users.";
 
+  useEffect(() => {
+    const clampSavedWidth = () =>
+      setDrawerWidth((width) =>
+        width == null
+          ? undefined
+          : clampDrawerWidth(width, MIN_SITE_LICENSE_USERS_DRAWER_WIDTH),
+      );
+    window.addEventListener("resize", clampSavedWidth);
+    return () => window.removeEventListener("resize", clampSavedWidth);
+  }, []);
+
   return (
     <Drawer
+      aria-labelledby={drawerTitleId}
       destroyOnHidden
       onClose={onClose}
       open={open}
       title={
-        <Space>
+        <Space id={drawerTitleId}>
           <Icon name="users" />
           <span>{pool ? `${pool.pool_name} users` : "Users"}</span>
         </Space>
       }
-      size={drawerWidth}
+      size={drawerWidth ?? DEFAULT_SITE_LICENSE_USERS_DRAWER_WIDTH}
       resizable={{
         onResize: (value) => {
-          const next = clampSiteLicenseUsersDrawerWidth(value);
+          const next = clampDrawerWidth(
+            value,
+            MIN_SITE_LICENSE_USERS_DRAWER_WIDTH,
+          );
           setDrawerWidth(next);
-          persistSiteLicenseUsersDrawerWidth(next);
+          persistDrawerWidth(
+            SITE_LICENSE_USERS_DRAWER_WIDTH_KEY,
+            next,
+            MIN_SITE_LICENSE_USERS_DRAWER_WIDTH,
+          );
         },
       }}
       styles={{ body: { padding: 16 } }}
