@@ -530,7 +530,7 @@ export function RevenueAnalyticsDashboard({
     useState<SiteLicenseRevenueAnalytics | null>(null);
   const [tiers, setTiers] = useState<MembershipAnalyticsTier[]>([]);
   const [period, setPeriod] = useState<Period>("year");
-  const [comparison, setComparison] = useState<Comparison>(364);
+  const [comparison, setComparison] = useState<Comparison>(28);
   const [breakdown, setBreakdown] =
     useState<MembershipAnalyticsBreakdown>("channel");
   const [chartMode, setChartMode] =

@@ -17,7 +17,12 @@ import {
   ComputeProductSelector,
   DEFAULT_COMPUTE_PRODUCTS,
   MembershipChannelSelector,
+  RevenueAnalyticsAdmin,
 } from "./revenue-analytics";
+
+jest.mock("./revenue-analytics-dashboard", () => ({
+  RevenueAnalyticsDashboard: () => null,
+}));
 
 function SelectorHarness() {
   const [channels, setChannels] = useState<MembershipAllocationChannel[]>([
@@ -34,6 +39,15 @@ function ComputeSelectorHarness() {
 describe("revenue analytics membership channel selector", () => {
   it("shows all revenue sources by default", () => {
     expect(DEFAULT_COMPUTE_PRODUCTS).toEqual(ALL_COMPUTE_PRODUCTS);
+  });
+
+  it("places compute filters before membership filters", () => {
+    render(<RevenueAnalyticsAdmin />);
+    expect(
+      screen
+        .getAllByText(/^(Compute|Memberships):$/)
+        .map(({ textContent }) => textContent),
+    ).toEqual(["Compute:", "Memberships:"]);
   });
 
   it("selects all, none, and an arbitrary subset with accessible checkboxes", () => {
@@ -73,6 +87,11 @@ describe("revenue analytics membership channel selector", () => {
     const all = screen.getByRole("checkbox", { name: "All compute products" });
     const hosts = screen.getByRole("checkbox", { name: "Dedicated hosts" });
     const vms = screen.getByRole("checkbox", { name: "Virtual machines" });
+    expect(
+      screen
+        .getAllByText(/^(Virtual machines|Dedicated hosts)$/)
+        .map(({ textContent }) => textContent),
+    ).toEqual(["Virtual machines", "Dedicated hosts"]);
     expect(all).not.toBeChecked();
     fireEvent.click(hosts);
     expect(hosts).toBeChecked();

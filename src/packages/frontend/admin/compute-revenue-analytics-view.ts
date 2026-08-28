@@ -12,7 +12,6 @@ import type {
 } from "@cocalc/conat/hub/api/purchases";
 
 import {
-  ALL_MEMBERSHIP_CHANNELS,
   membershipChannelLabel,
   membershipChannelOrder,
 } from "./membership-analytics-channels";
@@ -50,9 +49,10 @@ const PRODUCT_LABELS: Record<ComputeRevenueProduct, string> = {
 };
 
 const PRODUCT_ORDER: Record<ComputeRevenueProduct, number> = {
-  "dedicated-host": 0,
-  "virtual-machine": 1,
+  "virtual-machine": 0,
+  "dedicated-host": 1,
 };
+const MEMBERSHIP_SOURCE_OFFSET = Math.max(...Object.values(PRODUCT_ORDER)) + 1;
 
 const COMPONENT_LABELS: Record<ComputeRevenueCostComponent, string> = {
   compute: "CPU/RAM compute",
@@ -429,7 +429,7 @@ export function buildCombinedRevenueAnalyticsView({
         label: membershipChannelLabel(row.channel),
         channel: row.channel,
         priority: 0,
-        order: membershipChannelOrder(row.channel),
+        order: MEMBERSHIP_SOURCE_OFFSET + membershipChannelOrder(row.channel),
       },
       row.day,
       Number(row.revenue_cents) || 0,
@@ -437,12 +437,7 @@ export function buildCombinedRevenueAnalyticsView({
   }
   for (const row of compute) {
     const category = categoryForCompute(row, "product");
-    add(
-      category.key,
-      { ...category, order: category.order + ALL_MEMBERSHIP_CHANNELS.length },
-      row.day,
-      Number(row.revenue_cents) || 0,
-    );
+    add(category.key, category, row.day, Number(row.revenue_cents) || 0);
   }
   return buildView({
     categories,
