@@ -436,24 +436,82 @@ export interface CommercialStripeEventRetryResult {
   commercial_order_id: string;
 }
 
+export interface CommercialBackfillCandidate {
+  organization_name: string;
+  site_license_id?: string;
+  customer_account_id?: string;
+  zendesk_ticket_ids?: number[];
+  agreed_total: string;
+  currency?: string;
+  next_action: CommercialNextAction;
+  next_action_due_at?: string;
+  service_starts_at?: string;
+  service_ends_at?: string;
+  billing_contact?: CommercialOrderContactInput;
+  provenance?: {
+    source: string;
+    reference: string;
+  };
+  invoice?: {
+    reference: string;
+    issued_at: string;
+    due_at?: string;
+    document_url?: string;
+    evidence_reference?: string;
+  };
+  payment?: {
+    amount: string;
+    received_at: string;
+    method: CommercialPaymentMethod;
+    evidence_reference: string;
+    provider_payment_id?: string;
+  };
+}
+
+export interface CommercialBackfillPlan {
+  index: number;
+  organization_name: string;
+  site_license_id?: string;
+  provenance?: {
+    source: string;
+    reference: string;
+  };
+  actions: Array<"create" | "approve" | "issue_invoice" | "record_payment">;
+  ready: boolean;
+  blockers: string[];
+}
+
 export interface CommercialBackfillRequest extends CommercialMutationRequest {
-  candidates: Array<{
-    organization_name: string;
-    site_license_id?: string;
-    customer_account_id?: string;
-    zendesk_ticket_ids?: number[];
-    agreed_total: string;
-    currency?: string;
-    next_action: CommercialNextAction;
-    next_action_due_at?: string;
-  }>;
+  candidates: CommercialBackfillCandidate[];
   commit?: boolean;
 }
 
 export interface CommercialBackfillResponse {
   preview: boolean;
+  planned: CommercialBackfillPlan[];
   created: CommercialOrder[];
   skipped: Array<{ index: number; reason: string }>;
+}
+
+export type SiteLicenseRevenueMeasure = "contracted" | "invoiced" | "collected";
+
+export interface SiteLicenseRevenueAnalyticsRequest extends CommercialReadRequest {
+  start?: Date | string;
+  end?: Date | string;
+}
+
+export interface SiteLicenseRevenueAnalyticsRow {
+  day: string;
+  measure: SiteLicenseRevenueMeasure;
+  amount_cents: number;
+  source_count: number;
+}
+
+export interface SiteLicenseRevenueAnalytics {
+  checked_at: string;
+  start: string;
+  end: string;
+  rows: SiteLicenseRevenueAnalyticsRow[];
 }
 
 export interface CommercialOrdersApi {
@@ -467,6 +525,9 @@ export interface CommercialOrdersApi {
   events: (
     opts: CommercialOrderEventsRequest,
   ) => Promise<CommercialOrderEventsResponse>;
+  siteLicenseRevenueAnalytics: (
+    opts: SiteLicenseRevenueAnalyticsRequest,
+  ) => Promise<SiteLicenseRevenueAnalytics>;
   createPreview: (
     opts: CommercialOrderCreateRequest,
   ) => Promise<CommercialOrderCreatePreview>;
@@ -568,6 +629,7 @@ export const commercialOrders = {
   get: authFirstRequireAccount,
   listAssignees: authFirstRequireAccount,
   events: authFirstRequireAccount,
+  siteLicenseRevenueAnalytics: authFirstRequireAccount,
   createPreview: authFirstRequireAccount,
   create: authFirstRequireAccount,
   update: authFirstRequireAccount,

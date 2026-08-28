@@ -1937,10 +1937,20 @@ function registerMaintenanceCommands(
   commitOnlyOptions(
     receivables
       .command("backfill")
-      .description("preview or import legacy commercial order candidates")
+      .description(
+        "preview or import legacy orders and historical site-license accounting",
+      )
       .requiredOption(
         "--file <path>",
         "JSON candidate array or object with a candidates array",
+      )
+      .addHelpText(
+        "after",
+        `
+Historical site-license candidates require site_license_id, service dates,
+billing_contact, provenance, and invoice. An optional payment creates local
+cash history. Preview is the default; --commit requires fresh authentication.
+`,
       ),
     "create eligible commercial orders from the backfill",
   ).action(async (opts: any, command: Command) => {

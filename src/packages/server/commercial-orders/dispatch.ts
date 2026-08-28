@@ -59,6 +59,7 @@ import {
 } from "./fulfillment/site-license";
 import admins from "@cocalc/server/accounts/admins";
 import { searchClusterAccounts } from "@cocalc/server/inter-bay/accounts";
+import { getSiteLicenseRevenueAnalytics } from "./site-license-revenue-analytics";
 
 async function listCommercialAssignees() {
   const accountIds = await admins();
@@ -103,6 +104,8 @@ export async function dispatchCommercialSeedRequest(
       return await listCommercialAssignees();
     case "events":
       return await listCommercialOrderEvents(opts);
+    case "siteLicenseRevenueAnalytics":
+      return await getSiteLicenseRevenueAnalytics({ request: opts });
     case "create":
       return await createCommercialOrder(opts);
     case "createPreview":

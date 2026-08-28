@@ -69,6 +69,7 @@ import {
   provision,
   revise,
   retryStripeEvent,
+  siteLicenseRevenueAnalytics,
 } from "./commercial-orders";
 
 const BASE = {
@@ -185,6 +186,36 @@ describe("commercial orders public Conat API", () => {
         reason: BASE.reason,
         source: "admin-ui",
       }),
+    });
+  });
+
+  it("routes site license analytics as an audited seed read", async () => {
+    mockDispatchCommercialSeedRequest.mockResolvedValue({
+      start: "2026-01-01",
+      end: "2026-02-01",
+      rows: [],
+    });
+
+    await siteLicenseRevenueAnalytics({
+      ...BASE,
+      start: "2026-01-01",
+      end: "2026-02-01",
+      reason: "Review site license revenue analytics",
+    });
+
+    expect(mockRequireDangerousSessionAuth).not.toHaveBeenCalled();
+    expect(mockAssertCommercialReceivablesCapability).toHaveBeenCalledWith(
+      "visible",
+    );
+    expect(mockDispatchCommercialSeedRequest).toHaveBeenCalledWith({
+      action: "siteLicenseRevenueAnalytics",
+      actor_account_id: "admin-1",
+      payload: {
+        start: "2026-01-01",
+        end: "2026-02-01",
+        reason: "Review site license revenue analytics",
+        source: "admin-ui",
+      },
     });
   });
 

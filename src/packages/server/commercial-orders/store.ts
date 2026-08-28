@@ -9,6 +9,8 @@ import getPool, { type PoolClient } from "@cocalc/database/pool";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { getConfiguredClusterSeedBayId } from "@cocalc/server/cluster-config";
 import type {
+  CommercialBackfillCandidate,
+  CommercialBackfillPlan,
   CommercialBackfillRequest,
   CommercialBackfillResponse,
   CommercialBillingDetailsUpdateRequest,
@@ -3613,57 +3615,388 @@ export async function backfillCommercialOrders(
     throw Error("backfill is limited to 500 candidates");
   const response: CommercialBackfillResponse = {
     preview: !opts.commit,
+    planned: [],
     created: [],
     skipped: [],
   };
-  for (let index = 0; index < opts.candidates.length; index++) {
+
+  const prepared: PreparedBackfillCandidate[] = [];
+  for (let index = 0; index < opts.candidates.length; index += 1) {
     const candidate = opts.candidates[index];
-    const { rows } = await getPool().query<{ id: string }>(
-      `SELECT id FROM commercial_orders WHERE
-        ($1::uuid IS NOT NULL AND site_license_id=$1) OR
-        ($2::integer[] && zendesk_ticket_ids) LIMIT 1`,
-      [candidate.site_license_id ?? null, candidate.zendesk_ticket_ids ?? []],
-    );
-    if (rows[0]) {
-      response.skipped.push({
-        index,
-        reason: `already represented by ${rows[0].id}`,
-      });
+    const result = prepareBackfillCandidate(opts, candidate, index);
+    const duplicate = result.plan.blockers.length
+      ? undefined
+      : await findBackfillDuplicate({
+          candidate,
+          provenance: result.plan.provenance,
+          createKey: result.create.idempotency_key!,
+        });
+    if (duplicate && !duplicate.replayable) {
+      result.skipReason = `already represented by ${duplicate.id}`;
+      result.plan.ready = false;
+      result.plan.blockers.push(result.skipReason);
+    }
+    prepared.push(result);
+  }
+
+  const seenCandidates = new Map<string, number>();
+  for (const entry of prepared) {
+    if (entry.plan.blockers.length || entry.skipReason) continue;
+    const identifiers = [
+      entry.candidate.site_license_id
+        ? `site-license:${entry.candidate.site_license_id}`
+        : undefined,
+      entry.plan.provenance
+        ? `provenance:${entry.plan.provenance.source}\0${entry.plan.provenance.reference}`
+        : undefined,
+      ...(entry.candidate.zendesk_ticket_ids ?? []).map(
+        (ticketId) => `zendesk:${ticketId}`,
+      ),
+    ].filter((value): value is string => value != null);
+    const duplicateIndex = identifiers
+      .map((identifier) => seenCandidates.get(identifier))
+      .find((value) => value != null);
+    if (duplicateIndex != null) {
+      entry.plan.ready = false;
+      entry.plan.blockers.push(
+        `duplicates candidate ${duplicateIndex} in this backfill`,
+      );
       continue;
     }
-    if (!opts.commit) continue;
-    response.created.push(
-      await createCommercialOrder({
-        account_id: opts.account_id,
-        reason: opts.reason,
-        source: "migration",
-        idempotency_key: `${commercialIdempotencyKey("backfill", opts as any)}:${index}`,
-        organization_name: candidate.organization_name,
-        customer_account_id: candidate.customer_account_id,
-        site_license_id: candidate.site_license_id,
-        zendesk_ticket_ids: candidate.zendesk_ticket_ids,
-        collection_mode: "manual_invoice",
-        agreed_subtotal: candidate.agreed_total,
-        agreed_total: candidate.agreed_total,
-        currency: candidate.currency ?? "usd",
-        next_action: candidate.next_action,
-        next_action_due_at:
-          candidate.next_action_due_at ??
-          new Date(Date.now() + 7 * 86_400_000).toISOString(),
-        items: [
-          {
-            description: `${candidate.organization_name} commercial agreement`,
-            quantity: "1",
-            unit_amount: candidate.agreed_total,
-            subtotal: candidate.agreed_total,
-            product_kind: candidate.site_license_id
-              ? "site_license"
-              : "commercial_service",
-          },
-        ],
-        contacts: [],
-      }),
+    for (const identifier of identifiers) {
+      seenCandidates.set(identifier, entry.plan.index);
+    }
+  }
+
+  response.planned = prepared.map(({ plan }) => plan);
+  for (const { plan, skipReason } of prepared) {
+    if (skipReason) {
+      response.skipped.push({ index: plan.index, reason: skipReason });
+    }
+  }
+
+  if (!opts.commit) return response;
+  const invalid = prepared.find(
+    ({ plan, skipReason }) => !skipReason && plan.blockers.length,
+  );
+  if (invalid) {
+    throw Error(
+      `backfill candidate ${invalid.plan.index} is invalid: ${invalid.plan.blockers.join("; ")}`,
     );
   }
+
+  for (const entry of prepared) {
+    if (entry.skipReason) continue;
+    let order = await createCommercialOrder(entry.create);
+    if (entry.plan.actions.includes("approve")) {
+      order = await approveCommercialOrder({
+        account_id: opts.account_id,
+        id: order.id,
+        expected_version: 1,
+        reason: opts.reason,
+        source: "migration",
+        idempotency_key: backfillActionKey(opts, entry.plan.index, "approve"),
+      });
+    }
+    if (entry.plan.actions.includes("issue_invoice")) {
+      const invoice = entry.candidate.invoice!;
+      order = await issueManualCommercialInvoice({
+        account_id: opts.account_id,
+        id: order.id,
+        expected_version: 2,
+        reason: opts.reason,
+        source: "migration",
+        idempotency_key: backfillActionKey(
+          opts,
+          entry.plan.index,
+          "issue_invoice",
+        ),
+        invoice_reference: invoice.reference,
+        issued_at: invoice.issued_at,
+        due_at: invoice.due_at,
+        document_url: invoice.document_url,
+        evidence_reference: invoice.evidence_reference,
+      });
+    }
+    if (entry.plan.actions.includes("record_payment")) {
+      const payment = entry.candidate.payment!;
+      order = await recordManualCommercialPayment({
+        account_id: opts.account_id,
+        id: order.id,
+        expected_version: 3,
+        reason: opts.reason,
+        source: "migration",
+        idempotency_key: backfillActionKey(
+          opts,
+          entry.plan.index,
+          "record_payment",
+        ),
+        amount: payment.amount,
+        currency: entry.candidate.currency ?? "usd",
+        received_at: payment.received_at,
+        method: payment.method,
+        evidence_reference: payment.evidence_reference,
+        provider_payment_id: payment.provider_payment_id,
+      });
+    }
+    response.created.push(order);
+  }
   return response;
+}
+
+interface PreparedBackfillCandidate {
+  candidate: CommercialBackfillCandidate;
+  create: CommercialOrderCreateRequest;
+  plan: CommercialBackfillPlan;
+  skipReason?: string;
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function backfillActionKey(
+  opts: CommercialBackfillRequest,
+  index: number,
+  action: string,
+): string {
+  const root = commercialIdempotencyKey("backfill", opts as any);
+  const digest = createHash("sha256")
+    .update(`${root}\0${index}\0${action}`)
+    .digest("hex");
+  return `commercial:backfill:${digest}`;
+}
+
+function normalizeBackfillProvenance(
+  candidate: CommercialBackfillCandidate,
+  blockers: string[],
+): CommercialBackfillPlan["provenance"] {
+  if (candidate.provenance == null) return;
+  const source = `${candidate.provenance.source ?? ""}`.trim();
+  const reference = `${candidate.provenance.reference ?? ""}`.trim();
+  if (!source || source.length > 120) {
+    blockers.push("provenance.source must contain at most 120 characters");
+  }
+  if (!reference || reference.length > 240) {
+    blockers.push("provenance.reference must contain at most 240 characters");
+  }
+  return { source, reference };
+}
+
+function validateHistoricalBackfill(
+  candidate: CommercialBackfillCandidate,
+  blockers: string[],
+): void {
+  if (!candidate.site_license_id) {
+    blockers.push("site_license_id is required for a historical site license");
+  }
+  if (!candidate.provenance) {
+    blockers.push("provenance is required for a historical site license");
+  }
+  if (!candidate.service_starts_at || !candidate.service_ends_at) {
+    blockers.push(
+      "service_starts_at and service_ends_at are required for a historical site license",
+    );
+  } else {
+    try {
+      const start = requireTimestamp(
+        candidate.service_starts_at,
+        "service_starts_at",
+      );
+      const end = requireTimestamp(
+        candidate.service_ends_at,
+        "service_ends_at",
+      );
+      if (start >= end)
+        blockers.push("service_ends_at must be after service_starts_at");
+    } catch (err) {
+      blockers.push(`${err}`.replace(/^Error:\s*/, ""));
+    }
+  }
+  if (!candidate.billing_contact) {
+    blockers.push("billing_contact is required for a historical site license");
+  }
+  if (!candidate.invoice) {
+    blockers.push("invoice is required for a historical site license");
+    return;
+  }
+  const invoiceReference = `${candidate.invoice.reference ?? ""}`.trim();
+  if (!invoiceReference || invoiceReference.length > 240) {
+    blockers.push("invoice.reference must contain at most 240 characters");
+  }
+  let issuedAt: Date | undefined;
+  try {
+    issuedAt = requireTimestamp(
+      candidate.invoice.issued_at,
+      "invoice.issued_at",
+    );
+    if (candidate.invoice.due_at) {
+      const dueAt = requireTimestamp(
+        candidate.invoice.due_at,
+        "invoice.due_at",
+      );
+      if (dueAt < issuedAt) {
+        blockers.push("invoice.due_at must not be before invoice.issued_at");
+      }
+    }
+  } catch (err) {
+    blockers.push(`${err}`.replace(/^Error:\s*/, ""));
+  }
+  if (candidate.invoice.document_url) {
+    try {
+      if (new URL(candidate.invoice.document_url).protocol !== "https:") {
+        blockers.push("invoice.document_url must use HTTPS");
+      }
+    } catch {
+      blockers.push("invoice.document_url must be a valid HTTPS URL");
+    }
+  }
+  if (!candidate.payment) return;
+  try {
+    const amount = normalizePositiveMoney(
+      candidate.payment.amount,
+      "payment amount",
+    );
+    const total = normalizePositiveMoney(
+      candidate.agreed_total,
+      "agreed_total",
+    );
+    if (moneyCompare(amount, total) > 0) {
+      blockers.push("payment amount exceeds agreed_total");
+    }
+    normalizeCurrency(candidate.currency);
+    requireTimestamp(candidate.payment.received_at, "payment.received_at");
+    assertProviderMutationEnums({
+      source: "migration",
+      method: candidate.payment.method,
+    });
+    if (!`${candidate.payment.evidence_reference ?? ""}`.trim()) {
+      blockers.push("payment.evidence_reference is required");
+    }
+  } catch (err) {
+    blockers.push(`${err}`.replace(/^Error:\s*/, ""));
+  }
+}
+
+function prepareBackfillCandidate(
+  opts: CommercialBackfillRequest,
+  candidate: CommercialBackfillCandidate,
+  index: number,
+): PreparedBackfillCandidate {
+  const blockers: string[] = [];
+  const provenance = normalizeBackfillProvenance(candidate, blockers);
+  if (
+    candidate.site_license_id &&
+    !UUID_PATTERN.test(candidate.site_license_id)
+  ) {
+    blockers.push("site_license_id must be a UUID");
+  }
+  const historical =
+    candidate.provenance != null ||
+    candidate.invoice != null ||
+    candidate.payment != null;
+  if (historical) validateHistoricalBackfill(candidate, blockers);
+  const nextActionDueAt =
+    candidate.next_action_due_at ??
+    candidate.invoice?.due_at ??
+    candidate.service_ends_at ??
+    candidate.service_starts_at ??
+    new Date(Date.now() + 7 * 86_400_000).toISOString();
+  const create: CommercialOrderCreateRequest = {
+    account_id: opts.account_id,
+    reason: opts.reason,
+    source: "migration",
+    idempotency_key: backfillActionKey(opts, index, "create"),
+    organization_name: candidate.organization_name,
+    customer_account_id: candidate.customer_account_id,
+    site_license_id: candidate.site_license_id,
+    zendesk_ticket_ids: candidate.zendesk_ticket_ids,
+    collection_mode: "manual_invoice",
+    agreed_subtotal: candidate.agreed_total,
+    agreed_total: candidate.agreed_total,
+    currency: candidate.currency ?? "usd",
+    service_starts_at: candidate.service_starts_at,
+    service_ends_at: candidate.service_ends_at,
+    next_action: candidate.next_action,
+    next_action_due_at: nextActionDueAt,
+    terms_snapshot: provenance
+      ? {
+          fulfillment_required: false,
+          legacy_import: provenance,
+        }
+      : {},
+    items: [
+      {
+        description: `${candidate.organization_name} commercial agreement`,
+        quantity: "1",
+        unit_amount: candidate.agreed_total,
+        subtotal: candidate.agreed_total,
+        service_start: candidate.service_starts_at,
+        service_end: candidate.service_ends_at,
+        product_kind: candidate.site_license_id
+          ? "site_license"
+          : "commercial_service",
+      },
+    ],
+    contacts: candidate.billing_contact ? [candidate.billing_contact] : [],
+  };
+  try {
+    const preview = previewCommercialOrderCreate(create);
+    if (historical) blockers.push(...preview.approval_blockers);
+  } catch (err) {
+    blockers.push(`${err}`.replace(/^Error:\s*/, ""));
+  }
+  const actions: CommercialBackfillPlan["actions"] = ["create"];
+  if (historical) actions.push("approve", "issue_invoice");
+  if (candidate.payment) actions.push("record_payment");
+  return {
+    candidate,
+    create,
+    plan: {
+      index,
+      organization_name: `${candidate.organization_name ?? ""}`.trim(),
+      site_license_id: candidate.site_license_id,
+      provenance,
+      actions,
+      ready: blockers.length === 0,
+      blockers: [...new Set(blockers)],
+    },
+  };
+}
+
+async function findBackfillDuplicate({
+  candidate,
+  provenance,
+  createKey,
+}: {
+  candidate: CommercialBackfillCandidate;
+  provenance?: CommercialBackfillPlan["provenance"];
+  createKey: string;
+}): Promise<{ id: string; replayable: boolean } | undefined> {
+  const { rows } = await getPool().query<{
+    id: string;
+    replayable: boolean;
+  }>(
+    `SELECT o.id,
+            EXISTS(
+              SELECT 1 FROM commercial_order_events event
+               WHERE event.commercial_order_id=o.id
+                 AND event.idempotency_key=$5
+            ) AS replayable
+       FROM commercial_orders o
+      WHERE ($1::uuid IS NOT NULL AND o.site_license_id=$1) OR
+            ($2::integer[] && o.zendesk_ticket_ids) OR
+            ($3::text IS NOT NULL AND
+             o.terms_snapshot->'legacy_import'->>'source'=$3 AND
+             o.terms_snapshot->'legacy_import'->>'reference'=$4)
+      ORDER BY o.created_at DESC,o.id
+      LIMIT 1`,
+    [
+      candidate.site_license_id ?? null,
+      candidate.zendesk_ticket_ids ?? [],
+      provenance?.source ?? null,
+      provenance?.reference ?? null,
+      createKey,
+    ],
+  );
+  return rows[0];
 }

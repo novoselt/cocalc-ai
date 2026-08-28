@@ -50,6 +50,8 @@ import type {
   CommercialStripeQuoteMutationRequest,
   CommercialStripeQuotePreview,
   CommercialStripeQuotePreviewRequest,
+  SiteLicenseRevenueAnalytics,
+  SiteLicenseRevenueAnalyticsRequest,
 } from "@cocalc/conat/hub/api/commercial-orders";
 import type {
   CommercialOrder,
@@ -200,6 +202,12 @@ export async function events(
   opts: CommercialOrderEventsRequest,
 ): Promise<CommercialOrderEventsResponse> {
   return await invoke("events", opts);
+}
+
+export async function siteLicenseRevenueAnalytics(
+  opts: SiteLicenseRevenueAnalyticsRequest,
+): Promise<SiteLicenseRevenueAnalytics> {
+  return await invoke("siteLicenseRevenueAnalytics", opts);
 }
 
 export async function create(
