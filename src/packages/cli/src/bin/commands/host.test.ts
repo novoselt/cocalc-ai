@@ -22,6 +22,7 @@ type Capture = {
     targets: any[];
     base_url?: string;
     align_runtime_stack?: boolean;
+    record_runtime_deployments?: boolean;
   }>;
   fleetRolloutRequests?: Array<Record<string, any>>;
   reconciles: string[];
@@ -253,6 +254,7 @@ function makeDeps(
               targets,
               base_url,
               align_runtime_stack,
+              record_runtime_deployments,
             }) => {
               capture.upgrades.push(id);
               capture.upgradeRequests!.push({
@@ -260,6 +262,9 @@ function makeDeps(
                 targets,
                 base_url,
                 align_runtime_stack,
+                ...(record_runtime_deployments == null
+                  ? {}
+                  : { record_runtime_deployments }),
               });
               return { op_id: `op-${id}` };
             },
@@ -1217,6 +1222,90 @@ test("host upgrade --all-online --wait returns all successful hosts", async () =
   assert.equal(capture.data.status, "succeeded");
   assert.equal(capture.data.count, 2);
   assert.equal(capture.data.hosts.length, 2);
+});
+
+test("host upgrade can preserve existing desired deployment state", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const program = new Command();
+  registerHostCommand(program, makeDeps(capture));
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "host",
+    "upgrade",
+    "host-1",
+    "--artifact",
+    "tools",
+    "--preserve-desired-state",
+  ]);
+
+  assert.deepEqual(capture.upgradeRequests, [
+    {
+      id: "host-1",
+      targets: [{ artifact: "tools", channel: "latest" }],
+      base_url: undefined,
+      align_runtime_stack: false,
+      record_runtime_deployments: false,
+    },
+  ]);
+});
+
+test("host upgrade preserves matching host exceptions during fleet installs", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const now = new Date().toISOString();
+  const deps = makeDeps(capture, {
+    listHosts: async () => [
+      {
+        id: "default-host",
+        name: "default-host",
+        status: "running",
+        last_seen: now,
+      },
+      {
+        id: "pinned-host",
+        name: "pinned-host",
+        status: "running",
+        last_seen: now,
+        runtime_exception_summary: {
+          host_override_count: 1,
+          host_override_targets: ["tools"],
+        },
+      },
+    ],
+  });
+  const program = new Command();
+  registerHostCommand(program, deps);
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "host",
+    "upgrade",
+    "--all-online",
+    "--artifact",
+    "tools",
+    "--preserve-desired-state",
+  ]);
+
+  assert.deepEqual(capture.upgrades, ["default-host"]);
+  assert.deepEqual(capture.data.excluded_override_hosts, [
+    { host_id: "pinned-host", name: "pinned-host" },
+  ]);
 });
 
 test("host deploy rollout-fleet queues one canary-first durable campaign", async () => {
@@ -3516,14 +3605,24 @@ test("host deploy resume-default removes one host-scoped override", async () => 
       scope_type: "host",
       id: "host-1",
       replace: true,
-      deployments: [],
+      deployments: [
+        {
+          target_type: "component",
+          target: "acp-worker",
+          desired_version: "bundle-v1",
+          rollout_policy: "drain_then_replace",
+          drain_deadline_seconds: undefined,
+          rollout_reason: undefined,
+          metadata: undefined,
+        },
+      ],
     },
   ]);
   assert.equal(capture.data.removed, true);
   assert.equal(capture.data.target, "project-host");
 });
 
-test("host deploy resume-default removes project-host stack component pins when resuming the artifact default", async () => {
+test("host deploy resume-default --runtime-stack removes project-host stack component pins", async () => {
   const capture: Capture = {
     upgrades: [],
     reconciles: [],
@@ -3582,6 +3681,7 @@ test("host deploy resume-default removes project-host stack component pins when 
     "host-1",
     "--artifact",
     "project-host",
+    "--runtime-stack",
   ]);
 
   assert.deepEqual(capture.runtimeDeploymentSetRequests, [
@@ -3594,6 +3694,35 @@ test("host deploy resume-default removes project-host stack component pins when 
   ]);
   assert.equal(capture.data.removed, true);
   assert.equal(capture.data.target, "project-host");
+});
+
+test("host deploy resume-default restricts --runtime-stack to project-host", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const program = new Command();
+  registerHostCommand(program, makeDeps(capture));
+
+  await assert.rejects(
+    program.parseAsync([
+      "node",
+      "test",
+      "host",
+      "deploy",
+      "resume-default",
+      "host-1",
+      "--artifact",
+      "tools",
+      "--runtime-stack",
+    ]),
+    /--runtime-stack requires --artifact project-host/,
+  );
+  assert.deepEqual(capture.runtimeDeploymentSetRequests, []);
 });
 
 test("host deploy resume-default --all-hosts removes overrides on every listed host", async () => {
@@ -3636,13 +3765,33 @@ test("host deploy resume-default --all-hosts removes overrides on every listed h
       scope_type: "host",
       id: "cluster-host",
       replace: true,
-      deployments: [],
+      deployments: [
+        {
+          target_type: "component",
+          target: "acp-worker",
+          desired_version: "bundle-v1",
+          rollout_policy: "drain_then_replace",
+          drain_deadline_seconds: undefined,
+          rollout_reason: undefined,
+          metadata: undefined,
+        },
+      ],
     },
     {
       scope_type: "host",
       id: "dedicated-host",
       replace: true,
-      deployments: [],
+      deployments: [
+        {
+          target_type: "component",
+          target: "acp-worker",
+          desired_version: "bundle-v1",
+          rollout_policy: "drain_then_replace",
+          drain_deadline_seconds: undefined,
+          rollout_reason: undefined,
+          metadata: undefined,
+        },
+      ],
     },
   ]);
   assert.equal(capture.data.host_count, 2);
