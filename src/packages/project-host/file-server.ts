@@ -166,6 +166,7 @@ import { managedProjectEgressResidualTracker } from "./managed-egress-residual";
 import { planBackupRetention } from "./backup-retention";
 import {
   assertFrozenVolumeMatchesBackup,
+  deleteStagedArchiveSnapshots,
   freezeVolumeForArchiveBackup,
   getFrozenVolumeGeneration,
   releaseArchiveVolumeFreeze,
@@ -1432,11 +1433,12 @@ export async function deleteVolume(
         if (status === "present") {
           await fs!.subvolumes.delete(volName(project_id));
         }
+        await deleteStagedArchiveSnapshots(volume);
         markProjectVolumeAbsent(project_id, "home");
       } catch (err) {
-        // If cleanup did not complete, return the project to a writable state
-        // before the lifecycle job reopens it. A missing volume is the
-        // idempotent-success case and releaseArchiveVolumeFreeze is a no-op.
+        // If cleanup did not complete, return the retained volume to a writable
+        // state before a retry. A missing volume is the idempotent-success case
+        // and releaseArchiveVolumeFreeze is a no-op.
         await releaseArchiveVolumeFreeze(volume).catch((releaseErr) => {
           logger.error("unable to release failed archive deletion freeze", {
             project_id,

@@ -531,6 +531,86 @@ describe("projects.archiveProject", () => {
     expect(deleteProjectDataOnHostAfterBackupMock).toHaveBeenCalledTimes(1);
   });
 
+  it("finalizes from a persisted final backup when the host is unavailable", async () => {
+    const jobId = "77777777-7777-4777-8777-777777777777";
+    getProjectArchiveLifecycleFinalBackupMock.mockResolvedValueOnce({
+      id: "final-backup-id",
+      generation: 10,
+      time: "2026-06-15T05:30:00.000Z",
+    });
+    poolQueryMock.mockResolvedValue({
+      rows: [
+        {
+          project_id: "11111111-1111-4111-8111-111111111111",
+          owning_bay_id: "bay-1",
+          host_id: "22222222-2222-4222-8222-222222222222",
+          backup_repo_id: "33333333-3333-4333-8333-333333333333",
+          provisioned: true,
+          state: { state: "archiving" },
+          host_status: "off",
+          last_changed: new Date("2026-06-15T04:00:00.000Z"),
+          last_changed_generation: 10,
+          last_backup: new Date("2026-06-15T05:00:00.000Z"),
+          last_backup_generation: 10,
+          archive_lifecycle_job_id: jobId,
+        },
+      ],
+    });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: "11111111-1111-4111-8111-111111111111",
+        mode: "automatic",
+        job_id: jobId,
+        reason: "free-inactive",
+        expected_host_id: "22222222-2222-4222-8222-222222222222",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(createBackupMock).not.toHaveBeenCalled();
+    expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+    expect(poolConnectQueryMock).toHaveBeenCalledWith(
+      expect.stringContaining("UPDATE projects"),
+      expect.anything(),
+    );
+  });
+
+  it("finalizes an already deprovisioned automatic archive without a host", async () => {
+    const jobId = "77777777-7777-4777-8777-777777777777";
+    poolQueryMock.mockResolvedValue({
+      rows: [
+        {
+          project_id: "11111111-1111-4111-8111-111111111111",
+          owning_bay_id: "bay-1",
+          host_id: "22222222-2222-4222-8222-222222222222",
+          backup_repo_id: "33333333-3333-4333-8333-333333333333",
+          provisioned: false,
+          state: { state: "archiving" },
+          host_status: "deprovisioned",
+          last_backup: new Date("2026-06-15T05:00:00.000Z"),
+          archive_lifecycle_job_id: jobId,
+        },
+      ],
+    });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: "11111111-1111-4111-8111-111111111111",
+        mode: "automatic",
+        job_id: jobId,
+        reason: "free-inactive",
+        expected_host_id: "22222222-2222-4222-8222-222222222222",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(createBackupMock).not.toHaveBeenCalled();
+    expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+  });
+
   it("treats an absent volume after a lost deletion response as cleaned up", async () => {
     const jobId = "77777777-7777-4777-8777-777777777777";
     const row = {

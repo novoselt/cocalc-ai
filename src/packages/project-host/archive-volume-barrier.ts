@@ -6,10 +6,33 @@
 import { exists } from "@cocalc/backend/misc/async-utils-node";
 import type { Subvolume } from "@cocalc/file-server/btrfs/subvolume";
 import { getGeneration } from "@cocalc/file-server/btrfs/subvolume-snapshots";
-import { btrfs } from "@cocalc/file-server/btrfs/util";
+import { btrfs, sudo } from "@cocalc/file-server/btrfs/util";
 import { withBtrfsMutationLock } from "@cocalc/file-server/btrfs/operation-cache";
+import { SNAPSHOTS } from "@cocalc/util/consts/snapshots";
+import { assertValidSnapshotName } from "@cocalc/util/snapshot-name";
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
 
-const MAX_FREEZE_ATTEMPTS = 3;
+const ARCHIVE_SNAPSHOT_STAGING_DIR = ".archive-snapshot-staging";
+
+function snapshotStagingRoot(volume: Subvolume): string {
+  return join(
+    volume.filesystem.opts.mount,
+    ARCHIVE_SNAPSHOT_STAGING_DIR,
+    volume.name,
+  );
+}
+
+async function stagedSnapshotNames(volume: Subvolume): Promise<string[]> {
+  try {
+    return (await readdir(snapshotStagingRoot(volume)))
+      .map((name) => assertValidSnapshotName(name))
+      .sort();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+    throw err;
+  }
+}
 
 export async function isSubvolumeReadonly(path: string): Promise<boolean> {
   const { stdout } = await btrfs({
@@ -26,6 +49,17 @@ export async function isSubvolumeReadonly(path: string): Promise<boolean> {
   return match[1].toLowerCase() === "true";
 }
 
+async function setSubvolumeReadonlyUnlocked(
+  path: string,
+  readOnly: boolean,
+): Promise<void> {
+  await btrfs({
+    args: ["property", "set", "-ts", path, "ro", readOnly ? "true" : "false"],
+    err_on_exit: true,
+    verbose: false,
+  });
+}
+
 export async function setSubvolumeReadonly(
   path: string,
   readOnly: boolean,
@@ -34,20 +68,70 @@ export async function setSubvolumeReadonly(
   await withBtrfsMutationLock({
     mount,
     operation: readOnly ? "archive-volume-freeze" : "archive-volume-unfreeze",
-    run: async () => {
-      await btrfs({
-        args: [
-          "property",
-          "set",
-          "-ts",
-          path,
-          "ro",
-          readOnly ? "true" : "false",
-        ],
-        err_on_exit: true,
-        verbose: false,
-      });
-    },
+    run: async () => await setSubvolumeReadonlyUnlocked(path, readOnly),
+  });
+}
+
+async function stageLocalSnapshotsUnlocked(volume: Subvolume): Promise<void> {
+  const names = await volume.snapshots.readdir();
+  if (!names.length) return;
+  const root = snapshotStagingRoot(volume);
+  await sudo({ command: "mkdir", args: ["-p", root] });
+  for (const name of names) {
+    const safeName = assertValidSnapshotName(name);
+    const source = join(volume.path, SNAPSHOTS, safeName);
+    const destination = join(root, safeName);
+    if (await exists(destination)) {
+      throw new Error(`archive snapshot staging collision: ${safeName}`);
+    }
+    await sudo({ command: "mv", args: [source, destination] });
+  }
+}
+
+async function restoreLocalSnapshotsUnlocked(volume: Subvolume): Promise<void> {
+  const names = await stagedSnapshotNames(volume);
+  if (names.length) {
+    const snapshotsRoot = join(volume.path, SNAPSHOTS);
+    await sudo({ command: "mkdir", args: ["-p", snapshotsRoot] });
+    for (const name of names) {
+      const source = join(snapshotStagingRoot(volume), name);
+      const destination = join(snapshotsRoot, name);
+      if (await exists(destination)) {
+        throw new Error(`archive snapshot restore collision: ${name}`);
+      }
+      await sudo({ command: "mv", args: [source, destination] });
+    }
+  }
+  await sudo({
+    command: "rm",
+    args: ["-rf", snapshotStagingRoot(volume)],
+  });
+}
+
+async function deleteStagedArchiveSnapshotsUnlocked(
+  volume: Subvolume,
+): Promise<void> {
+  const names = await stagedSnapshotNames(volume);
+  for (const name of names) {
+    await btrfs({
+      args: ["subvolume", "delete", join(snapshotStagingRoot(volume), name)],
+      err_on_exit: true,
+      verbose: false,
+    });
+  }
+  await sudo({
+    command: "rm",
+    args: ["-rf", snapshotStagingRoot(volume)],
+  });
+}
+
+export async function deleteStagedArchiveSnapshots(
+  volume: Subvolume,
+): Promise<void> {
+  await withBtrfsMutationLock({
+    mount: volume.filesystem.opts.mount,
+    operation: "archive-staged-snapshot-delete",
+    run: async () => await deleteStagedArchiveSnapshotsUnlocked(volume),
   });
 }
 
@@ -56,58 +140,47 @@ export interface ArchiveVolumeFreeze {
 }
 
 /**
- * Remove local rolling snapshots, then make the live project volume read-only.
- * Rustic excludes these local snapshots, so removing them cannot remove data
- * from the recovery backup. Rechecking after the read-only transition closes
- * the race with scheduled snapshot maintenance.
+ * Move local recovery snapshots out of the project subvolume, then freeze the
+ * live source in the same Btrfs mutation critical section. The move is cheap
+ * and reversible; Rustic excludes these snapshots, but every abort path moves
+ * them back before making the project usable again.
  */
 export async function freezeVolumeForArchiveBackup(
   volume: Subvolume,
 ): Promise<ArchiveVolumeFreeze> {
-  if (await isSubvolumeReadonly(volume.path)) {
-    const nested = await volume.snapshots.readdir();
-    if (!nested.length) {
-      return { alreadyReadonly: true };
-    }
-    // A host interruption can occur after the read-only transition but before
-    // a raced local snapshot is removed. Resume the normal prune/freeze loop.
-    await setSubvolumeReadonly(
-      volume.path,
-      false,
-      volume.filesystem.opts.mount,
-    );
-  }
-
-  for (let attempt = 1; attempt <= MAX_FREEZE_ATTEMPTS; attempt += 1) {
-    for (const snapshot of await volume.snapshots.readdir()) {
-      await volume.snapshots.delete(snapshot);
-    }
-    await setSubvolumeReadonly(volume.path, true, volume.filesystem.opts.mount);
-    const nested = await volume.snapshots.readdir();
-    if (!nested.length) {
-      return { alreadyReadonly: false };
-    }
-    await setSubvolumeReadonly(
-      volume.path,
-      false,
-      volume.filesystem.opts.mount,
-    );
-  }
-  throw new Error(
-    "unable to freeze project volume without nested local snapshots",
-  );
+  let alreadyReadonly = false;
+  await withBtrfsMutationLock({
+    mount: volume.filesystem.opts.mount,
+    operation: "archive-volume-freeze",
+    run: async () => {
+      if (await isSubvolumeReadonly(volume.path)) {
+        alreadyReadonly = true;
+        return;
+      }
+      await stageLocalSnapshotsUnlocked(volume);
+      await setSubvolumeReadonlyUnlocked(volume.path, true);
+    },
+  });
+  return { alreadyReadonly };
 }
 
 export async function releaseArchiveVolumeFreeze(
   volume: Subvolume,
 ): Promise<void> {
-  if (await exists(volume.path)) {
-    await setSubvolumeReadonly(
-      volume.path,
-      false,
-      volume.filesystem.opts.mount,
-    );
-  }
+  await withBtrfsMutationLock({
+    mount: volume.filesystem.opts.mount,
+    operation: "archive-volume-unfreeze",
+    run: async () => {
+      if (!(await exists(volume.path))) {
+        await deleteStagedArchiveSnapshotsUnlocked(volume);
+        return;
+      }
+      if (await isSubvolumeReadonly(volume.path)) {
+        await setSubvolumeReadonlyUnlocked(volume.path, false);
+      }
+      await restoreLocalSnapshotsUnlocked(volume);
+    },
+  });
 }
 
 export async function releaseArchiveVolumeFreezeIfGenerationMatches({
@@ -117,16 +190,29 @@ export async function releaseArchiveVolumeFreezeIfGenerationMatches({
   volume: Subvolume;
   expectedGeneration: number;
 }): Promise<"absent" | "already-writable" | "released"> {
-  if (!(await exists(volume.path))) return "absent";
-  if (!(await isSubvolumeReadonly(volume.path))) return "already-writable";
-  const generation = await getGeneration(volume.path, { cache: false });
-  if (generation !== expectedGeneration) {
-    throw new Error(
-      `refusing to release archive freeze at generation ${generation}; expected ${expectedGeneration}`,
-    );
-  }
-  await setSubvolumeReadonly(volume.path, false, volume.filesystem.opts.mount);
-  return "released";
+  return await withBtrfsMutationLock({
+    mount: volume.filesystem.opts.mount,
+    operation: "archive-volume-unfreeze",
+    run: async () => {
+      if (!(await exists(volume.path))) {
+        await deleteStagedArchiveSnapshotsUnlocked(volume);
+        return "absent";
+      }
+      if (!(await isSubvolumeReadonly(volume.path))) {
+        await restoreLocalSnapshotsUnlocked(volume);
+        return "already-writable";
+      }
+      const generation = await getGeneration(volume.path, { cache: false });
+      if (generation !== expectedGeneration) {
+        throw new Error(
+          `refusing to release archive freeze at generation ${generation}; expected ${expectedGeneration}`,
+        );
+      }
+      await setSubvolumeReadonlyUnlocked(volume.path, false);
+      await restoreLocalSnapshotsUnlocked(volume);
+      return "released";
+    },
+  });
 }
 
 export async function assertFrozenVolumeMatchesBackup({
@@ -156,7 +242,7 @@ export async function getFrozenVolumeGeneration(
   const nested = await volume.snapshots.readdir();
   if (nested.length) {
     throw new Error(
-      "archive-frozen project volume contains local snapshots and cannot be deleted safely",
+      "archive-frozen project volume contains unstaged local snapshots",
     );
   }
   return generation;

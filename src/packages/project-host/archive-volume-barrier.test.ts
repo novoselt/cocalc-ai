@@ -1,9 +1,12 @@
 let btrfsMock: jest.Mock;
+let sudoMock: jest.Mock;
 let getGenerationMock: jest.Mock;
 let existsMock: jest.Mock;
+let fsReaddirMock: jest.Mock;
 
 jest.mock("@cocalc/file-server/btrfs/util", () => ({
   btrfs: (...args: any[]) => btrfsMock(...args),
+  sudo: (...args: any[]) => sudoMock(...args),
 }));
 
 jest.mock("@cocalc/file-server/btrfs/subvolume-snapshots", () => ({
@@ -19,8 +22,13 @@ jest.mock("@cocalc/backend/misc/async-utils-node", () => ({
   exists: (...args: any[]) => existsMock(...args),
 }));
 
+jest.mock("node:fs/promises", () => ({
+  readdir: (...args: any[]) => fsReaddirMock(...args),
+}));
+
 import {
   assertFrozenVolumeMatchesBackup,
+  deleteStagedArchiveSnapshots,
   freezeVolumeForArchiveBackup,
   releaseArchiveVolumeFreeze,
   releaseArchiveVolumeFreezeIfGenerationMatches,
@@ -28,6 +36,7 @@ import {
 
 function volume(readdir: jest.Mock, del = jest.fn(async () => undefined)) {
   return {
+    name: "project-1",
     path: "/mnt/project-1",
     filesystem: { opts: { mount: "/mnt" } },
     snapshots: { readdir, delete: del },
@@ -42,56 +51,43 @@ describe("archive volume barrier", () => {
       }
       return { stdout: "" };
     });
+    sudoMock = jest.fn(async () => ({ stdout: "" }));
     getGenerationMock = jest.fn(async () => 42);
-    existsMock = jest.fn(async () => true);
+    existsMock = jest.fn(async (path: string) => path === "/mnt/project-1");
+    fsReaddirMock = jest.fn(async () => {
+      throw Object.assign(new Error("not found"), { code: "ENOENT" });
+    });
   });
 
-  it("removes excluded local snapshots and freezes before returning", async () => {
+  it("stages local snapshots before freezing for the final backup", async () => {
     const del = jest.fn(async () => undefined);
     const vol = volume(
       jest.fn(async () => ["daily-1"]),
       del,
     );
-    // The second listing occurs after the read-only transition.
-    vol.snapshots.readdir
-      .mockResolvedValueOnce(["daily-1"])
-      .mockResolvedValueOnce([]);
 
     await expect(freezeVolumeForArchiveBackup(vol)).resolves.toEqual({
       alreadyReadonly: false,
     });
-    expect(del).toHaveBeenCalledWith("daily-1");
+    expect(del).not.toHaveBeenCalled();
+    expect(sudoMock).toHaveBeenCalledWith({
+      command: "mv",
+      args: [
+        "/mnt/project-1/.snapshots/daily-1",
+        "/mnt/.archive-snapshot-staging/project-1/daily-1",
+      ],
+    });
     expect(btrfsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         args: ["property", "set", "-ts", "/mnt/project-1", "ro", "true"],
       }),
     );
+    const moveOrder = sudoMock.mock.invocationCallOrder.at(-1)!;
+    const freezeOrder = btrfsMock.mock.invocationCallOrder.at(-1)!;
+    expect(moveOrder).toBeLessThan(freezeOrder);
   });
 
-  it("retries if scheduled maintenance creates a snapshot during freezing", async () => {
-    const del = jest.fn(async () => undefined);
-    const vol = volume(
-      jest
-        .fn()
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce(["raced"])
-        .mockResolvedValueOnce(["raced"])
-        .mockResolvedValueOnce([]),
-      del,
-    );
-
-    await expect(freezeVolumeForArchiveBackup(vol)).resolves.toEqual({
-      alreadyReadonly: false,
-    });
-    expect(del).toHaveBeenCalledWith("raced");
-    const setValues = btrfsMock.mock.calls
-      .map(([{ args }]) => args)
-      .filter((args) => args?.[0] === "property" && args?.[1] === "set")
-      .map((args) => args.at(-1));
-    expect(setValues).toEqual(["true", "false", "true"]);
-  });
-
-  it("recovers an interrupted freeze that retained a nested snapshot", async () => {
+  it("resumes an already frozen backup without moving snapshots again", async () => {
     btrfsMock.mockImplementation(async ({ args }) => {
       if (args?.[0] === "property" && args?.[1] === "get") {
         return { stdout: "ro=true\n" };
@@ -100,23 +96,71 @@ describe("archive volume barrier", () => {
     });
     const del = jest.fn(async () => undefined);
     const vol = volume(
-      jest
-        .fn()
-        .mockResolvedValueOnce(["raced"])
-        .mockResolvedValueOnce(["raced"])
-        .mockResolvedValueOnce([]),
+      jest.fn(async () => ["daily-1"]),
       del,
     );
 
     await expect(freezeVolumeForArchiveBackup(vol)).resolves.toEqual({
-      alreadyReadonly: false,
+      alreadyReadonly: true,
     });
-    expect(del).toHaveBeenCalledWith("raced");
-    const setValues = btrfsMock.mock.calls
-      .map(([{ args }]) => args)
-      .filter((args) => args?.[0] === "property" && args?.[1] === "set")
-      .map((args) => args.at(-1));
-    expect(setValues).toEqual(["false", "true"]);
+    expect(del).not.toHaveBeenCalled();
+    expect(vol.snapshots.readdir).not.toHaveBeenCalled();
+    expect(sudoMock).not.toHaveBeenCalled();
+    expect(
+      btrfsMock.mock.calls.some(
+        ([{ args }]) => args?.[0] === "property" && args?.[1] === "set",
+      ),
+    ).toBe(false);
+  });
+
+  it("restores staged local snapshots when the archive is released", async () => {
+    btrfsMock.mockImplementation(async ({ args }) => {
+      if (args?.[0] === "property" && args?.[1] === "get") {
+        return { stdout: "ro=true\n" };
+      }
+      return { stdout: "" };
+    });
+    fsReaddirMock.mockResolvedValueOnce(["daily-1"]);
+    const vol = volume(jest.fn(async () => []));
+
+    await releaseArchiveVolumeFreeze(vol);
+
+    expect(sudoMock).toHaveBeenCalledWith({
+      command: "mv",
+      args: [
+        "/mnt/.archive-snapshot-staging/project-1/daily-1",
+        "/mnt/project-1/.snapshots/daily-1",
+      ],
+    });
+    expect(btrfsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ args: expect.arrayContaining(["false"]) }),
+    );
+    const unfreezeOrder = btrfsMock.mock.invocationCallOrder.at(-1)!;
+    const restoreOrder = sudoMock.mock.invocationCallOrder.find(
+      (_, index) => sudoMock.mock.calls[index][0].command === "mv",
+    )!;
+    expect(unfreezeOrder).toBeLessThan(restoreOrder);
+  });
+
+  it("deletes staged snapshots only after project deletion commits", async () => {
+    fsReaddirMock.mockResolvedValueOnce(["daily-1"]);
+    const vol = volume(jest.fn(async () => []));
+
+    await deleteStagedArchiveSnapshots(vol);
+
+    expect(btrfsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: [
+          "subvolume",
+          "delete",
+          "/mnt/.archive-snapshot-staging/project-1/daily-1",
+        ],
+      }),
+    );
+    expect(sudoMock).toHaveBeenCalledWith({
+      command: "rm",
+      args: ["-rf", "/mnt/.archive-snapshot-staging/project-1"],
+    });
   });
 
   it("validates the frozen live generation immediately before deletion", async () => {
@@ -143,6 +187,12 @@ describe("archive volume barrier", () => {
   });
 
   it("unfreezes a retained volume after a failed archive operation", async () => {
+    btrfsMock.mockImplementation(async ({ args }) => {
+      if (args?.[0] === "property" && args?.[1] === "get") {
+        return { stdout: "ro=true\n" };
+      }
+      return { stdout: "" };
+    });
     await releaseArchiveVolumeFreeze(volume(jest.fn(async () => [])));
     expect(btrfsMock).toHaveBeenCalledWith(
       expect.objectContaining({

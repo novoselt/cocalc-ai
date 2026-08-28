@@ -105,7 +105,7 @@ async function publishState(project_id: string): Promise<void> {
   });
 }
 
-function assertAutomaticArchiveReady({
+function assertAutomaticArchiveClaimCurrent({
   row,
   job_id,
   expected_host_id,
@@ -115,15 +115,18 @@ function assertAutomaticArchiveReady({
   expected_host_id?: string | null;
 }): void {
   const state = `${row.state?.state ?? ""}`.trim();
-  const hostStatus = `${row.host_status ?? ""}`.trim().toLowerCase();
   if (state !== "archiving" || row.archive_lifecycle_job_id !== job_id) {
     throw new Error("automatic archive project claim is no longer current");
   }
-  if (!row.host_id || !["active", "running"].includes(hostStatus)) {
-    throw new Error("automatic archive requires a reachable live host");
-  }
   if (expected_host_id && row.host_id !== expected_host_id) {
     throw new Error("automatic archive placement changed before cleanup");
+  }
+}
+
+function assertAutomaticArchiveCanCreateBackup(row: ArchiveRow): void {
+  const hostStatus = `${row.host_status ?? ""}`.trim().toLowerCase();
+  if (!row.host_id || !["active", "running"].includes(hostStatus)) {
+    throw new Error("automatic archive requires a reachable live host");
   }
   if (
     !isProjectArchiveBackupCurrent({
@@ -316,6 +319,7 @@ export async function archiveProjectStorage({
   let expectedArchiveGeneration: number | undefined;
   let expectedArchiveBackupId: string | undefined;
   let finalBackupQueued = false;
+  let finalBackup: ProjectArchiveLifecycleFinalBackup | undefined;
   try {
     if (!row.backup_repo_id) {
       throw new Error(
@@ -328,11 +332,21 @@ export async function archiveProjectStorage({
       !hostStatus || hostStatus === "active" || hostStatus === "running";
 
     if (automatic) {
-      assertAutomaticArchiveReady({
+      assertAutomaticArchiveClaimCurrent({
         row,
         job_id: jobId,
         expected_host_id,
       });
+      finalBackup = await getProjectArchiveLifecycleFinalBackup(jobId);
+      const finalBackupCurrent =
+        !!finalBackup && finalBackupCoversProject({ backup: finalBackup, row });
+      if (finalBackup && finalBackupCurrent) {
+        expectedArchiveGeneration = Number(finalBackup.generation);
+        expectedArchiveBackupId = finalBackup.id;
+      }
+      if (row.provisioned !== false && !finalBackupCurrent) {
+        assertAutomaticArchiveCanCreateBackup(row);
+      }
     } else if (!hostDeprovisioned && row.last_backup == null) {
       throw new Error(
         "project must have at least one backup before it can be archived",
@@ -353,10 +367,10 @@ export async function archiveProjectStorage({
     }
 
     if (automatic) {
-      let finalBackup = await getProjectArchiveLifecycleFinalBackup(jobId);
       if (
-        !finalBackup ||
-        !finalBackupCoversProject({ backup: finalBackup, row })
+        row.provisioned !== false &&
+        (!finalBackup ||
+          !finalBackupCoversProject({ backup: finalBackup, row }))
       ) {
         const previousFinalBackupId = finalBackup?.id ?? null;
         finalBackup = await createFinalAutomaticArchiveBackup({
@@ -375,7 +389,7 @@ export async function archiveProjectStorage({
             "project backup repository disappeared during automatic archive",
           );
         }
-        assertAutomaticArchiveReady({
+        assertAutomaticArchiveClaimCurrent({
           row,
           job_id: jobId,
           expected_host_id,
@@ -389,9 +403,18 @@ export async function archiveProjectStorage({
           expected_previous_backup_id: previousFinalBackupId,
         });
       }
-      assertFinalBackupCoversProject({ backup: finalBackup, row });
-      expectedArchiveGeneration = Number(finalBackup.generation);
-      expectedArchiveBackupId = finalBackup.id;
+      if (row.provisioned === false) {
+        // Host cleanup was already reported even if database finalization was
+        // interrupted. Never reopen a project whose local volume is absent.
+        hostCleanupCompleted = true;
+      } else {
+        if (!finalBackup) {
+          throw new Error("automatic archive final backup is missing");
+        }
+        assertFinalBackupCoversProject({ backup: finalBackup, row });
+        expectedArchiveGeneration = Number(finalBackup.generation);
+        expectedArchiveBackupId = finalBackup.id;
+      }
     }
 
     const refreshedHostCanRunMutations =
@@ -415,10 +438,11 @@ export async function archiveProjectStorage({
       }
       hostCleanupCompleted = true;
     } else if (row.provisioned !== false) {
-      log.info("manual archive marked project without host mutation", {
+      log.info("archive finalized from backup without host mutation", {
         project_id,
         host_id: row.host_id,
         host_status: hostStatus || undefined,
+        automatic,
       });
     }
 
@@ -461,11 +485,6 @@ export async function archiveProjectStorage({
             backup_id: expectedArchiveBackupId,
             backup_generation: expectedArchiveGeneration,
           });
-          reopenSafe = true;
-        } else {
-          // The marker was never persisted, so reopening cannot cause a retry
-          // to reuse this backup.
-          reopenSafe = true;
         }
       } catch (releaseErr) {
         log.warn("unable to release automatic archive volume freeze", {
