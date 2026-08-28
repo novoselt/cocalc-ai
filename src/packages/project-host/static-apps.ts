@@ -51,11 +51,11 @@ const MAX_PUBLIC_VIEWER_MANIFEST_BYTES = 1 * 1024 * 1024;
 Security and abuse-control invariants for host-side static serving:
 
 1. Never serve by raw host path after resolving static.root.
-   We first resolve static.root through the per-project sandbox, then create a
-   second read-only sandbox rooted at that directory. Every stat/read for the
-   request must go through that sub-sandbox. This is what keeps symlinks and
-   path tricks inside the published subtree instead of merely inside the wider
-   project mount.
+   We open and verify static.root once, then keep that directory descriptor
+   open as the root of a second read-only sandbox. Every stat/read for the
+   request goes through that descriptor-anchored sub-sandbox. Do not construct
+   a new sandbox from a previously checked pathname: replacing that pathname
+   with a symlink would let an attacker redefine the trusted root.
 
 2. Non-renderable static files may stream, but only through a sandbox API that
    opens and verifies the file descriptor first. Do not fall back to raw host
@@ -82,6 +82,7 @@ interface StaticResolvedFile {
 interface StaticRootContext {
   containerPath: string;
   fs: SandboxedFilesystem;
+  close: () => Promise<void>;
 }
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -636,10 +637,11 @@ async function resolveStaticRoot(
   }
   try {
     const projectFs = getProjectSandboxFilesystem(project_id);
-    const rootAbs = await projectFs.safeAbsPath(root);
+    const subtree = await projectFs.openReadOnlySubtree(root);
     return {
       containerPath: root,
-      fs: new SandboxedFilesystem(rootAbs, { readonly: true }),
+      fs: subtree.fs,
+      close: subtree.close,
     };
   } catch (err) {
     logger.debug("failed to resolve static app root", {
@@ -729,60 +731,64 @@ export async function inspectStaticAppRequest({
   if (!rootContext) {
     return;
   }
-  const pathInfo = await resolveStaticPath({
-    fs: rootContext.fs,
-    requestPath: match.requestPath,
-  });
-  if (!pathInfo?.stat?.isFile() && !pathInfo?.stat?.isDirectory()) {
-    return;
+  try {
+    const pathInfo = await resolveStaticPath({
+      fs: rootContext.fs,
+      requestPath: match.requestPath,
+    });
+    if (!pathInfo?.stat?.isFile() && !pathInfo?.stat?.isDirectory()) {
+      return;
+    }
+    const requestedKind = pathInfo.stat.isDirectory() ? "directory" : "file";
+    const containingRelativePath =
+      requestedKind === "directory"
+        ? pathInfo.relativePath
+        : path.posix.dirname(pathInfo.relativePath);
+    const containingFsPath =
+      requestedKind === "directory"
+        ? pathInfo.fsPath
+        : path.posix.dirname(pathInfo.fsPath);
+    const requestedSize =
+      requestedKind === "directory"
+        ? await summarizeDirectoryBytes({
+            fs: rootContext.fs,
+            fsPath: pathInfo.fsPath,
+          })
+        : { bytes: pathInfo.stat.size };
+    const containingDirectorySize = await summarizeDirectoryBytes({
+      fs: rootContext.fs,
+      fsPath: containingFsPath,
+    });
+    return {
+      project_id,
+      app_id: match.spec.id,
+      static_root: rootContext.containerPath,
+      exposure_mode: match.exposure?.mode === "public" ? "public" : "private",
+      auth_front: match.exposure?.auth_front,
+      public_access_granted: await authorizePublicAppPath({ project_id, url }),
+      requested: {
+        kind: requestedKind,
+        relative_path: pathInfo.relativePath,
+        container_path: containerPathForRelativePath({
+          containerRoot: rootContext.containerPath,
+          relativePath: pathInfo.relativePath,
+        }),
+        bytes: requestedSize.bytes,
+        truncated: requestedSize.truncated,
+      },
+      containing_directory: {
+        relative_path: containingRelativePath,
+        container_path: containerPathForRelativePath({
+          containerRoot: rootContext.containerPath,
+          relativePath: containingRelativePath,
+        }),
+        bytes: containingDirectorySize.bytes,
+        truncated: containingDirectorySize.truncated,
+      },
+    };
+  } finally {
+    await rootContext.close();
   }
-  const requestedKind = pathInfo.stat.isDirectory() ? "directory" : "file";
-  const containingRelativePath =
-    requestedKind === "directory"
-      ? pathInfo.relativePath
-      : path.posix.dirname(pathInfo.relativePath);
-  const containingFsPath =
-    requestedKind === "directory"
-      ? pathInfo.fsPath
-      : path.posix.dirname(pathInfo.fsPath);
-  const requestedSize =
-    requestedKind === "directory"
-      ? await summarizeDirectoryBytes({
-          fs: rootContext.fs,
-          fsPath: pathInfo.fsPath,
-        })
-      : { bytes: pathInfo.stat.size };
-  const containingDirectorySize = await summarizeDirectoryBytes({
-    fs: rootContext.fs,
-    fsPath: containingFsPath,
-  });
-  return {
-    project_id,
-    app_id: match.spec.id,
-    static_root: rootContext.containerPath,
-    exposure_mode: match.exposure?.mode === "public" ? "public" : "private",
-    auth_front: match.exposure?.auth_front,
-    public_access_granted: await authorizePublicAppPath({ project_id, url }),
-    requested: {
-      kind: requestedKind,
-      relative_path: pathInfo.relativePath,
-      container_path: containerPathForRelativePath({
-        containerRoot: rootContext.containerPath,
-        relativePath: pathInfo.relativePath,
-      }),
-      bytes: requestedSize.bytes,
-      truncated: requestedSize.truncated,
-    },
-    containing_directory: {
-      relative_path: containingRelativePath,
-      container_path: containerPathForRelativePath({
-        containerRoot: rootContext.containerPath,
-        relativePath: containingRelativePath,
-      }),
-      bytes: containingDirectorySize.bytes,
-      truncated: containingDirectorySize.truncated,
-    },
-  };
 }
 
 async function writeResolvedStaticFile({
@@ -974,199 +980,209 @@ export async function maybeHandleStaticAppRequest({
     return true;
   }
 
-  const integration = match.spec.integration;
-  const exposureMode = match.exposure?.mode === "public" ? "public" : "private";
-  const extraHtmlHeaders =
-    integration?.mode === COCALC_PUBLIC_VIEWER_MODE
-      ? buildPublicViewerHeaders(exposureMode)
-      : undefined;
-  const fileHeaders =
-    integration?.mode === COCALC_PUBLIC_VIEWER_MODE
-      ? await buildPublicFileHeaders({ req, exposureMode })
-      : undefined;
-
-  const pathInfo = await resolveStaticPath({
-    fs: rootContext.fs,
-    requestPath: match.requestPath,
-  });
-  if (!pathInfo) {
-    writeNotFound(res, extraHtmlHeaders);
-    return true;
-  }
-
-  if (pathInfo.stat?.isFile()) {
-    if (
-      integration?.mode === COCALC_PUBLIC_VIEWER_MODE &&
-      isPublicViewerRenderablePath(pathInfo.relativePath, {
-        file_types: integration.file_types,
-      }) &&
-      !isViewerRawRequest(req)
-    ) {
-      const location = await buildViewerRedirectUrl({
-        req,
-        sourcePath: pathInfo.relativePath,
-        title:
-          path.posix.basename(pathInfo.relativePath) || "CoCalc Public Viewer",
-        autoRefreshS: integration.auto_refresh_s,
-        cacheMode: integration.cache_mode,
-        viewerBundle: integration.viewer_bundle,
-      });
-      res.writeHead(302, {
-        Location: location,
-        "Cache-Control": "no-store",
-      });
-      res.end();
-      return true;
-    }
-    await writeResolvedStaticFile({
-      req,
-      res,
-      fs: rootContext.fs,
-      resolved: {
-        fsPath: pathInfo.fsPath,
-        stat: pathInfo.stat,
-      },
-      cacheControl: resolveStaticCacheControl({
-        explicit: match.spec.static?.cache_control,
-        exposureMode,
-        kind: "file",
-      }),
-      extraHeaders: fileHeaders,
-      maxBytes: getStaticReadLimit({
-        integration,
-        relativePath: pathInfo.relativePath,
-      }),
-    });
-    return true;
-  }
-
-  if (!pathInfo.stat?.isDirectory()) {
-    writeNotFound(res, extraHtmlHeaders);
-    return true;
-  }
-
-  if (!hasTrailingSlash(req)) {
-    res.writeHead(302, {
-      Location: trailingSlashRedirectLocation(req),
-      "Cache-Control": "no-store",
-    });
-    res.end();
-    return true;
-  }
-
-  const indexFile = await resolveStaticChildFile({
-    fs: rootContext.fs,
-    directory: pathInfo.fsPath,
-    child: match.spec.static?.index ?? "index.html",
-  });
-  if (indexFile) {
-    const indexRelativePath = path.posix.join(
-      pathInfo.relativePath === "/" ? "" : pathInfo.relativePath,
-      match.spec.static?.index ?? "index.html",
-    );
-    if (
-      integration?.mode === COCALC_PUBLIC_VIEWER_MODE &&
-      isPublicViewerRenderablePath(indexRelativePath, {
-        file_types: integration.file_types,
-      }) &&
-      !isViewerRawRequest(req)
-    ) {
-      const location = await buildViewerRedirectUrl({
-        req,
-        sourcePath: indexRelativePath,
-        title: path.posix.basename(indexRelativePath) || "CoCalc Public Viewer",
-        autoRefreshS: integration.auto_refresh_s,
-        cacheMode: integration.cache_mode,
-        viewerBundle: integration.viewer_bundle,
-      });
-      res.writeHead(302, {
-        Location: location,
-        "Cache-Control": "no-store",
-      });
-      res.end();
-      return true;
-    }
-    await writeResolvedStaticFile({
-      req,
-      res,
-      fs: rootContext.fs,
-      resolved: indexFile,
-      cacheControl: resolveStaticCacheControl({
-        explicit: match.spec.static?.cache_control,
-        exposureMode,
-        kind: "file",
-      }),
-      extraHeaders: fileHeaders,
-      maxBytes: getStaticReadLimit({
-        integration,
-        relativePath: indexRelativePath,
-      }),
-    });
-    return true;
-  }
-
-  if (
-    integration?.mode !== COCALC_PUBLIC_VIEWER_MODE ||
-    integration.directory_listing !== "manifest-only"
-  ) {
-    writeNotFound(res, extraHtmlHeaders);
-    return true;
-  }
-
-  const manifestFile = await resolveStaticChildFile({
-    fs: rootContext.fs,
-    directory: pathInfo.fsPath,
-    child: integration.manifest,
-  });
-  if (!manifestFile) {
-    writeNotFound(res, extraHtmlHeaders);
-    return true;
-  }
-  if (Number(manifestFile.stat.size) > MAX_PUBLIC_VIEWER_MANIFEST_BYTES) {
-    writeFileTooLarge(res, {
-      maxBytes: MAX_PUBLIC_VIEWER_MANIFEST_BYTES,
-      extraHeaders: extraHtmlHeaders,
-    });
-    return true;
-  }
-
   try {
-    const manifestRaw = (await rootContext.fs.readFile(
-      manifestFile.fsPath,
-      "utf8",
-    )) as string;
-    const manifest = parsePublicViewerManifest(manifestRaw, {
-      file_types: integration.file_types,
-    });
-    const html = renderPublicViewerManifestPage({
-      manifest,
-      manifestPath: integration.manifest,
-      directoryRelativePath: pathInfo.relativePath,
-      integration,
-    });
-    writeStaticHtmlResponse({
-      req,
-      res,
-      html,
-      cacheControl: resolveStaticCacheControl({
-        explicit: match.spec.static?.cache_control,
-        exposureMode,
-        kind: "manifest",
-      }),
-      mtimeMs: manifestFile.stat.mtimeMs,
-      extraHeaders: extraHtmlHeaders,
-    });
-  } catch (err) {
-    logger.warn("public viewer manifest error", {
-      err: `${err}`,
-      manifest: path.posix.join(rootContext.containerPath, manifestFile.fsPath),
+    const integration = match.spec.integration;
+    const exposureMode =
+      match.exposure?.mode === "public" ? "public" : "private";
+    const extraHtmlHeaders =
+      integration?.mode === COCALC_PUBLIC_VIEWER_MODE
+        ? buildPublicViewerHeaders(exposureMode)
+        : undefined;
+    const fileHeaders =
+      integration?.mode === COCALC_PUBLIC_VIEWER_MODE
+        ? await buildPublicFileHeaders({ req, exposureMode })
+        : undefined;
+
+    const pathInfo = await resolveStaticPath({
+      fs: rootContext.fs,
       requestPath: match.requestPath,
     });
-    res.writeHead(500, {
-      "Content-Type": "text/plain; charset=utf-8",
-      ...(extraHtmlHeaders ?? {}),
+    if (!pathInfo) {
+      writeNotFound(res, extraHtmlHeaders);
+      return true;
+    }
+
+    if (pathInfo.stat?.isFile()) {
+      if (
+        integration?.mode === COCALC_PUBLIC_VIEWER_MODE &&
+        isPublicViewerRenderablePath(pathInfo.relativePath, {
+          file_types: integration.file_types,
+        }) &&
+        !isViewerRawRequest(req)
+      ) {
+        const location = await buildViewerRedirectUrl({
+          req,
+          sourcePath: pathInfo.relativePath,
+          title:
+            path.posix.basename(pathInfo.relativePath) ||
+            "CoCalc Public Viewer",
+          autoRefreshS: integration.auto_refresh_s,
+          cacheMode: integration.cache_mode,
+          viewerBundle: integration.viewer_bundle,
+        });
+        res.writeHead(302, {
+          Location: location,
+          "Cache-Control": "no-store",
+        });
+        res.end();
+        return true;
+      }
+      await writeResolvedStaticFile({
+        req,
+        res,
+        fs: rootContext.fs,
+        resolved: {
+          fsPath: pathInfo.fsPath,
+          stat: pathInfo.stat,
+        },
+        cacheControl: resolveStaticCacheControl({
+          explicit: match.spec.static?.cache_control,
+          exposureMode,
+          kind: "file",
+        }),
+        extraHeaders: fileHeaders,
+        maxBytes: getStaticReadLimit({
+          integration,
+          relativePath: pathInfo.relativePath,
+        }),
+      });
+      return true;
+    }
+
+    if (!pathInfo.stat?.isDirectory()) {
+      writeNotFound(res, extraHtmlHeaders);
+      return true;
+    }
+
+    if (!hasTrailingSlash(req)) {
+      res.writeHead(302, {
+        Location: trailingSlashRedirectLocation(req),
+        "Cache-Control": "no-store",
+      });
+      res.end();
+      return true;
+    }
+
+    const indexFile = await resolveStaticChildFile({
+      fs: rootContext.fs,
+      directory: pathInfo.fsPath,
+      child: match.spec.static?.index ?? "index.html",
     });
-    res.end("Invalid public viewer manifest\n");
+    if (indexFile) {
+      const indexRelativePath = path.posix.join(
+        pathInfo.relativePath === "/" ? "" : pathInfo.relativePath,
+        match.spec.static?.index ?? "index.html",
+      );
+      if (
+        integration?.mode === COCALC_PUBLIC_VIEWER_MODE &&
+        isPublicViewerRenderablePath(indexRelativePath, {
+          file_types: integration.file_types,
+        }) &&
+        !isViewerRawRequest(req)
+      ) {
+        const location = await buildViewerRedirectUrl({
+          req,
+          sourcePath: indexRelativePath,
+          title:
+            path.posix.basename(indexRelativePath) || "CoCalc Public Viewer",
+          autoRefreshS: integration.auto_refresh_s,
+          cacheMode: integration.cache_mode,
+          viewerBundle: integration.viewer_bundle,
+        });
+        res.writeHead(302, {
+          Location: location,
+          "Cache-Control": "no-store",
+        });
+        res.end();
+        return true;
+      }
+      await writeResolvedStaticFile({
+        req,
+        res,
+        fs: rootContext.fs,
+        resolved: indexFile,
+        cacheControl: resolveStaticCacheControl({
+          explicit: match.spec.static?.cache_control,
+          exposureMode,
+          kind: "file",
+        }),
+        extraHeaders: fileHeaders,
+        maxBytes: getStaticReadLimit({
+          integration,
+          relativePath: indexRelativePath,
+        }),
+      });
+      return true;
+    }
+
+    if (
+      integration?.mode !== COCALC_PUBLIC_VIEWER_MODE ||
+      integration.directory_listing !== "manifest-only"
+    ) {
+      writeNotFound(res, extraHtmlHeaders);
+      return true;
+    }
+
+    const manifestFile = await resolveStaticChildFile({
+      fs: rootContext.fs,
+      directory: pathInfo.fsPath,
+      child: integration.manifest,
+    });
+    if (!manifestFile) {
+      writeNotFound(res, extraHtmlHeaders);
+      return true;
+    }
+    if (Number(manifestFile.stat.size) > MAX_PUBLIC_VIEWER_MANIFEST_BYTES) {
+      writeFileTooLarge(res, {
+        maxBytes: MAX_PUBLIC_VIEWER_MANIFEST_BYTES,
+        extraHeaders: extraHtmlHeaders,
+      });
+      return true;
+    }
+
+    try {
+      const manifestRaw = (await rootContext.fs.readFile(
+        manifestFile.fsPath,
+        "utf8",
+      )) as string;
+      const manifest = parsePublicViewerManifest(manifestRaw, {
+        file_types: integration.file_types,
+      });
+      const html = renderPublicViewerManifestPage({
+        manifest,
+        manifestPath: integration.manifest,
+        directoryRelativePath: pathInfo.relativePath,
+        integration,
+      });
+      writeStaticHtmlResponse({
+        req,
+        res,
+        html,
+        cacheControl: resolveStaticCacheControl({
+          explicit: match.spec.static?.cache_control,
+          exposureMode,
+          kind: "manifest",
+        }),
+        mtimeMs: manifestFile.stat.mtimeMs,
+        extraHeaders: extraHtmlHeaders,
+      });
+    } catch (err) {
+      logger.warn("public viewer manifest error", {
+        err: `${err}`,
+        manifest: path.posix.join(
+          rootContext.containerPath,
+          manifestFile.fsPath,
+        ),
+        requestPath: match.requestPath,
+      });
+      res.writeHead(500, {
+        "Content-Type": "text/plain; charset=utf-8",
+        ...(extraHtmlHeaders ?? {}),
+      });
+      res.end("Invalid public viewer manifest\n");
+    }
+    return true;
+  } finally {
+    await rootContext.close();
   }
-  return true;
 }

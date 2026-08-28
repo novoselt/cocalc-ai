@@ -58,9 +58,11 @@ import {
 } from "node:fs/promises";
 import {
   close as closeFdCallback,
+  createWriteStream as createNodeWriteStream,
   type ReadStream,
   readFile as readFileFdCallback,
   statSync,
+  type WriteStream,
   writeFile as writeFileFdCallback,
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -355,6 +357,7 @@ const INTERNAL_METHODS = new Set([
   "ensureHandleMatchesPath",
   "canonicalIdentityForOpenedHandle",
   "openVerifiedHandle",
+  "openReadOnlySubtree",
   "createAuthorizedReadStream",
   "cpDirectoryRequiresRecursiveError",
   "cpUnsupportedTypeError",
@@ -2182,6 +2185,83 @@ export class SandboxedFilesystem {
     } = {},
   ): Promise<ReadStream> =>
     await this.createAuthorizedReadStream(path, options);
+
+  createWriteStream = async (path: string): Promise<WriteStream> => {
+    this.assertWritable(path);
+    const openWriteFd = await this.openAt2WriteWithRetry({
+      path,
+      create: true,
+      truncate: true,
+      append: false,
+      mode: 0o666,
+    });
+    if (openWriteFd != null) {
+      try {
+        // When fd is provided, Node never reopens path. The pathname is only
+        // retained for useful stream error messages.
+        return createNodeWriteStream(path, {
+          fd: openWriteFd,
+          autoClose: true,
+        });
+      } catch (err) {
+        await closeFd(openWriteFd).catch(() => {});
+        throw err;
+      }
+    }
+    if (!this.unsafeMode) {
+      throw new Error(
+        `descriptor-anchored writes are required for streamed write '${path}'`,
+      );
+    }
+    return createNodeWriteStream(await this.resolveSandboxPath(path));
+  };
+
+  openReadOnlySubtree = async (
+    path: string,
+  ): Promise<{
+    fs: SandboxedFilesystem;
+    close: () => Promise<void>;
+  }> => {
+    if (process.platform !== "linux") {
+      throw new Error("descriptor-anchored subtrees require Linux");
+    }
+    const opened = await this.openVerifiedHandle({
+      path,
+      flags: constants.O_RDONLY | constants.O_DIRECTORY,
+    });
+    try {
+      const info = await opened.handle.stat();
+      if (!info.isDirectory()) {
+        const err: NodeJS.ErrnoException = new Error(
+          `ENOTDIR: not a directory, open '${path}'`,
+        );
+        err.code = "ENOTDIR";
+        err.path = path;
+        throw err;
+      }
+      // Keep this descriptor open for the subtree lifetime. Replacing the
+      // project-controlled pathname cannot change what this proc fd path
+      // names. Use our pid rather than /proc/self so sandboxed subprocesses
+      // can also resolve the anchored directory while the handle is open.
+      const fs = new SandboxedFilesystem(
+        `/proc/${process.pid}/fd/${opened.handle.fd}`,
+        { readonly: true },
+      );
+      let closed = false;
+      return {
+        fs,
+        close: async () => {
+          if (closed) return;
+          closed = true;
+          fs.close();
+          await opened.handle.close().catch(() => {});
+        },
+      };
+    } catch (err) {
+      await opened.handle.close().catch(() => {});
+      throw err;
+    }
+  };
 
   lockFile = async (path: string, lock?: number) => {
     const p = await this.resolveSandboxPath(path);

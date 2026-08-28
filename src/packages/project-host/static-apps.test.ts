@@ -1,5 +1,12 @@
 import type http from "node:http";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -206,6 +213,47 @@ describe("static app serving", () => {
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(404);
     expect(res.body.toString("utf8")).toBe("Not found\n");
+  });
+
+  it("does not rebind the configured root when its path is replaced", async () => {
+    const base = await mkTempDir("cocalc-static-apps-");
+    const home = join(base, "home");
+    const rootfs = join(base, "rootfs");
+    const scratch = join(base, "scratch");
+    const outside = join(base, "other-project");
+    await mkdir(join(home, "public"), { recursive: true });
+    await mkdir(rootfs, { recursive: true });
+    await mkdir(scratch, { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(home, "public", "hello.txt"), "safe content");
+    await writeFile(join(outside, "hello.txt"), "other project content");
+
+    currentProjectFs = createProjectSandboxFilesystem({
+      project_id,
+      home,
+      rootfs,
+      scratch,
+    });
+    const openReadOnlySubtree =
+      currentProjectFs.openReadOnlySubtree.bind(currentProjectFs);
+    currentProjectFs.openReadOnlySubtree = async (root: string) => {
+      const subtree = await openReadOnlySubtree(root);
+      await rename(join(home, "public"), join(home, "opened-public"));
+      await symlink(outside, join(home, "public"));
+      return subtree;
+    };
+
+    const res = new MockResponse();
+    const handled = await maybeHandleStaticAppRequest({
+      req: makeRequest("/hello.txt"),
+      res: res as unknown as http.ServerResponse,
+      project_id,
+      match: makeMatch(PUBLIC_ROOT, "/hello.txt"),
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.toString("utf8")).toBe("safe content");
   });
 
   it("rejects oversized public viewer manifests before reading them", async () => {

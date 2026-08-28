@@ -16,6 +16,7 @@ import {
 } from "node:fs/promises";
 import { rmSync, symlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { make_patch } from "@cocalc/util/dmp";
@@ -222,6 +223,61 @@ describeIfLinux("authorized read streams", () => {
         throw new Error("denied");
       }),
     ).rejects.toThrow("denied");
+  });
+});
+
+describeIfLinux("descriptor-anchored streamed writes and subtrees", () => {
+  it("keeps a streamed write on the opened inode after its path is replaced", async () => {
+    const home = await mkdtemp(join(tempDir, "streamed-write-home-"));
+    const outside = await mkdtemp(join(tempDir, "streamed-write-outside-"));
+    await mkdir(join(home, "upload"));
+    await writeFile(join(home, "upload", "target.txt"), "inside");
+    await writeFile(join(outside, "target.txt"), "outside");
+    const fs = new SandboxedFilesystem(home);
+
+    const stream = await fs.createWriteStream("upload/target.txt");
+    await rename(join(home, "upload"), join(home, "opened-upload"));
+    await symlink(outside, join(home, "upload"));
+    const closed = once(stream, "close");
+    stream.end("replacement");
+    await closed;
+
+    expect(
+      await readFile(join(home, "opened-upload", "target.txt"), "utf8"),
+    ).toBe("replacement");
+    expect(await readFile(join(outside, "target.txt"), "utf8")).toBe("outside");
+  });
+
+  it("rejects a streamed write through an escaping parent symlink", async () => {
+    const home = await mkdtemp(join(tempDir, "streamed-write-denied-home-"));
+    const outside = await mkdtemp(
+      join(tempDir, "streamed-write-denied-outside-"),
+    );
+    await writeFile(join(outside, "target.txt"), "outside");
+    await symlink(outside, join(home, "upload"));
+    const fs = new SandboxedFilesystem(home);
+
+    await expect(fs.createWriteStream("upload/target.txt")).rejects.toThrow();
+    expect(await readFile(join(outside, "target.txt"), "utf8")).toBe("outside");
+  });
+
+  it("keeps an opened read-only subtree anchored after its path is replaced", async () => {
+    const home = await mkdtemp(join(tempDir, "subtree-home-"));
+    const outside = await mkdtemp(join(tempDir, "subtree-outside-"));
+    await mkdir(join(home, "public"));
+    await writeFile(join(home, "public", "index.html"), "inside");
+    await writeFile(join(outside, "index.html"), "outside");
+    const fs = new SandboxedFilesystem(home);
+    const subtree = await fs.openReadOnlySubtree("public");
+
+    try {
+      await rename(join(home, "public"), join(home, "opened-public"));
+      await symlink(outside, join(home, "public"));
+
+      expect(await subtree.fs.readFile("index.html", "utf8")).toBe("inside");
+    } finally {
+      await subtree.close();
+    }
   });
 });
 
