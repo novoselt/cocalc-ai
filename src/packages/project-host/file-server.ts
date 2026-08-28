@@ -167,6 +167,7 @@ import { managedProjectEgressResidualTracker } from "./managed-egress-residual";
 import { planBackupRetention } from "./backup-retention";
 import {
   assertFrozenVolumeMatchesBackup,
+  deleteOrphanedStagedArchiveSnapshots,
   deleteStagedArchiveSnapshots,
   freezeVolumeForArchiveBackup,
   getFrozenVolumeGeneration,
@@ -1547,9 +1548,8 @@ async function cleanupOrphanedArchiveSnapshotStaging(): Promise<void> {
     if (!match || !isValidUUID(match[1])) continue;
     try {
       const volume = await fs.subvolumes.get(name);
-      if (await exists(volume.path)) continue;
-      await deleteStagedArchiveSnapshots(volume);
-      cleaned += 1;
+      const status = await deleteOrphanedStagedArchiveSnapshots(volume);
+      if (status === "deleted") cleaned += 1;
     } catch (err) {
       errors += 1;
       logger.warn("orphaned archive snapshot staging cleanup failed", {

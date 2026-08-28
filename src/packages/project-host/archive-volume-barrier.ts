@@ -146,6 +146,20 @@ export async function deleteStagedArchiveSnapshots(
   });
 }
 
+export async function deleteOrphanedStagedArchiveSnapshots(
+  volume: Subvolume,
+): Promise<"deleted" | "retained"> {
+  return await withBtrfsMutationLock({
+    mount: volume.filesystem.opts.mount,
+    operation: "archive-orphaned-staged-snapshot-delete",
+    run: async () => {
+      if (await exists(volume.path)) return "retained" as const;
+      await deleteStagedArchiveSnapshotsUnlocked(volume);
+      return "deleted" as const;
+    },
+  });
+}
+
 export interface ArchiveVolumeFreeze {
   alreadyReadonly: boolean;
 }

@@ -28,6 +28,7 @@ jest.mock("node:fs/promises", () => ({
 
 import {
   assertFrozenVolumeMatchesBackup,
+  deleteOrphanedStagedArchiveSnapshots,
   deleteStagedArchiveSnapshots,
   freezeVolumeForArchiveBackup,
   listStagedArchiveVolumeNames,
@@ -175,6 +176,33 @@ describe("archive volume barrier", () => {
       command: "rm",
       args: ["-rf", "/mnt/.archive-snapshot-staging/project-1"],
     });
+  });
+
+  it("deletes orphan staging only while the project parent is absent", async () => {
+    const vol = volume(jest.fn(async () => []));
+    await expect(deleteOrphanedStagedArchiveSnapshots(vol)).resolves.toBe(
+      "retained",
+    );
+    expect(
+      btrfsMock.mock.calls.some(
+        ([{ args }]) => args?.[0] === "subvolume" && args?.[1] === "delete",
+      ),
+    ).toBe(false);
+
+    existsMock.mockResolvedValueOnce(false);
+    fsReaddirMock.mockResolvedValueOnce(["daily-1"]);
+    await expect(deleteOrphanedStagedArchiveSnapshots(vol)).resolves.toBe(
+      "deleted",
+    );
+    expect(btrfsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: [
+          "subvolume",
+          "delete",
+          "/mnt/.archive-snapshot-staging/project-1/daily-1",
+        ],
+      }),
+    );
   });
 
   it("validates the frozen live generation immediately before deletion", async () => {
