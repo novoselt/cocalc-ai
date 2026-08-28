@@ -425,14 +425,16 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
       detail: { backup_id: backup.id, duration_ms },
     });
   } catch (err) {
-    if (backupOperation) {
+    const watchLateBackup = () => {
+      if (!backupOperation) return;
       void freezeRecovery.watch(
         backupOperation,
         "backup worker lost the host result",
       );
-    }
+    };
     logger.warn("backup op failed", { op_id, err: `${err}` });
     if (await shouldLeaveTerminalLroUntouched(op_id)) {
+      watchLateBackup();
       logger.info("backup op terminal state preserved after failure", {
         op_id,
         project_id,
@@ -440,22 +442,25 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
       });
       return;
     }
-    const updated = await updateLro({
-      op_id,
-      status: "failed",
-      error: `${err}`,
-      // This attestation is durable LRO state. Transport/timeout failures stay
-      // uncertain even if a best-effort late-response cleanup is still active.
-      result: archiveBackupFreezeFailureResult({
-        enabled: freeze_source,
-        hostOperationStarted: hostBackupOperationStarted,
-        error: err,
-      }),
-    });
-    if (updated) {
-      await publishSummarySafe(updated, "set-failed");
+    try {
+      const updated = await updateLro({
+        op_id,
+        status: "failed",
+        error: `${err}`,
+        // A late checked release upgrades this initial uncertainty durably.
+        result: archiveBackupFreezeFailureResult({
+          enabled: freeze_source,
+          hostOperationStarted: hostBackupOperationStarted,
+          error: err,
+        }),
+      });
+      if (updated) {
+        await publishSummarySafe(updated, "set-failed");
+      }
+      progress({ step: "done", message: "failed" });
+    } finally {
+      watchLateBackup();
     }
-    progress({ step: "done", message: "failed" });
   } finally {
     hostWatch.stop();
     clearInterval(heartbeat);

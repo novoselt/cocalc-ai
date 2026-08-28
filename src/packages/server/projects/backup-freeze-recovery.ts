@@ -5,6 +5,7 @@
 
 import getLogger from "@cocalc/backend/logger";
 import { ARCHIVE_BACKUP_SOURCE_RELEASED_ERROR_CODE } from "@cocalc/conat/files/file-server";
+import { mergeLroResult } from "@cocalc/server/lro/lro-db";
 import { releaseProjectDataArchiveFreezeOnHost } from "@cocalc/server/project-host/control";
 
 const logger = getLogger("server:projects:backup-freeze-recovery");
@@ -15,6 +16,7 @@ type FrozenBackupResult = {
 };
 
 type ReleaseArchiveFreeze = typeof releaseProjectDataArchiveFreezeOnHost;
+type AttestArchiveFreezeReleased = (op_id: string) => Promise<void>;
 
 export type ArchiveBackupFreezeFailure =
   | "not-started"
@@ -22,6 +24,25 @@ export type ArchiveBackupFreezeFailure =
   | "uncertain";
 
 const ARCHIVE_BACKUP_FREEZE_RECOVERY_RESULT_KEY = "archive_freeze_recovery";
+
+async function attestArchiveFreezeReleased(op_id: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      const updated = await mergeLroResult({
+        op_id,
+        result: { [ARCHIVE_BACKUP_FREEZE_RECOVERY_RESULT_KEY]: "released" },
+        if_status: ["succeeded", "failed", "canceled", "expired"],
+      });
+      if (updated) return;
+    } catch (err) {
+      lastError = err;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 250));
+  }
+  if (lastError) throw lastError;
+  throw new Error("backup LRO did not become terminal after releasing freeze");
+}
 
 export function classifyArchiveBackupFreezeFailure({
   enabled,
@@ -64,12 +85,14 @@ export function createBackupFreezeRecovery({
   project_id,
   host_id,
   releaseArchiveFreeze = releaseProjectDataArchiveFreezeOnHost,
+  attestReleased = attestArchiveFreezeReleased,
 }: {
   enabled: boolean;
   op_id: string;
   project_id: string;
   host_id: string;
   releaseArchiveFreeze?: ReleaseArchiveFreeze;
+  attestReleased?: AttestArchiveFreezeReleased;
 }) {
   let handedOff = false;
   let cleanupStarted = false;
@@ -105,6 +128,25 @@ export function createBackupFreezeRecovery({
         status: result.status,
         reason,
       });
+      if (
+        result.status === "released" ||
+        result.status === "already-writable"
+      ) {
+        try {
+          await attestReleased(op_id);
+        } catch (err) {
+          logger.error("unable to attest released archive backup freeze", {
+            op_id,
+            project_id,
+            host_id,
+            backup_id: backup.id,
+            generation,
+            status: result.status,
+            reason,
+            err: `${err}`,
+          });
+        }
+      }
     } catch (err) {
       // The lifecycle project remains archiving and will retry the same
       // generation barrier; never reopen based on this best-effort cleanup.

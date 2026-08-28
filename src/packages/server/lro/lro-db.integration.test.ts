@@ -12,6 +12,7 @@ import {
   expireDueLros,
   getLro,
   listLrosByDedupe,
+  mergeLroResult,
   updateLro,
 } from "./lro-db";
 
@@ -163,6 +164,36 @@ describe("LRO database maintenance integration", () => {
       result: {
         id: "backup-release",
         generation: 17,
+        archive_freeze_recovery: "released",
+      },
+    });
+  });
+
+  it("merges a terminal LRO result without discarding prior evidence", async () => {
+    const op = await createLro({
+      kind: "project-backup",
+      scope_type: "project",
+      scope_id: uuid(),
+    });
+    await updateLro({
+      op_id: op.op_id,
+      status: "failed",
+      result: {
+        backup_id: "backup-late",
+        archive_freeze_recovery: "uncertain",
+      },
+    });
+
+    await expect(
+      mergeLroResult({
+        op_id: op.op_id,
+        result: { archive_freeze_recovery: "released" },
+        if_status: ["failed"],
+      }),
+    ).resolves.toMatchObject({
+      status: "failed",
+      result: {
+        backup_id: "backup-late",
         archive_freeze_recovery: "released",
       },
     });

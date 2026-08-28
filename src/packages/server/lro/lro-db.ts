@@ -387,6 +387,29 @@ export async function updateLro({
   return rows[0] as LroSummary | undefined;
 }
 
+export async function mergeLroResult({
+  op_id,
+  result,
+  if_status,
+}: {
+  op_id: string;
+  result: Record<string, unknown>;
+  if_status: LroStatus[];
+}): Promise<LroSummary | undefined> {
+  await ensureLroSchema();
+  if (if_status.length === 0) return;
+  const { rows } = await pool().query(
+    `UPDATE long_running_operations
+        SET result = COALESCE(result, '{}'::jsonb) || $2::jsonb,
+            updated_at = NOW()
+      WHERE op_id=$1
+        AND status=ANY($3::text[])
+      RETURNING *`,
+    [op_id, JSON.stringify(result), if_status],
+  );
+  return rows[0] as LroSummary | undefined;
+}
+
 export async function dismissLro({
   op_id,
   dismissed_by,

@@ -27,9 +27,11 @@ describe("backup freeze recovery", () => {
     const releaseArchiveFreeze = jest.fn(async () => ({
       status: "released" as const,
     }));
+    const attestReleased = jest.fn(async () => undefined);
     const recovery = createBackupFreezeRecovery({
       ...options,
       releaseArchiveFreeze,
+      attestReleased,
     });
     const operation = deferred<{ id: string; generation: number }>();
     const watched = recovery.watch(operation.promise, "worker timed out");
@@ -42,6 +44,7 @@ describe("backup freeze recovery", () => {
       host_id: options.host_id,
       expected_generation: 42,
     });
+    expect(attestReleased).toHaveBeenCalledWith(options.op_id);
   });
 
   it("does not release a freeze after its result is durably handed off", async () => {
