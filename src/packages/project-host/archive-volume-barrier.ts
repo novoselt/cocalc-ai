@@ -23,6 +23,17 @@ function snapshotStagingRoot(volume: Subvolume): string {
   );
 }
 
+export async function listStagedArchiveVolumeNames(
+  mount: string,
+): Promise<string[]> {
+  try {
+    return (await readdir(join(mount, ARCHIVE_SNAPSHOT_STAGING_DIR))).sort();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+    throw err;
+  }
+}
+
 async function stagedSnapshotNames(volume: Subvolume): Promise<string[]> {
   try {
     return (await readdir(snapshotStagingRoot(volume)))

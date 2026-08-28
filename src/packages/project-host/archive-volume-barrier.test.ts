@@ -30,6 +30,7 @@ import {
   assertFrozenVolumeMatchesBackup,
   deleteStagedArchiveSnapshots,
   freezeVolumeForArchiveBackup,
+  listStagedArchiveVolumeNames,
   releaseArchiveVolumeFreeze,
   releaseArchiveVolumeFreezeIfGenerationMatches,
 } from "./archive-volume-barrier";
@@ -57,6 +58,19 @@ describe("archive volume barrier", () => {
     fsReaddirMock = jest.fn(async () => {
       throw Object.assign(new Error("not found"), { code: "ENOENT" });
     });
+  });
+
+  it("lists staged archive volumes and tolerates a missing staging root", async () => {
+    await expect(listStagedArchiveVolumeNames("/mnt")).resolves.toEqual([]);
+
+    fsReaddirMock.mockResolvedValueOnce(["project-b", "project-a"]);
+    await expect(listStagedArchiveVolumeNames("/mnt")).resolves.toEqual([
+      "project-a",
+      "project-b",
+    ]);
+    expect(fsReaddirMock).toHaveBeenLastCalledWith(
+      "/mnt/.archive-snapshot-staging",
+    );
   });
 
   it("stages local snapshots before freezing for the final backup", async () => {

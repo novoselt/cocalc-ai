@@ -170,6 +170,7 @@ import {
   deleteStagedArchiveSnapshots,
   freezeVolumeForArchiveBackup,
   getFrozenVolumeGeneration,
+  listStagedArchiveVolumeNames,
   releaseArchiveVolumeFreeze,
   releaseArchiveVolumeFreezeIfGenerationMatches,
 } from "./archive-volume-barrier";
@@ -1379,6 +1380,9 @@ export async function deleteVolume(
     }) => {
       const vol = await fs!.subvolumes.get(name);
       if (!(await exists(vol.path))) {
+        if (volume_kind === "home") {
+          await deleteStagedArchiveSnapshots(vol);
+        }
         markProjectVolumeAbsent(project_id, volume_kind);
         return;
       }
@@ -1397,6 +1401,12 @@ export async function deleteVolume(
         }
       }
       await fs!.subvolumes.delete(name);
+      if (volume_kind === "home") {
+        // Automatic archive staging lives outside the project subvolume. This
+        // also covers deferred inventory cleanup after an unavailable host
+        // returns, including the idempotent parent-already-absent case above.
+        await deleteStagedArchiveSnapshots(vol);
+      }
       markProjectVolumeAbsent(project_id, volume_kind);
     };
 
@@ -1526,12 +1536,43 @@ export async function listProvisionedProjects(): Promise<string[]> {
   return listProvisionedProjectIdsFromInventory();
 }
 
+async function cleanupOrphanedArchiveSnapshotStaging(): Promise<void> {
+  if (fs == null) {
+    throw Error("file server not initialized");
+  }
+  let cleaned = 0;
+  let errors = 0;
+  for (const name of await listStagedArchiveVolumeNames(fs.opts.mount)) {
+    const match = name.match(/^project-([0-9a-f-]{36})$/i);
+    if (!match || !isValidUUID(match[1])) continue;
+    try {
+      const volume = await fs.subvolumes.get(name);
+      if (await exists(volume.path)) continue;
+      await deleteStagedArchiveSnapshots(volume);
+      cleaned += 1;
+    } catch (err) {
+      errors += 1;
+      logger.warn("orphaned archive snapshot staging cleanup failed", {
+        project_id: match[1].toLowerCase(),
+        err: `${err}`,
+      });
+    }
+  }
+  if (cleaned || errors) {
+    logger.info("orphaned archive snapshot staging cleanup complete", {
+      cleaned,
+      errors,
+    });
+  }
+}
+
 export async function bootstrapProvisionedProjectInventory(): Promise<
   string[] | undefined
 > {
   if (fs == null) {
     throw Error("file server not initialized");
   }
+  await cleanupOrphanedArchiveSnapshotStaging();
   const filesystem = currentFilesystemState();
   if (projectVolumeInventoryBootstrapped(filesystem.filesystem_uuid)) {
     return;
@@ -1579,6 +1620,7 @@ export async function verifyProvisionedProjectInventoryBatch(
   if (fs == null) {
     throw Error("file server not initialized");
   }
+  await cleanupOrphanedArchiveSnapshotStaging();
   const filesystem = currentFilesystemState();
   const counts = {
     checked: 0,
