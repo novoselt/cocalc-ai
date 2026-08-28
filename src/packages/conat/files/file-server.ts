@@ -333,6 +333,7 @@ export interface Fileserver {
     lro?: LroRef;
     managed_egress_override?: ManagedBackupEgressOverride;
     replace_oldest_at_limit?: boolean;
+    freeze_source?: boolean;
   }) => Promise<{ time: Date; id: string; generation: number | null }>;
   // Back up the source project HOME into an externally supplied rustic
   // repository. This is used for admin site-to-site migration; rootfs state

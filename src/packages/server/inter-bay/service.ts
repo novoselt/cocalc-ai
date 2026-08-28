@@ -2902,6 +2902,14 @@ async function startHostControlService(): Promise<void> {
       await (await getHostClient(host_id, 30_000)).applyPendingCopies(apply),
     deleteProjectData: async ({ host_id, del }) =>
       await (await getHostClient(host_id, 30_000)).deleteProjectData(del),
+    deleteProjectDataAfterBackup: async ({ host_id, del }) =>
+      await (
+        await getHostClient(host_id, 30_000)
+      ).deleteProjectDataAfterBackup(del),
+    releaseProjectDataArchiveFreeze: async ({ host_id, release }) =>
+      await (
+        await getHostClient(host_id, 30_000)
+      ).releaseProjectDataArchiveFreeze(release),
     upgradeSoftware: async ({ host_id, upgrade }) =>
       await (
         await getHostClient(host_id, 10 * 60 * 1000)

@@ -357,6 +357,7 @@ export interface ProjectControlBackupRequest {
   tags?: string[];
   managed_egress_override?: ManagedProjectEgressOverride;
   replace_oldest_at_limit?: boolean;
+  freeze_source?: boolean;
   epoch?: number;
 }
 
@@ -2547,6 +2548,8 @@ export type HostControlMethod =
   | "setup-project-secret-ssh-key"
   | "apply-pending-copies"
   | "delete-project-data"
+  | "delete-project-data-after-backup"
+  | "release-project-data-archive-freeze"
   | "upgrade-software"
   | "stage-project-host-artifact"
   | "rollout-managed-components"
@@ -3764,6 +3767,14 @@ export interface InterBayHostControlApi {
     host_id: string;
     del: HostControlArg<"deleteProjectData">;
   }) => Promise<void>;
+  deleteProjectDataAfterBackup: (opts: {
+    host_id: string;
+    del: HostControlArg<"deleteProjectDataAfterBackup">;
+  }) => Promise<void>;
+  releaseProjectDataArchiveFreeze: (opts: {
+    host_id: string;
+    release: HostControlArg<"releaseProjectDataArchiveFreeze">;
+  }) => ReturnType<HostControlApi["releaseProjectDataArchiveFreeze"]>;
   upgradeSoftware: (opts: {
     host_id: string;
     upgrade: UpgradeSoftwareRequest;
@@ -4724,6 +4735,14 @@ const HOST_CONTROL_METHOD_SPECS = [
   { name: "setupProjectSecretSshKey", method: "setup-project-secret-ssh-key" },
   { name: "applyPendingCopies", method: "apply-pending-copies" },
   { name: "deleteProjectData", method: "delete-project-data" },
+  {
+    name: "deleteProjectDataAfterBackup",
+    method: "delete-project-data-after-backup",
+  },
+  {
+    name: "releaseProjectDataArchiveFreeze",
+    method: "release-project-data-archive-freeze",
+  },
   { name: "upgradeSoftware", method: "upgrade-software" },
   {
     name: "stageProjectHostArtifact",

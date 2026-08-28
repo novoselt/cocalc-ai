@@ -45,6 +45,7 @@ import {
   getBackupExecutionStatus,
   getFileServerRuntimeStatus,
   invalidateBackupConfig,
+  releaseProjectArchiveFreeze,
 } from "./file-server";
 import { getInstalledRuntimeArtifacts, getSoftwareVersions } from "./software";
 import { getBootstrapLifecycle } from "./bootstrap-lifecycle";
@@ -1660,6 +1661,24 @@ export async function startMasterRegistration({
       await deleteVolume(project_id);
       clearLocalAcpAutomationsForProject(project_id);
       deleteProjectLocal(project_id);
+    },
+    async deleteProjectDataAfterBackup({ project_id, expected_generation }) {
+      await awaitReadyForControl(
+        "deleteProjectDataAfterBackup",
+        waitUntilReady,
+      );
+      await deleteVolume(project_id, {
+        expected_archive_generation: expected_generation,
+      });
+      clearLocalAcpAutomationsForProject(project_id);
+      deleteProjectLocal(project_id);
+    },
+    async releaseProjectDataArchiveFreeze({ project_id, expected_generation }) {
+      await awaitReadyForControl(
+        "releaseProjectDataArchiveFreeze",
+        waitUntilReady,
+      );
+      return await releaseProjectArchiveFreeze(project_id, expected_generation);
     },
     upgradeSoftware,
     async stageProjectHostArtifact({ version, base_url, retention_policy }) {

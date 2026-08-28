@@ -240,6 +240,38 @@ export async function recordProjectArchiveLifecycleFinalBackup({
   }
 }
 
+export async function clearProjectArchiveLifecycleFinalBackup({
+  job_id,
+  backup_id,
+  backup_generation,
+}: {
+  job_id: string;
+  backup_id: string;
+  backup_generation: number;
+}): Promise<void> {
+  await ensureProjectArchiveLifecycleSchema();
+  const result = await getPool().query(
+    `UPDATE ${PROJECT_ARCHIVE_LIFECYCLE_TABLE}
+        SET final_backup_id = NULL,
+            backup_generation = NULL,
+            backup_time = NULL,
+            updated_at = NOW()
+      WHERE id = $1
+        AND status = 'running'
+        AND (
+          final_backup_id IS NULL
+          OR (
+            final_backup_id = $2
+            AND backup_generation = $3
+          )
+        )`,
+    [job_id, backup_id, backup_generation],
+  );
+  if ((result.rowCount ?? 0) !== 1) {
+    throw new Error("archive lifecycle final backup changed during rollback");
+  }
+}
+
 export async function updateProjectArchiveLifecycleJob({
   job_id,
   status,

@@ -164,6 +164,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
     ? Math.max(0, Math.floor(Number(input.limit)))
     : DEFAULT_MAX_BACKUPS_PER_PROJECT;
   const replace_oldest_at_limit = input.replace_oldest_at_limit === true;
+  const freeze_source = input.freeze_source === true;
 
   if (!project_id) {
     const updated = await updateLro({
@@ -320,6 +321,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
             lro,
             managed_egress_override,
             replace_oldest_at_limit,
+            freeze_source,
           });
         })(),
         BACKUP_TIMEOUT_MS,

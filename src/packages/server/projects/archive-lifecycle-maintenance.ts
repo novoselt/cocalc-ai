@@ -536,7 +536,9 @@ async function executeJob({
     } catch (err) {
       const cleanupCompleted =
         err instanceof ProjectArchiveStorageError && err.hostCleanupCompleted;
-      if (!cleanupCompleted) {
+      const reopenSafe =
+        !(err instanceof ProjectArchiveStorageError) || err.reopenSafe;
+      if (!cleanupCompleted && reopenSafe) {
         await clearAutomaticClaim({
           project_id: job.project_id,
           job_id: job.id,
@@ -619,7 +621,9 @@ async function executeJob({
   } catch (err) {
     const cleanupCompleted =
       err instanceof ProjectArchiveStorageError && err.hostCleanupCompleted;
-    if (!cleanupCompleted) {
+    const reopenSafe =
+      !(err instanceof ProjectArchiveStorageError) || err.reopenSafe;
+    if (!cleanupCompleted && reopenSafe) {
       await clearAutomaticClaim({
         project_id: job.project_id,
         job_id: job.id,

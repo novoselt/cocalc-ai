@@ -16,6 +16,7 @@ jest.mock("./archive-lifecycle-schema", () => ({
 }));
 
 import {
+  clearProjectArchiveLifecycleFinalBackup,
   createProjectArchiveLifecycleJob,
   getProjectArchiveLifecycleFinalBackup,
   recordProjectArchiveLifecycleFinalBackup,
@@ -122,5 +123,25 @@ describe("project archive lifecycle job persistence", () => {
       generation: "42",
       time: new Date("2026-08-28T04:00:00.000Z"),
     });
+  });
+
+  it("clears a final backup marker with a generation compare-and-set", async () => {
+    query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    await clearProjectArchiveLifecycleFinalBackup({
+      job_id: "66666666-6666-4666-8666-666666666666",
+      backup_id: "final-backup-id",
+      backup_generation: 42,
+    });
+
+    const [sql, parameters] = query.mock.calls[0];
+    expect(sql).toContain("final_backup_id = NULL");
+    expect(sql).toContain("final_backup_id = $2");
+    expect(sql).toContain("backup_generation = $3");
+    expect(parameters).toEqual([
+      "66666666-6666-4666-8666-666666666666",
+      "final-backup-id",
+      42,
+    ]);
   });
 });

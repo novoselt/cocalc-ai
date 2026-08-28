@@ -81,6 +81,10 @@ export async function getRoutedHostControlClient({
         await bridge.applyPendingCopies({ host_id, apply }),
       deleteProjectData: async (del) =>
         await bridge.deleteProjectData({ host_id, del }),
+      deleteProjectDataAfterBackup: async (del) =>
+        await bridge.deleteProjectDataAfterBackup({ host_id, del }),
+      releaseProjectDataArchiveFreeze: async (release) =>
+        await bridge.releaseProjectDataArchiveFreeze({ host_id, release }),
       upgradeSoftware: async (upgrade) =>
         await bridge.upgradeSoftware({ host_id, upgrade }),
       stageProjectHostArtifact: async (stage) =>

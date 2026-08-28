@@ -7,6 +7,8 @@ let poolConnectReleaseMock: jest.Mock;
 let resolveProjectBayMock: jest.Mock;
 let interBayStopMock: jest.Mock;
 let deleteProjectDataOnHostMock: jest.Mock;
+let deleteProjectDataOnHostAfterBackupMock: jest.Mock;
+let releaseProjectDataArchiveFreezeOnHostMock: jest.Mock;
 let appendProjectOutboxEventForProjectMock: jest.Mock;
 let assertProjectNotRehomingMock: jest.Mock;
 let publishProjectAccountFeedEventsBestEffortMock: jest.Mock;
@@ -17,6 +19,7 @@ let createProjectArchiveLifecycleJobMock: jest.Mock;
 let updateProjectArchiveLifecycleJobMock: jest.Mock;
 let getProjectArchiveLifecycleFinalBackupMock: jest.Mock;
 let recordProjectArchiveLifecycleFinalBackupMock: jest.Mock;
+let clearProjectArchiveLifecycleFinalBackupMock: jest.Mock;
 let createBackupMock: jest.Mock;
 let waitForDurableLroCompletionMock: jest.Mock;
 
@@ -46,6 +49,8 @@ jest.mock("@cocalc/server/projects/archive-lifecycle-db", () => ({
     getProjectArchiveLifecycleFinalBackupMock(...args),
   recordProjectArchiveLifecycleFinalBackup: (...args: any[]) =>
     recordProjectArchiveLifecycleFinalBackupMock(...args),
+  clearProjectArchiveLifecycleFinalBackup: (...args: any[]) =>
+    clearProjectArchiveLifecycleFinalBackupMock(...args),
 }));
 
 jest.mock("@cocalc/server/projects/create", () => ({
@@ -105,6 +110,10 @@ jest.mock("@cocalc/server/project-host/control", () => ({
   takeStartProjectPhaseTimings: jest.fn(() => undefined),
   deleteProjectDataOnHost: (...args: any[]) =>
     deleteProjectDataOnHostMock(...args),
+  deleteProjectDataOnHostAfterBackup: (...args: any[]) =>
+    deleteProjectDataOnHostAfterBackupMock(...args),
+  releaseProjectDataArchiveFreezeOnHost: (...args: any[]) =>
+    releaseProjectDataArchiveFreezeOnHostMock(...args),
 }));
 
 jest.mock("@cocalc/server/conat/route-client", () => ({
@@ -222,6 +231,10 @@ describe("projects.archiveProject", () => {
     }));
     interBayStopMock = jest.fn(async () => undefined);
     deleteProjectDataOnHostMock = jest.fn(async () => undefined);
+    deleteProjectDataOnHostAfterBackupMock = jest.fn(async () => undefined);
+    releaseProjectDataArchiveFreezeOnHostMock = jest.fn(async () => ({
+      status: "released",
+    }));
     appendProjectOutboxEventForProjectMock = jest.fn(async () => undefined);
     assertProjectNotRehomingMock = jest.fn(async () => undefined);
     publishProjectAccountFeedEventsBestEffortMock = jest.fn(
@@ -240,6 +253,9 @@ describe("projects.archiveProject", () => {
     updateProjectArchiveLifecycleJobMock = jest.fn(async () => undefined);
     getProjectArchiveLifecycleFinalBackupMock = jest.fn(async () => undefined);
     recordProjectArchiveLifecycleFinalBackupMock = jest.fn(
+      async () => undefined,
+    );
+    clearProjectArchiveLifecycleFinalBackupMock = jest.fn(
       async () => undefined,
     );
     createBackupMock = jest.fn(async () => ({
@@ -445,6 +461,7 @@ describe("projects.archiveProject", () => {
         skip_collab_check: true,
         skip_rootfs_portability_check: true,
         replace_oldest_at_limit: true,
+        freeze_source: true,
         dedupe_key:
           "automatic-project-archive-final:77777777-7777-4777-8777-777777777777",
       }),
@@ -459,8 +476,15 @@ describe("projects.archiveProject", () => {
     });
     expect(
       recordProjectArchiveLifecycleFinalBackupMock.mock.invocationCallOrder[0],
-    ).toBeLessThan(deleteProjectDataOnHostMock.mock.invocationCallOrder[0]);
-    expect(deleteProjectDataOnHostMock).toHaveBeenCalledTimes(1);
+    ).toBeLessThan(
+      deleteProjectDataOnHostAfterBackupMock.mock.invocationCallOrder[0],
+    );
+    expect(deleteProjectDataOnHostAfterBackupMock).toHaveBeenCalledWith({
+      project_id: "11111111-1111-4111-8111-111111111111",
+      host_id: "22222222-2222-4222-8222-222222222222",
+      expected_generation: 10,
+    });
+    expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
   });
 
   it("automatic archive retries cleanup without backing up a deleted volume", async () => {
@@ -504,7 +528,49 @@ describe("projects.archiveProject", () => {
     expect(createBackupMock).not.toHaveBeenCalled();
     expect(waitForDurableLroCompletionMock).not.toHaveBeenCalled();
     expect(recordProjectArchiveLifecycleFinalBackupMock).not.toHaveBeenCalled();
-    expect(deleteProjectDataOnHostMock).toHaveBeenCalledTimes(1);
+    expect(deleteProjectDataOnHostAfterBackupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an absent volume after a lost deletion response as cleaned up", async () => {
+    const jobId = "77777777-7777-4777-8777-777777777777";
+    const row = {
+      project_id: "11111111-1111-4111-8111-111111111111",
+      owning_bay_id: "bay-1",
+      host_id: "22222222-2222-4222-8222-222222222222",
+      backup_repo_id: "33333333-3333-4333-8333-333333333333",
+      provisioned: true,
+      state: { state: "archiving" },
+      host_status: "active",
+      last_changed: new Date("2026-06-15T04:00:00.000Z"),
+      last_changed_generation: 10,
+      last_backup: new Date("2026-06-15T05:00:00.000Z"),
+      last_backup_generation: 10,
+      archive_lifecycle_job_id: jobId,
+    };
+    poolQueryMock
+      .mockResolvedValueOnce({ rows: [row] })
+      .mockResolvedValueOnce({ rows: [row] });
+    deleteProjectDataOnHostAfterBackupMock.mockRejectedValueOnce(
+      new Error("host response lost"),
+    );
+    releaseProjectDataArchiveFreezeOnHostMock.mockResolvedValueOnce({
+      status: "absent",
+    });
+
+    const { archiveProjectStorage, ProjectArchiveStorageError } =
+      await import("@cocalc/server/projects/archive");
+    const error = await archiveProjectStorage({
+      project_id: row.project_id,
+      mode: "automatic",
+      job_id: jobId,
+      reason: "free-inactive",
+      expected_host_id: row.host_id,
+    }).catch((err) => err);
+
+    expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+    expect(error.hostCleanupCompleted).toBe(true);
+    expect(error.reopenSafe).toBe(false);
+    expect(clearProjectArchiveLifecycleFinalBackupMock).not.toHaveBeenCalled();
   });
 
   it("automatic archive replaces a stale final-backup marker after reopening", async () => {
@@ -553,7 +619,7 @@ describe("projects.archiveProject", () => {
       backup_time: "2026-06-15T05:30:00.000Z",
       expected_previous_backup_id: "stale-final-backup-id",
     });
-    expect(deleteProjectDataOnHostMock).toHaveBeenCalledTimes(1);
+    expect(deleteProjectDataOnHostAfterBackupMock).toHaveBeenCalledTimes(1);
   });
 
   it("automatic archive preserves host data when the final backup fails", async () => {
@@ -594,6 +660,7 @@ describe("projects.archiveProject", () => {
     ).rejects.toThrow("final automatic archive backup failed: R2 unavailable");
 
     expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
+    expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
   });
 
   it("automatic archive revalidates generation coverage after final backup", async () => {
@@ -640,6 +707,17 @@ describe("projects.archiveProject", () => {
 
     expect(recordProjectArchiveLifecycleFinalBackupMock).not.toHaveBeenCalled();
     expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
+    expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+    expect(releaseProjectDataArchiveFreezeOnHostMock).toHaveBeenCalledWith({
+      project_id: "11111111-1111-4111-8111-111111111111",
+      host_id: "22222222-2222-4222-8222-222222222222",
+      expected_generation: 10,
+    });
+    expect(clearProjectArchiveLifecycleFinalBackupMock).toHaveBeenCalledWith({
+      job_id: "77777777-7777-4777-8777-777777777777",
+      backup_id: "final-backup-id",
+      backup_generation: 10,
+    });
   });
 
   it("automatic archive rejects a busy project without stopping or deleting it", async () => {
@@ -674,5 +752,6 @@ describe("projects.archiveProject", () => {
 
     expect(interBayStopMock).not.toHaveBeenCalled();
     expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
+    expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
   });
 });

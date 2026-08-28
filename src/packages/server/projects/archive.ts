@@ -14,9 +14,14 @@ import { createBackup } from "@cocalc/server/conat/api/project-backups";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { resolveProjectBay } from "@cocalc/server/inter-bay/directory";
 import { waitForDurableLroCompletion } from "@cocalc/server/lro/wait";
-import { deleteProjectDataOnHost } from "@cocalc/server/project-host/control";
+import {
+  deleteProjectDataOnHost,
+  deleteProjectDataOnHostAfterBackup,
+  releaseProjectDataArchiveFreezeOnHost,
+} from "@cocalc/server/project-host/control";
 import { BACKUP_TIMEOUT_MS } from "@cocalc/server/projects/backup-lro";
 import {
+  clearProjectArchiveLifecycleFinalBackup,
   createProjectArchiveLifecycleJob,
   getProjectArchiveLifecycleFinalBackup,
   recordProjectArchiveLifecycleFinalBackup,
@@ -42,11 +47,17 @@ export type ArchiveProjectStorageOptions = {
 
 export class ProjectArchiveStorageError extends Error {
   readonly hostCleanupCompleted: boolean;
+  readonly reopenSafe: boolean;
 
-  constructor(message: string, hostCleanupCompleted: boolean) {
+  constructor(
+    message: string,
+    hostCleanupCompleted: boolean,
+    reopenSafe: boolean,
+  ) {
     super(message);
     this.name = "ProjectArchiveStorageError";
     this.hostCleanupCompleted = hostCleanupCompleted;
+    this.reopenSafe = reopenSafe;
   }
 }
 
@@ -140,6 +151,7 @@ async function createFinalAutomaticArchiveBackup({
       skip_collab_check: true,
       skip_rootfs_portability_check: true,
       replace_oldest_at_limit: true,
+      freeze_source: true,
       dedupe_key: `${FINAL_ARCHIVE_BACKUP_TAG}:${job_id}`,
     },
   );
@@ -298,6 +310,8 @@ export async function archiveProjectStorage({
   if (!jobId) throw new Error("archive lifecycle job is required");
 
   let hostCleanupCompleted = false;
+  let expectedArchiveGeneration: number | undefined;
+  let expectedArchiveBackupId: string | undefined;
   try {
     if (!row.backup_repo_id) {
       throw new Error(
@@ -345,6 +359,8 @@ export async function archiveProjectStorage({
           project_id,
           job_id: jobId,
         });
+        expectedArchiveGeneration = Number(finalBackup.generation);
+        expectedArchiveBackupId = finalBackup.id;
         row = await loadArchiveRow(project_id);
         hostStatus = `${row.host_status ?? ""}`.trim().toLowerCase();
         if (!row.backup_repo_id) {
@@ -367,6 +383,8 @@ export async function archiveProjectStorage({
         });
       }
       assertFinalBackupCoversProject({ backup: finalBackup, row });
+      expectedArchiveGeneration = Number(finalBackup.generation);
+      expectedArchiveBackupId = finalBackup.id;
     }
 
     const refreshedHostCanRunMutations =
@@ -376,7 +394,18 @@ export async function archiveProjectStorage({
       if (!row.host_id) {
         throw new Error("project has no assigned host to archive from");
       }
-      await deleteProjectDataOnHost({ project_id, host_id: row.host_id });
+      if (automatic) {
+        if (!expectedArchiveGeneration) {
+          throw new Error("automatic archive backup generation is missing");
+        }
+        await deleteProjectDataOnHostAfterBackup({
+          project_id,
+          host_id: row.host_id,
+          expected_generation: expectedArchiveGeneration,
+        });
+      } else {
+        await deleteProjectDataOnHost({ project_id, host_id: row.host_id });
+      }
       hostCleanupCompleted = true;
     } else if (row.provisioned !== false) {
       log.info("manual archive marked project without host mutation", {
@@ -398,6 +427,45 @@ export async function archiveProjectStorage({
       status: "completed",
     });
   } catch (err) {
+    let reopenSafe = true;
+    if (
+      automatic &&
+      !hostCleanupCompleted &&
+      expectedArchiveGeneration &&
+      row.host_id
+    ) {
+      reopenSafe = false;
+      try {
+        const release = await releaseProjectDataArchiveFreezeOnHost({
+          project_id,
+          host_id: row.host_id,
+          expected_generation: expectedArchiveGeneration,
+        });
+        if (release.status === "absent") {
+          // The checked deletion completed but its response was lost. Retain
+          // the durable marker and retry only database finalization.
+          hostCleanupCompleted = true;
+        } else if (expectedArchiveBackupId) {
+          await clearProjectArchiveLifecycleFinalBackup({
+            job_id: jobId,
+            backup_id: expectedArchiveBackupId,
+            backup_generation: expectedArchiveGeneration,
+          });
+          reopenSafe = true;
+        } else {
+          // The marker was never persisted, so reopening cannot cause a retry
+          // to reuse this backup.
+          reopenSafe = true;
+        }
+      } catch (releaseErr) {
+        log.warn("unable to release automatic archive volume freeze", {
+          project_id,
+          host_id: row.host_id,
+          expected_generation: expectedArchiveGeneration,
+          err: `${releaseErr}`,
+        });
+      }
+    }
     await updateProjectArchiveLifecycleJob({
       job_id: jobId,
       status: "failed",
@@ -405,7 +473,11 @@ export async function archiveProjectStorage({
       error: err,
     }).catch(() => undefined);
     if (automatic) {
-      throw new ProjectArchiveStorageError(`${err}`, hostCleanupCompleted);
+      throw new ProjectArchiveStorageError(
+        `${err}`,
+        hostCleanupCompleted,
+        reopenSafe,
+      );
     }
     throw err;
   }

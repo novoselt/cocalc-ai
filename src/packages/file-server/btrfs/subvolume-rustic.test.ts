@@ -79,7 +79,11 @@ describe("parseRusticSnapshotsOutput", () => {
 describe("SubvolumeRustic.backup", () => {
   beforeEach(() => {
     clearBtrfsOperationCachesForTest();
-    btrfsMock = jest.fn(async () => undefined);
+    btrfsMock = jest.fn(async ({ args }) =>
+      args?.[0] === "subvolume" && args?.[1] === "show"
+        ? { stdout: "Generation: 42\n" }
+        : undefined,
+    );
     sudoMock = jest.fn(async () => undefined);
     rusticHostMock = jest.fn();
     backupFsRusticMock = jest.fn(async (_args, _opts) => {
@@ -159,13 +163,15 @@ describe("SubvolumeRustic.backup", () => {
       },
     } as any);
 
-    await rustic.backup();
+    await expect(rustic.backup()).resolves.toEqual(
+      expect.objectContaining({ snapshotGeneration: 42 }),
+    );
 
     expect(sudoMock).toHaveBeenCalledWith({
       command: "mkdir",
       args: ["-p", "/mnt/test/.rustic-backup-staging/project-1"],
     });
-    expect(btrfsMock).toHaveBeenNthCalledWith(1, {
+    expect(btrfsMock).toHaveBeenCalledWith({
       args: [
         "subvolume",
         "snapshot",
@@ -205,7 +211,7 @@ describe("SubvolumeRustic.backup", () => {
     expect(backupFsRusticMock.mock.calls[0][1].cwd).not.toMatch(
       /^\/mnt\/test\/\.rustic-backup-staging\//,
     );
-    expect(btrfsMock).toHaveBeenNthCalledWith(2, {
+    expect(btrfsMock).toHaveBeenCalledWith({
       args: [
         "subvolume",
         "delete",
@@ -237,6 +243,34 @@ describe("SubvolumeRustic.backup", () => {
       expect.arrayContaining(["--parent", "snap-parent"]),
       expect.any(Object),
     );
+  });
+
+  it("deletes the temporary snapshot if its generation cannot be read", async () => {
+    btrfsMock.mockImplementation(async ({ args }) =>
+      args?.[0] === "subvolume" && args?.[1] === "show"
+        ? { stdout: "Generation: unknown\n" }
+        : undefined,
+    );
+    const rustic = new SubvolumeRustic({
+      name: "project-1",
+      path: "/mnt/test/project-1",
+      filesystem: { opts: { mount: "/mnt/test" } },
+      fs: { rusticRepo: "/repo", rustic: jest.fn() },
+    } as any);
+
+    await expect(rustic.backup()).rejects.toThrow(
+      "unable to read temporary backup snapshot generation",
+    );
+    expect(btrfsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: [
+          "subvolume",
+          "delete",
+          expect.stringMatching(/temp-rustic-snapshot-/),
+        ],
+      }),
+    );
+    expect(backupFsRusticMock).not.toHaveBeenCalled();
   });
 
   it("serializes snapshot mutations but allows concurrent rustic transfers", async () => {
@@ -318,10 +352,10 @@ describe("SubvolumeRustic.backup", () => {
     await secondStarted;
 
     expect(backupFsRusticMock).toHaveBeenCalledTimes(2);
-    expect(btrfsMock).toHaveBeenCalledTimes(2);
+    expect(btrfsMock).toHaveBeenCalledTimes(4);
     releaseFirst();
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
     expect(backupFsRusticMock).toHaveBeenCalledTimes(2);
-    expect(btrfsMock).toHaveBeenCalledTimes(4);
+    expect(btrfsMock).toHaveBeenCalledTimes(6);
   });
 });

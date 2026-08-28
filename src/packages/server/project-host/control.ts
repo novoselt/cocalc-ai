@@ -1479,3 +1479,37 @@ export async function deleteProjectDataOnHost({
   });
   await client.deleteProjectData({ project_id });
 }
+
+export async function deleteProjectDataOnHostAfterBackup({
+  project_id,
+  host_id,
+  expected_generation,
+}: {
+  project_id: string;
+  host_id: string;
+  expected_generation: number;
+}): Promise<void> {
+  const client = await getRoutedHostControlClient({ host_id });
+  await client.deleteProjectDataAfterBackup({
+    project_id,
+    expected_generation,
+  });
+}
+
+export async function releaseProjectDataArchiveFreezeOnHost({
+  project_id,
+  host_id,
+  expected_generation,
+}: {
+  project_id: string;
+  host_id: string;
+  expected_generation: number;
+}): Promise<{
+  status: "absent" | "already-writable" | "released";
+}> {
+  const client = await getRoutedHostControlClient({ host_id });
+  return await client.releaseProjectDataArchiveFreeze({
+    project_id,
+    expected_generation,
+  });
+}

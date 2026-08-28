@@ -164,6 +164,7 @@ async function createBackupLro({
   limit,
   managed_egress_override,
   replace_oldest_at_limit,
+  freeze_source,
   dedupe_key,
 }: {
   account_id?: string;
@@ -172,6 +173,7 @@ async function createBackupLro({
   limit?: number;
   managed_egress_override?: ManagedBackupEgressOverride;
   replace_oldest_at_limit?: boolean;
+  freeze_source?: boolean;
   dedupe_key?: string;
 }): Promise<LroSummary> {
   return await createLro({
@@ -186,6 +188,7 @@ async function createBackupLro({
       limit,
       managed_egress_override,
       replace_oldest_at_limit,
+      freeze_source,
     },
     status: "queued",
     dedupe_key: dedupe_key ?? backupLroDedupeKey(project_id),
@@ -201,6 +204,7 @@ async function runRemoteBackup({
   epoch,
   managed_egress_override,
   replace_oldest_at_limit,
+  freeze_source,
 }: {
   account_id?: string;
   project_id: string;
@@ -210,6 +214,7 @@ async function runRemoteBackup({
   epoch?: number;
   managed_egress_override?: ManagedBackupEgressOverride;
   replace_oldest_at_limit?: boolean;
+  freeze_source?: boolean;
 }) {
   const running = await updateLro({
     op_id: op.op_id,
@@ -240,6 +245,7 @@ async function runRemoteBackup({
         epoch,
         managed_egress_override,
         replace_oldest_at_limit,
+        freeze_source,
       });
     const updated = await updateLro({
       op_id: op.op_id,
@@ -289,6 +295,7 @@ export async function createBackup(
     skip_owner_route?: boolean;
     managed_egress_override?: ManagedBackupEgressOverride;
     replace_oldest_at_limit?: boolean;
+    freeze_source?: boolean;
     dedupe_key?: string;
   },
 ): Promise<{
@@ -320,6 +327,7 @@ export async function createBackup(
         limit,
         managed_egress_override: opts?.managed_egress_override,
         replace_oldest_at_limit: opts?.replace_oldest_at_limit,
+        freeze_source: opts?.freeze_source,
         dedupe_key: opts?.dedupe_key,
       });
       await publishQueuedLroSafe({
@@ -337,6 +345,7 @@ export async function createBackup(
           epoch: ownership.epoch,
           managed_egress_override: opts?.managed_egress_override,
           replace_oldest_at_limit: opts?.replace_oldest_at_limit,
+          freeze_source: opts?.freeze_source,
         }).catch((err) =>
           log.warn("remote backup failed", {
             op_id: op.op_id,
@@ -362,6 +371,7 @@ export async function createBackup(
     limit,
     managed_egress_override: opts?.managed_egress_override,
     replace_oldest_at_limit: opts?.replace_oldest_at_limit,
+    freeze_source: opts?.freeze_source,
     dedupe_key: opts?.dedupe_key,
   });
   await publishQueuedLroSafe({
