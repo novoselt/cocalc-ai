@@ -425,8 +425,10 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
       detail: { backup_id: backup.id, duration_ms },
     });
   } catch (err) {
+    let lateWatchAttached = false;
     const watchLateBackup = () => {
-      if (!backupOperation) return;
+      if (!backupOperation || lateWatchAttached) return;
+      lateWatchAttached = true;
       void freezeRecovery.watch(
         backupOperation,
         "backup worker lost the host result",
@@ -454,6 +456,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
           error: err,
         }),
       });
+      watchLateBackup();
       if (updated) {
         await publishSummarySafe(updated, "set-failed");
       }
