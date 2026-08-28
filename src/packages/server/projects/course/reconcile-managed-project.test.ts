@@ -205,6 +205,7 @@ describe("course managed project reconciliation", () => {
         invite_context: {
           course_project_id: COURSE,
           course_path: "/home/user/classes/main.course",
+          require_invite_email_match: false,
           student_id: "student-1",
           student_project_id: PROJECT,
         },
@@ -464,6 +465,13 @@ describe("course managed project reconciliation", () => {
       reconcileCourseManagedProjectLocal(
         request({
           desired_account_ids: [],
+          course: {
+            type: "student",
+            project_id: COURSE,
+            path: "classes/main.course",
+            datastore: false,
+            require_invite_email_match: true,
+          },
           student_email_address: "student@example.com",
           send_email_invite: true,
           invite: {
@@ -482,12 +490,38 @@ describe("course managed project reconciliation", () => {
         account_id: ACTOR,
         opts: expect.objectContaining({
           invite_scope: "course_student",
+          require_email_match: true,
           invite_context: expect.objectContaining({
             course_project_id: COURSE,
             course_path: "/home/user/classes/main.course",
+            require_invite_email_match: true,
           }),
         }),
       }),
     );
+  });
+
+  it("updates pending invitations without sending another email", async () => {
+    const { reconcileCourseManagedProjectLocal } =
+      await import("./reconcile-managed-project");
+
+    await reconcileCourseManagedProjectLocal(
+      request({
+        desired_account_ids: [],
+        course: {
+          type: "student",
+          project_id: COURSE,
+          path: "classes/main.course",
+          datastore: false,
+          require_invite_email_match: true,
+        },
+      }),
+    );
+
+    expect(queryMock).toHaveBeenCalledWith(
+      expect.stringContaining("require_invite_email_match"),
+      [PROJECT, "student-1", true],
+    );
+    expect(inviteCollaboratorWithoutAccountMock).not.toHaveBeenCalled();
   });
 });

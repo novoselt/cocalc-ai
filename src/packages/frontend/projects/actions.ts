@@ -3835,6 +3835,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     invite_scope?: string,
     invite_role: "collaborator" | "viewer" = "collaborator",
     read_policy?: ProjectViewerReadPolicy | null,
+    require_email_match: boolean = false,
   ): Promise<any> {
     await ensureProjectReduxRuntime();
     await this.redux.getProjectActions(project_id).async_log({
@@ -3867,6 +3868,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
         message: body,
         invite_context,
         invite_scope,
+        require_email_match,
         invite_role,
         read_policy,
       });

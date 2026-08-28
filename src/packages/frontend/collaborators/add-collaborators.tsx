@@ -56,6 +56,7 @@ import {
   type ProjectViewerReadPolicy,
 } from "@cocalc/util/project-access";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
+import { InviteEmailAddressRequirement } from "./invite-email-address-requirement";
 
 const INVITE_MESSAGE_MAX_LENGTH = 1000;
 type InviteRole = "collaborator" | "viewer";
@@ -264,6 +265,8 @@ export const AddCollaborators: React.FC<Props> = ({
   const [invite_role, set_invite_role] = useState<InviteRole>("collaborator");
   const [invite_read_policy, set_invite_read_policy] =
     useState<ProjectViewerReadPolicy>(DEFAULT_PROJECT_VIEWER_FULL_READ_POLICY);
+  const [require_invite_email_match, set_require_invite_email_match] =
+    useState<boolean>(false);
   const [invite_usage, set_invite_usage] =
     useState<ProjectCollaboratorInviteUsage | null>(null);
   const [invite_usage_error, set_invite_usage_error] = useState<string>("");
@@ -324,6 +327,7 @@ export const AddCollaborators: React.FC<Props> = ({
     set_invite_result("");
     set_manual_invite_links([]);
     set_select_open(false);
+    set_require_invite_email_match(false);
   }
 
   async function do_search(search: string): Promise<void> {
@@ -623,6 +627,7 @@ export const AddCollaborators: React.FC<Props> = ({
       undefined,
       invite_role,
       invite_role === "viewer" ? invite_read_policy : undefined,
+      require_invite_email_match,
     );
     return result;
   }
@@ -718,10 +723,10 @@ export const AddCollaborators: React.FC<Props> = ({
         {customize_email && (
           <div
             style={{
-              border: "1px solid lightgrey",
+              border: `1px solid ${COLORS.GRAY_L}`,
               padding: "10px",
               borderRadius: "5px",
-              backgroundColor: "white",
+              backgroundColor: COLORS.WHITE,
               marginTop: "8px",
             }}
           >
@@ -795,6 +800,8 @@ export const AddCollaborators: React.FC<Props> = ({
   }
 
   function render_access_role(): React.JSX.Element {
+    const hasEmailRecipient =
+      !!email_to || selected_entries.some(is_valid_email_address);
     return (
       <div
         style={{
@@ -831,6 +838,12 @@ export const AddCollaborators: React.FC<Props> = ({
             Collaborators get normal read/write access, project runtimes,
             terminals, SSH, and project tools.
           </div>
+        )}
+        {hasEmailRecipient && (
+          <InviteEmailAddressRequirement
+            checked={require_invite_email_match}
+            onChange={set_require_invite_email_match}
+          />
         )}
       </div>
     );

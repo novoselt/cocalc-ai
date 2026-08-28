@@ -51,6 +51,47 @@ interface CourseManagedProjectPlan {
 
 const MAX_BULK_PROJECTS = 1_000;
 
+function inviteContext(
+  request: ProjectReconcileCourseManagedProjectRequest,
+): Record<string, unknown> {
+  return {
+    course_project_id: request.course_project_id,
+    course_path: request.course_path,
+    student_id: request.student_id,
+    student_project_id: request.project_id,
+    require_invite_email_match:
+      request.course.require_invite_email_match === true,
+  };
+}
+
+async function updatePendingCourseEmailInvitePolicy(
+  request: ProjectReconcileCourseManagedProjectRequest,
+): Promise<void> {
+  if (request.type !== "student" || !request.student_id) return;
+  const required = request.course.require_invite_email_match === true;
+  await getPool().query(
+    `UPDATE project_collab_invites
+        SET context=jsonb_set(
+              COALESCE(context, '{}'::jsonb),
+              '{require_invite_email_match}',
+              to_jsonb($3::boolean),
+              true
+            ),
+            updated=NOW()
+      WHERE project_id=$1
+        AND status='pending'
+        AND invite_source IN ('email', 'course_email')
+        AND scope='course_student'
+        AND (
+          context ->> 'student_id' = $2
+          OR context ->> 'student_project_id' = $1::text
+        )
+        AND context -> 'require_invite_email_match'
+              IS DISTINCT FROM to_jsonb($3::boolean)`,
+    [request.project_id, request.student_id, required],
+  );
+}
+
 function uniqueAccountIds(ids: string[], name: string): string[] {
   const result = new Set<string>();
   for (const raw of ids) {
@@ -293,7 +334,7 @@ export async function getCourseManagedProjectStatesLocal({
 export async function reconcileCourseManagedProjectLocal(
   request: ProjectReconcileCourseManagedProjectRequest,
 ): Promise<ProjectReconcileCourseManagedProjectResult> {
-  const { account_id, course_project_id, project_id } = request;
+  const { account_id, project_id } = request;
   validateCourseManagedProjectRequest(request);
   const client = await getPool().connect();
   let usersChanged = false;
@@ -388,6 +429,8 @@ export async function reconcileCourseManagedProjectLocal(
     }
   }
 
+  await updatePendingCourseEmailInvitePolicy(request);
+
   for (const desiredAccountId of missingDesiredAccountIds) {
     const courseStudentInvite =
       request.type === "student" && request.student_id != null;
@@ -399,12 +442,7 @@ export async function reconcileCourseManagedProjectLocal(
         ...(courseStudentInvite
           ? {
               invite_scope: "course_student",
-              invite_context: {
-                course_project_id,
-                course_path: request.course_path,
-                student_id: request.student_id,
-                student_project_id: project_id,
-              },
+              invite_context: inviteContext(request),
             }
           : undefined),
       },
@@ -431,12 +469,8 @@ export async function reconcileCourseManagedProjectLocal(
         replyto_name: request.invite.reply_to_name,
         invite_base_url: request.invite.base_url,
         invite_scope: "course_student",
-        invite_context: {
-          course_project_id,
-          course_path: request.course_path,
-          student_id: request.student_id,
-          student_project_id: project_id,
-        },
+        require_email_match: request.course.require_invite_email_match === true,
+        invite_context: inviteContext(request),
       },
     });
     if (result.invites.length > 0) {

@@ -177,6 +177,9 @@ export class StudentProjectsActions {
       student_pay: !!store.getIn(["settings", "student_pay"]),
       institute_pay: !!store.getIn(["settings", "institute_pay"]),
       site_license_pay: !!store.getIn(["settings", "site_license_pay"]),
+      ...(store.getIn(["settings", "require_invite_email_match"])
+        ? { require_invite_email_match: true }
+        : undefined),
       student_project_functionality: normalizeStudentProjectFunctionality(
         store.getIn(["settings", "student_project_functionality"])?.toJS(),
       ),
@@ -383,8 +386,16 @@ export class StudentProjectsActions {
           course_project_id: store.get("course_project_id"),
           student_id,
           student_project_id,
+          require_invite_email_match: !!store.getIn([
+            "settings",
+            "require_invite_email_match",
+          ]),
         },
         invite_scope: "course_student",
+        require_email_match: !!store.getIn([
+          "settings",
+          "require_invite_email_match",
+        ]),
       });
       this.course_actions.set({
         table: "students",
@@ -401,6 +412,10 @@ export class StudentProjectsActions {
           course_project_id: this.get_store()?.get("course_project_id"),
           student_id,
           student_project_id,
+          require_invite_email_match: !!this.get_store()?.getIn([
+            "settings",
+            "require_invite_email_match",
+          ]),
         },
         invite_scope: "course_student",
       });
@@ -1161,6 +1176,9 @@ export class StudentProjectsActions {
           "student_membership_grace_days",
         ),
         course_ends_at: settings.get("course_ends_at") || undefined,
+        require_invite_email_match: !!settings.get(
+          "require_invite_email_match",
+        ),
         student_project_functionality: normalizeStudentProjectFunctionality(
           settings.get("student_project_functionality")?.toJS(),
         ),

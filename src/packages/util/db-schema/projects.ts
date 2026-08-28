@@ -920,6 +920,7 @@ export interface CourseInfo {
   student_membership_grace_days?: number;
   course_ends_at?: string;
   email_address?: string;
+  require_invite_email_match?: boolean;
   datastore: Datastore;
   student_project_functionality?: StudentProjectFunctionality;
   envvars?: EnvVars;
