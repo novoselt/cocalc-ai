@@ -8,6 +8,19 @@ Guidance for Claude Code, Gemini CLI, and OpenAI Codex when working in this repo
 - Workspace management uses pnpm (`src/packages/pnpm-workspace.yaml`).
 - Prefer package-local changes and checks over full-repo commands when possible.
 
+## Security Issues
+
+- Before investigating or fixing a suspected vulnerability, read
+  [`SECURITY.md`](SECURITY.md).
+- Never disclose suspected vulnerability details in a public issue,
+  discussion, pull request, commit, or branch before coordinated deployment or
+  explicit maintainer approval.
+- Use a draft GitHub repository security advisory and its temporary private
+  fork for non-public fixes. Do not push the fix to the public repository
+  until deployment is coordinated.
+- If a security issue is discovered during unrelated work, stop before making
+  the details public and alert the user or repository maintainers privately.
+
 ## Preferred Commands
 
 - Run these from the repo root unless a command says otherwise.
