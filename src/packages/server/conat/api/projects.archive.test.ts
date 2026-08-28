@@ -647,20 +647,25 @@ describe("projects.archiveProject", () => {
       error: "R2 unavailable",
     });
 
-    const { archiveProjectStorage } =
+    const { archiveProjectStorage, ProjectArchiveStorageError } =
       await import("@cocalc/server/projects/archive");
-    await expect(
-      archiveProjectStorage({
-        project_id: "11111111-1111-4111-8111-111111111111",
-        mode: "automatic",
-        job_id: jobId,
-        reason: "free-inactive",
-        expected_host_id: "22222222-2222-4222-8222-222222222222",
-      }),
-    ).rejects.toThrow("final automatic archive backup failed: R2 unavailable");
+    const error = await archiveProjectStorage({
+      project_id: "11111111-1111-4111-8111-111111111111",
+      mode: "automatic",
+      job_id: jobId,
+      reason: "free-inactive",
+      expected_host_id: "22222222-2222-4222-8222-222222222222",
+    }).catch((err) => err);
 
+    expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+    expect(error.message).toContain(
+      "final automatic archive backup failed: R2 unavailable",
+    );
+    expect(error.hostCleanupCompleted).toBe(false);
+    expect(error.reopenSafe).toBe(false);
     expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
     expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+    expect(releaseProjectDataArchiveFreezeOnHostMock).not.toHaveBeenCalled();
   });
 
   it("automatic archive revalidates generation coverage after final backup", async () => {

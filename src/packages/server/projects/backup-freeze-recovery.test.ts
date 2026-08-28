@@ -1,0 +1,84 @@
+import { createBackupFreezeRecovery } from "./backup-freeze-recovery";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+describe("backup freeze recovery", () => {
+  const options = {
+    enabled: true,
+    op_id: "backup-op-1",
+    project_id: "11111111-1111-4111-8111-111111111111",
+    host_id: "22222222-2222-4222-8222-222222222222",
+  };
+
+  it("releases a frozen backup that completes after its caller gives up", async () => {
+    const releaseArchiveFreeze = jest.fn(async () => ({
+      status: "released" as const,
+    }));
+    const recovery = createBackupFreezeRecovery({
+      ...options,
+      releaseArchiveFreeze,
+    });
+    const operation = deferred<{ id: string; generation: number }>();
+    const watched = recovery.watch(operation.promise, "worker timed out");
+
+    operation.resolve({ id: "backup-1", generation: 42 });
+    await watched;
+
+    expect(releaseArchiveFreeze).toHaveBeenCalledWith({
+      project_id: options.project_id,
+      host_id: options.host_id,
+      expected_generation: 42,
+    });
+  });
+
+  it("does not release a freeze after its result is durably handed off", async () => {
+    const releaseArchiveFreeze = jest.fn(async () => ({
+      status: "released" as const,
+    }));
+    const recovery = createBackupFreezeRecovery({
+      ...options,
+      releaseArchiveFreeze,
+    });
+    const operation = deferred<{ id: string; generation: number }>();
+    const watched = recovery.watch(operation.promise, "worker timed out");
+
+    recovery.handoff();
+    operation.resolve({ id: "backup-1", generation: 42 });
+    await watched;
+
+    expect(releaseArchiveFreeze).not.toHaveBeenCalled();
+  });
+
+  it("does not release when freezing is disabled or the host operation fails", async () => {
+    const releaseArchiveFreeze = jest.fn(async () => ({
+      status: "released" as const,
+    }));
+    const disabled = createBackupFreezeRecovery({
+      ...options,
+      enabled: false,
+      releaseArchiveFreeze,
+    });
+    expect(
+      disabled.watch(Promise.resolve({ generation: 42 }), "not frozen"),
+    ).toBeUndefined();
+
+    const recovery = createBackupFreezeRecovery({
+      ...options,
+      releaseArchiveFreeze,
+    });
+    await recovery.watch(
+      Promise.reject(new Error("host backup failed")),
+      "failed",
+    );
+
+    expect(releaseArchiveFreeze).not.toHaveBeenCalled();
+  });
+});

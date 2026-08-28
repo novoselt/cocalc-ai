@@ -23,6 +23,7 @@ import {
   computeHostAvailableBackupSlots,
   selectBackupClaimCandidateIds,
 } from "./backup-admission";
+import { createBackupFreezeRecovery } from "./backup-freeze-recovery";
 import {
   BACKUP_LRO_KIND,
   BACKUP_TIMEOUT_MS,
@@ -194,11 +195,15 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
     project_id,
     phase: "validate",
   });
+  const targetHostId = target.host_id;
+  if (!targetHostId) {
+    throw new Error("backup target availability check returned no host");
+  }
 
   logger.info("backup op start", {
     op_id,
     project_id,
-    host_id: target.host_id,
+    host_id: targetHostId,
   });
 
   const heartbeat = setInterval(() => {
@@ -214,6 +219,13 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
   });
   const hostWatchFailure = new Promise<never>((_resolve, reject) => {
     hostWatch.promise.catch(reject);
+  });
+  let backupOperation: Promise<any> | undefined;
+  const freezeRecovery = createBackupFreezeRecovery({
+    enabled: freeze_source,
+    op_id,
+    project_id,
+    host_id: targetHostId,
   });
 
   let lastProgressKey: string | null = null;
@@ -285,47 +297,45 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
         : { tags },
     });
 
+    backupOperation = (async () => {
+      const client = await getProjectFileServerClient({
+        project_id,
+        timeout: BACKUP_TIMEOUT_MS,
+      });
+      await ensureProjectFileServerClientReady({
+        project_id,
+        client,
+        maxWait: FILE_SERVER_READY_TIMEOUT_MS,
+      });
+      const lro = {
+        op_id,
+        scope_type: op.scope_type,
+        scope_id: op.scope_id,
+      };
+      if (externalMigration) {
+        return await client.backupProjectToExternalRepository({
+          project_id,
+          destination_project_id: `${externalMigration.destination_project_id ?? ""}`,
+          migration_id: `${externalMigration.migration_id ?? ""}`,
+          rustic_repo_toml: `${externalMigration.rustic_repo_toml ?? ""}`,
+          backup_index_store: externalMigration.backup_index_store ?? null,
+          tags,
+          lro,
+          managed_egress_override,
+        });
+      }
+      return await client.createBackup({
+        project_id,
+        limit,
+        tags,
+        lro,
+        managed_egress_override,
+        replace_oldest_at_limit,
+        freeze_source,
+      });
+    })();
     const backup = await Promise.race([
-      withTimeout(
-        (async () => {
-          const client = await getProjectFileServerClient({
-            project_id,
-            timeout: BACKUP_TIMEOUT_MS,
-          });
-          await ensureProjectFileServerClientReady({
-            project_id,
-            client,
-            maxWait: FILE_SERVER_READY_TIMEOUT_MS,
-          });
-          const lro = {
-            op_id,
-            scope_type: op.scope_type,
-            scope_id: op.scope_id,
-          };
-          if (externalMigration) {
-            return await client.backupProjectToExternalRepository({
-              project_id,
-              destination_project_id: `${externalMigration.destination_project_id ?? ""}`,
-              migration_id: `${externalMigration.migration_id ?? ""}`,
-              rustic_repo_toml: `${externalMigration.rustic_repo_toml ?? ""}`,
-              backup_index_store: externalMigration.backup_index_store ?? null,
-              tags,
-              lro,
-              managed_egress_override,
-            });
-          }
-          return await client.createBackup({
-            project_id,
-            limit,
-            tags,
-            lro,
-            managed_egress_override,
-            replace_oldest_at_limit,
-            freeze_source,
-          });
-        })(),
-        BACKUP_TIMEOUT_MS,
-      ),
+      withTimeout(backupOperation, BACKUP_TIMEOUT_MS),
       hostWatchFailure,
     ]);
     const duration_ms = Date.now() - started;
@@ -342,6 +352,7 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
     });
 
     if (await shouldLeaveTerminalLroUntouched(op_id)) {
+      await freezeRecovery.release(backup, "LRO became terminal");
       logger.info("backup op terminal state preserved", {
         op_id,
         project_id,
@@ -385,7 +396,12 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
       error: null,
     });
     if (updated) {
+      // The durable succeeded result transfers ownership of the read-only
+      // barrier to archiveProjectStorage.
+      freezeRecovery.handoff();
       await publishSummarySafe(updated, "set-succeeded");
+    } else {
+      await freezeRecovery.release(backup, "LRO success was not persisted");
     }
     progress({
       step: "done",
@@ -393,6 +409,12 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
       detail: { backup_id: backup.id, duration_ms },
     });
   } catch (err) {
+    if (backupOperation) {
+      void freezeRecovery.watch(
+        backupOperation,
+        "backup worker lost the host result",
+      );
+    }
     logger.warn("backup op failed", { op_id, err: `${err}` });
     if (await shouldLeaveTerminalLroUntouched(op_id)) {
       logger.info("backup op terminal state preserved after failure", {

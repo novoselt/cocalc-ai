@@ -138,9 +138,11 @@ function assertAutomaticArchiveReady({
 async function createFinalAutomaticArchiveBackup({
   project_id,
   job_id,
+  onBackupQueued,
 }: {
   project_id: string;
   job_id: string;
+  onBackupQueued?: () => void;
 }): Promise<ProjectArchiveLifecycleFinalBackup> {
   const op = await createBackup(
     {
@@ -155,6 +157,7 @@ async function createFinalAutomaticArchiveBackup({
       dedupe_key: `${FINAL_ARCHIVE_BACKUP_TAG}:${job_id}`,
     },
   );
+  onBackupQueued?.();
   const summary = await waitForDurableLroCompletion({
     op_id: op.op_id,
     scope_type: op.scope_type,
@@ -312,6 +315,7 @@ export async function archiveProjectStorage({
   let hostCleanupCompleted = false;
   let expectedArchiveGeneration: number | undefined;
   let expectedArchiveBackupId: string | undefined;
+  let finalBackupQueued = false;
   try {
     if (!row.backup_repo_id) {
       throw new Error(
@@ -358,6 +362,9 @@ export async function archiveProjectStorage({
         finalBackup = await createFinalAutomaticArchiveBackup({
           project_id,
           job_id: jobId,
+          onBackupQueued: () => {
+            finalBackupQueued = true;
+          },
         });
         expectedArchiveGeneration = Number(finalBackup.generation);
         expectedArchiveBackupId = finalBackup.id;
@@ -427,7 +434,10 @@ export async function archiveProjectStorage({
       status: "completed",
     });
   } catch (err) {
-    let reopenSafe = true;
+    // A queued freeze-capable backup continues on the project host when the
+    // worker times out or loses its response. Without a returned generation,
+    // keep the project claimed so a lifecycle retry can recover the barrier.
+    let reopenSafe = !finalBackupQueued;
     if (
       automatic &&
       !hostCleanupCompleted &&
