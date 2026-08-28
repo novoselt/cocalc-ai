@@ -346,6 +346,7 @@ export interface CrmOrganizationSummary extends CrmOrganization {
   verified_domains: string[];
   primary_contacts: Array<{ id: string; display_name: string }>;
   open_opportunity_count: number;
+  open_opportunity_kinds: CrmOpportunityKind[];
   next_task?: CrmTask | null;
   latest_activity_at?: string | null;
   outstanding_receivables: string;
