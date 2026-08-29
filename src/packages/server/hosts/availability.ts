@@ -851,14 +851,23 @@ function recentSpotRecoveryPhase(
   // Cloud recovery clears last_seen while replacing a VM. Do not derive the
   // transition age from that nullable heartbeat: NULL is represented as the
   // Unix epoch by the stale-host query and would trigger immediate repair.
-  const transitionTimes = [
-    recovery.machine_type_attempt_started_at,
-    recovery.verification_started_at,
-    recovery.fallback_started_at,
-    recovery.last_preempted_at,
-    recovery.outage_started_at,
-    recovery.last_probe_at,
-  ];
+  const transitionTimes =
+    phase === "running_standard_fallback"
+      ? [recovery.fallback_started_at]
+      : phase === "probing_spot"
+        ? [recovery.last_probe_at]
+        : phase === "returning_to_spot"
+          ? [
+              recovery.last_probe_at,
+              recovery.machine_type_attempt_started_at,
+              recovery.verification_started_at,
+            ]
+          : [
+              recovery.machine_type_attempt_started_at,
+              recovery.verification_started_at,
+              recovery.last_preempted_at,
+              recovery.outage_started_at,
+            ];
   return transitionTimes.some((value) => recentMetadataTransition(value, nowMs))
     ? phase
     : undefined;

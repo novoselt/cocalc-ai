@@ -311,10 +311,30 @@ describe("classifyHostAvailabilitySnapshot", () => {
             spot_recovery_state: {
               phase: "running_standard_fallback",
               fallback_started_at: new Date(now - 31 * 60_000).toISOString(),
+              // Failed probes continue updating this timestamp while the host
+              // remains on Standard. They must not renew the fallback grace.
+              last_probe_at: new Date(now - 60_000).toISOString(),
             },
           },
         },
         undefined,
+        now,
+      ),
+    ).toBeUndefined();
+    expect(
+      _test.runningStaleLifecycleSuppressionReason(
+        {
+          id: "12869982-da11-495e-9914-ee784ee8d5a8",
+          status: "running",
+          stale_ms: 31 * 60_000,
+          metadata: {
+            spot_recovery_state: {
+              phase: "running_standard_fallback",
+              fallback_started_at: new Date(now - 31 * 60_000).toISOString(),
+              last_probe_at: new Date(now - 60_000).toISOString(),
+            },
+          },
+        },
         now,
       ),
     ).toBeUndefined();
