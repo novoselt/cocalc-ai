@@ -10,6 +10,7 @@ import type { ActiveUserMapCountry } from "@cocalc/conat/hub/api/system";
 import { ACTIVE_USERS_MAP_ASSET_URL } from "./active-users-map-geometry";
 import {
   activeUsersMapCountryPosition,
+  activeUsersMapLocationName,
   ActiveUsersMapPlot,
   transformActiveUsersMapPosition,
 } from "./active-users-map-plot";
@@ -86,6 +87,35 @@ describe("ActiveUsersMapPlot", () => {
 
     fireEvent.click(button);
     expect(onSelect).toHaveBeenCalledWith("US");
+  });
+
+  it("uses approximate coordinates and location labels for city groups", () => {
+    const onSelect = jest.fn();
+    const calgary: ActiveUserMapCountry = {
+      group_id: "city:ca:ab:calgary",
+      granularity: "city",
+      country_code: "CA",
+      region_code: "AB",
+      region: "Alberta",
+      city: "Calgary",
+      count: 3,
+      latitude: 51.05,
+      longitude: -114.08,
+      users: [],
+    };
+    render(<ActiveUsersMapPlot countries={[calgary]} onSelect={onSelect} />);
+
+    expect(activeUsersMapLocationName(calgary)).toBe(
+      "Calgary, Alberta, Canada",
+    );
+    const button = screen.getByRole("button", {
+      name: "Calgary, Alberta, Canada: 3 active users",
+    });
+    expect(activeUsersMapCountryPosition(calgary)).not.toEqual(
+      activeUsersMapCountryPosition({ ...calgary, granularity: "country" }),
+    );
+    fireEvent.click(button);
+    expect(onSelect).toHaveBeenCalledWith("city:ca:ab:calgary");
   });
 
   it("moves bubble positions without scaling their controls", () => {

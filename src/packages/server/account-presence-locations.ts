@@ -8,6 +8,7 @@ import getPool from "@cocalc/database/pool";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import type {
   ActiveUserMapCountry,
+  ActiveUserMapGrouping,
   ActiveUserMapOverview,
   ActiveUserMapQuery,
   ActiveUserMapUser,
@@ -23,6 +24,16 @@ const LOCATION_TTL_HOURS = 26;
 const WRITE_THROTTLE_MS = 5 * 60_000;
 const VALID_WINDOWS = new Set<number>([5, 15, 60, 1440]);
 const lastWriteByAccount = new Map<string, number>();
+
+type LocationGroupDescriptor = Pick<
+  ActiveUserMapCountry,
+  | "group_id"
+  | "granularity"
+  | "country_code"
+  | "region_code"
+  | "region"
+  | "city"
+>;
 
 type NormalizedLocation = {
   country_code: string;
@@ -172,6 +183,78 @@ function normalizeWindow(value: number): ActiveUserMapWindowMinutes {
   return value as ActiveUserMapWindowMinutes;
 }
 
+function normalizeGrouping(
+  value: ActiveUserMapGrouping | undefined,
+): ActiveUserMapGrouping {
+  if (value == null) return "country";
+  if (value !== "country" && value !== "city") {
+    throw Error("group_by must be country or city");
+  }
+  return value;
+}
+
+function groupKeyPart(value: string | null | undefined): string {
+  return `${value ?? ""}`.trim().toLowerCase();
+}
+
+function locationGroupDescriptor(
+  row: ActiveLocationRow,
+  grouping: ActiveUserMapGrouping,
+): LocationGroupDescriptor {
+  const country_code = row.country_code!;
+  if (grouping === "city" && row.city) {
+    const regionKey = row.region_code ?? row.region;
+    return {
+      group_id: [
+        "city",
+        groupKeyPart(country_code),
+        groupKeyPart(regionKey),
+        groupKeyPart(row.city),
+      ].join(":"),
+      granularity: "city",
+      country_code,
+      region_code: row.region_code,
+      region: row.region,
+      city: row.city,
+    };
+  }
+  if (grouping === "city" && (row.region_code || row.region)) {
+    return {
+      group_id: [
+        "region",
+        groupKeyPart(country_code),
+        groupKeyPart(row.region_code ?? row.region),
+      ].join(":"),
+      granularity: "region",
+      country_code,
+      region_code: row.region_code,
+      region: row.region,
+      city: null,
+    };
+  }
+  return {
+    group_id: country_code,
+    granularity: "country",
+    country_code,
+    region_code: null,
+    region: null,
+    city: null,
+  };
+}
+
+function normalizedGroupDescriptor(
+  group: ActiveUserMapCountry,
+): LocationGroupDescriptor {
+  return {
+    group_id: group.group_id ?? group.country_code,
+    granularity: group.granularity ?? "country",
+    country_code: group.country_code,
+    region_code: group.region_code ?? null,
+    region: group.region ?? null,
+    city: group.city ?? null,
+  };
+}
+
 function mapUser(row: ActiveLocationRow, bay_id: string): ActiveUserMapUser {
   return {
     account_id: row.account_id,
@@ -190,10 +273,13 @@ function mapUser(row: ActiveLocationRow, bay_id: string): ActiveUserMapUser {
 
 export async function getActiveUserMapOverview({
   active_minutes,
+  group_by,
 }: {
   active_minutes: number;
+  group_by?: ActiveUserMapGrouping;
 }): Promise<ActiveUserMapOverview> {
   const windowMinutes = normalizeWindow(active_minutes);
+  const grouping = normalizeGrouping(group_by);
   const checked_at = new Date().toISOString();
   const bay_id = getConfiguredBayId();
   if (!(await activeUserMapEnabled())) {
@@ -224,7 +310,7 @@ export async function getActiveUserMapOverview({
     [windowMinutes],
   );
 
-  const countries = new Map<
+  const groups = new Map<
     string,
     ActiveUserMapCountry & { latitudeSum: number; longitudeSum: number }
   >();
@@ -241,8 +327,9 @@ export async function getActiveUserMapOverview({
       unknown_users.push(user);
       continue;
     }
-    const current = countries.get(row.country_code) ?? {
-      country_code: row.country_code,
+    const descriptor = locationGroupDescriptor(row, grouping);
+    const current = groups.get(descriptor.group_id!) ?? {
+      ...descriptor,
       count: 0,
       latitude: 0,
       longitude: 0,
@@ -254,9 +341,9 @@ export async function getActiveUserMapOverview({
     current.latitudeSum += latitude;
     current.longitudeSum += longitude;
     current.users.push(user);
-    countries.set(row.country_code, current);
+    groups.set(descriptor.group_id!, current);
   }
-  const mappedCountries = [...countries.values()]
+  const mappedCountries = [...groups.values()]
     .map(({ latitudeSum, longitudeSum, ...country }) => ({
       ...country,
       latitude: latitudeSum / country.count,
@@ -264,7 +351,10 @@ export async function getActiveUserMapOverview({
     }))
     .sort(
       (a, b) =>
-        b.count - a.count || a.country_code.localeCompare(b.country_code),
+        b.count - a.count ||
+        (a.group_id ?? a.country_code).localeCompare(
+          b.group_id ?? b.country_code,
+        ),
     );
   const mapped_active = mappedCountries.reduce(
     (total, country) => total + country.count,
@@ -294,7 +384,7 @@ export async function getActiveUserMapOverview({
 
 type AggregateUser = {
   user: ActiveUserMapUser;
-  country_code?: string;
+  group?: LocationGroupDescriptor;
   latitude?: number;
   longitude?: number;
 };
@@ -309,8 +399,8 @@ function shouldReplaceAggregateUser(
   return (
     candidateTime > currentTime ||
     (candidateTime === currentTime &&
-      candidate.country_code != null &&
-      current.country_code == null)
+      candidate.group != null &&
+      current.group == null)
   );
 }
 
@@ -331,7 +421,7 @@ function aggregateActiveUserMapReports({
       for (const user of country.users) {
         const candidate: AggregateUser = {
           user,
-          country_code: country.country_code,
+          group: normalizedGroupDescriptor(country),
           latitude: country.latitude,
           longitude: country.longitude,
         };
@@ -358,22 +448,18 @@ function aggregateActiveUserMapReports({
     }
   }
 
-  const countries = new Map<
+  const groups = new Map<
     string,
     ActiveUserMapCountry & { latitudeSum: number; longitudeSum: number }
   >();
   const unknown_users: ActiveUserMapUser[] = [];
   for (const entry of usersByAccount.values()) {
-    if (
-      !entry.country_code ||
-      entry.latitude == null ||
-      entry.longitude == null
-    ) {
+    if (!entry.group || entry.latitude == null || entry.longitude == null) {
       unknown_users.push(entry.user);
       continue;
     }
-    const country = countries.get(entry.country_code) ?? {
-      country_code: entry.country_code,
+    const group = groups.get(entry.group.group_id!) ?? {
+      ...entry.group,
       count: 0,
       latitude: 0,
       longitude: 0,
@@ -381,16 +467,16 @@ function aggregateActiveUserMapReports({
       longitudeSum: 0,
       users: [],
     };
-    country.count += 1;
-    country.latitudeSum += entry.latitude;
-    country.longitudeSum += entry.longitude;
-    country.users.push(entry.user);
-    countries.set(entry.country_code, country);
+    group.count += 1;
+    group.latitudeSum += entry.latitude;
+    group.longitudeSum += entry.longitude;
+    group.users.push(entry.user);
+    groups.set(entry.group.group_id!, group);
   }
   const byLastActive = (a: ActiveUserMapUser, b: ActiveUserMapUser) =>
     new Date(b.last_active).valueOf() - new Date(a.last_active).valueOf();
   unknown_users.sort(byLastActive);
-  const mappedCountries = [...countries.values()]
+  const mappedCountries = [...groups.values()]
     .map(({ latitudeSum, longitudeSum, ...country }) => ({
       ...country,
       latitude: latitudeSum / country.count,
@@ -399,7 +485,10 @@ function aggregateActiveUserMapReports({
     }))
     .sort(
       (a, b) =>
-        b.count - a.count || a.country_code.localeCompare(b.country_code),
+        b.count - a.count ||
+        (a.group_id ?? a.country_code).localeCompare(
+          b.group_id ?? b.country_code,
+        ),
     );
   const mapped_active = mappedCountries.reduce(
     (total, country) => total + country.count,
@@ -423,8 +512,10 @@ function aggregateActiveUserMapReports({
 export async function getActiveUserMapOverviewAcrossBays({
   account_id,
   active_minutes,
+  group_by,
 }: ActiveUserMapQuery): Promise<ActiveUserMapOverview> {
   const windowMinutes = normalizeWindow(active_minutes);
+  const grouping = normalizeGrouping(group_by);
   const currentBayId = getConfiguredBayId();
   const bayIds = [
     ...new Set(
@@ -437,12 +528,16 @@ export async function getActiveUserMapOverviewAcrossBays({
   const settled = await Promise.allSettled(
     bayIds.map(async (bay_id) =>
       bay_id === currentBayId
-        ? await getActiveUserMapOverview({ active_minutes: windowMinutes })
+        ? await getActiveUserMapOverview({
+            active_minutes: windowMinutes,
+            group_by: grouping,
+          })
         : await getInterBayBridge()
             .bayOps(bay_id, { timeout_ms: 10_000 })
             .getActiveUserMap({
               account_id,
               active_minutes: windowMinutes,
+              group_by: grouping,
             }),
     ),
   );

@@ -6,6 +6,7 @@
 import {
   Alert,
   Button,
+  Checkbox,
   DatePicker,
   Drawer,
   List,
@@ -32,7 +33,7 @@ import type {
   ActiveUserMapHistoryWindowMinutes,
 } from "@cocalc/conat/inter-bay/api";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
-import { Icon, TimeAgo } from "@cocalc/frontend/components";
+import { Icon, TimeAgo, Tooltip } from "@cocalc/frontend/components";
 import ShowError from "@cocalc/frontend/components/error";
 import {
   user_search,
@@ -40,8 +41,11 @@ import {
 } from "@cocalc/frontend/frame-editors/generic/client";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { UserResult } from "./users/user";
-import { activeUsersMapCountryName } from "./active-users-map-country";
-import { ActiveUsersMapPlot } from "./active-users-map-plot";
+import {
+  activeUsersMapLocationName,
+  ActiveUsersMapPlot,
+} from "./active-users-map-plot";
+import { ActiveUsersMapDomainChart } from "./active-users-map-domains";
 import { ActiveUsersMapHistoryPlot } from "./active-users-map-history-plot";
 import { ActiveUsersMapSummary } from "./active-users-map-summary";
 
@@ -122,6 +126,42 @@ function locationLabel(user: ActiveUserMapUser): string {
     .join(", ");
 }
 
+export function activeUsersMapDrawerTitle(
+  location: string,
+  count: number,
+): string {
+  return `${location}: ${count} active ${count === 1 ? "user" : "users"}`;
+}
+
+export function activeUsersMapHistoryFallbackCountries(
+  locations: ActiveUserMapOverview["countries"],
+): ActiveUserMapOverview["countries"] {
+  const countries = new Map<
+    string,
+    ActiveUserMapOverview["countries"][number]
+  >();
+  for (const location of locations) {
+    const existing = countries.get(location.country_code);
+    if (existing) {
+      existing.count += location.count;
+      existing.users.push(...location.users);
+      continue;
+    }
+    countries.set(location.country_code, {
+      ...location,
+      group_id: location.country_code,
+      granularity: "country",
+      region_code: null,
+      region: null,
+      city: null,
+      users: [...location.users],
+    });
+  }
+  return [...countries.values()].sort(
+    (a, b) => b.count - a.count || a.country_code.localeCompare(b.country_code),
+  );
+}
+
 function UserList({
   users,
   onSelect,
@@ -166,6 +206,7 @@ export function ActiveUsersMapAdmin() {
   const [view, setView] = useState<MapView>("live");
   const [liveActiveMinutes, setLiveActiveMinutes] =
     useState<ActiveUserMapWindowMinutes>(15);
+  const [groupLiveByCity, setGroupLiveByCity] = useState(false);
   const [historyActiveMinutes, setHistoryActiveMinutes] =
     useState<ActiveUserMapHistoryWindowMinutes>(60);
   const [overview, setOverview] = useState<ActiveUserMapOverview>();
@@ -187,7 +228,7 @@ export function ActiveUsersMapAdmin() {
   const [drawerWidth, setDrawerWidth] = useState<number | undefined>(
     readDrawerWidth,
   );
-  const requestInFlight = useRef(false);
+  const liveRequest = useRef(0);
   const snapshotRequest = useRef(0);
   const requestedHistorySnapshot = useRef<string | undefined>(undefined);
   const snapshotCache = useRef(
@@ -201,24 +242,23 @@ export function ActiveUsersMapAdmin() {
         : 60;
 
   const load = useCallback(async () => {
-    if (requestInFlight.current) return;
-    requestInFlight.current = true;
+    const request = ++liveRequest.current;
     setLoading(true);
     setError(undefined);
     try {
       const next = await webapp_client.conat_client.hub.system.getActiveUserMap(
         {
           active_minutes: liveActiveMinutes,
+          group_by: groupLiveByCity ? "city" : "country",
         },
       );
-      setOverview(next);
+      if (request === liveRequest.current) setOverview(next);
     } catch (err) {
-      setError(`${err}`);
+      if (request === liveRequest.current) setError(`${err}`);
     } finally {
-      requestInFlight.current = false;
-      setLoading(false);
+      if (request === liveRequest.current) setLoading(false);
     }
-  }, [liveActiveMinutes]);
+  }, [groupLiveByCity, liveActiveMinutes]);
 
   useEffect(() => {
     if (view !== "live") return;
@@ -354,13 +394,14 @@ export function ActiveUsersMapAdmin() {
     view,
   ]);
 
-  const selectedCountry = overview?.countries.find(
-    (country) => country.country_code === selectedGroup,
+  const selectedLocation = overview?.countries.find(
+    (location) =>
+      (location.group_id ?? location.country_code) === selectedGroup,
   );
   const selectedUsers =
     selectedGroup === "unknown"
       ? (overview?.unknown_users ?? [])
-      : (selectedCountry?.users ?? []);
+      : (selectedLocation?.users ?? []);
 
   async function openUser(user: ActiveUserMapUser) {
     setLoadingUser(true);
@@ -379,12 +420,16 @@ export function ActiveUsersMapAdmin() {
     }
   }
 
-  const drawerTitle =
+  const drawerLocation =
     selectedGroup === "unknown"
       ? "Location unavailable"
-      : selectedCountry
-        ? `${activeUsersMapCountryName(selectedCountry.country_code)} (${selectedCountry.count})`
-        : "Active users";
+      : selectedLocation
+        ? activeUsersMapLocationName(selectedLocation)
+        : "Selected location";
+  const drawerTitle = activeUsersMapDrawerTitle(
+    drawerLocation,
+    selectedUsers.length,
+  );
   const failedBays = overview?.bays.filter(({ ok }) => !ok) ?? [];
   const disabledBays =
     overview?.bays.filter(({ ok, enabled }) => ok && enabled === false) ?? [];
@@ -402,11 +447,14 @@ export function ActiveUsersMapAdmin() {
     ? dayjs.utc(historySnapshot.snapshot_hour)
     : undefined;
   const pendingHistoryFallback = snapshotLoading ? overview : undefined;
+  const pendingHistoryCountries = pendingHistoryFallback
+    ? activeUsersMapHistoryFallbackCountries(pendingHistoryFallback.countries)
+    : undefined;
   const displaySummary =
     view === "history" ? (historySnapshot ?? pendingHistoryFallback) : overview;
   const displayCountries =
     view === "history"
-      ? (historySnapshot?.countries ?? pendingHistoryFallback?.countries)
+      ? (historySnapshot?.countries ?? pendingHistoryCountries)
       : overview?.countries;
 
   function selectHistoryDate(value: Dayjs | null) {
@@ -589,6 +637,20 @@ export function ActiveUsersMapAdmin() {
             />
           </Space>
         )}
+        {view === "live" && (
+          <Tooltip title="Group current users using approximate Cloudflare IP geolocation.">
+            <Checkbox
+              checked={groupLiveByCity}
+              onChange={({ target: { checked } }) => {
+                setSelectedGroup(undefined);
+                setSelectedUser(undefined);
+                setGroupLiveByCity(checked);
+              }}
+            >
+              Group by city
+            </Checkbox>
+          </Tooltip>
+        )}
       </Space>
       {error && <ShowError error={error} setError={setError} />}
       {snapshotError && (
@@ -627,7 +689,9 @@ export function ActiveUsersMapAdmin() {
               }
               hint={
                 view === "live"
-                  ? "Select a country to view its active users."
+                  ? groupLiveByCity
+                    ? "Select a location to view its active users."
+                    : "Select a country to view its active users."
                   : "Select a country to filter the plot."
               }
             />
@@ -640,9 +704,7 @@ export function ActiveUsersMapAdmin() {
             key="active-users-map"
             countries={displayCountries ?? []}
             selectedCountryCode={
-              view === "history"
-                ? historyCountry
-                : selectedCountry?.country_code
+              view === "history" ? historyCountry : selectedGroup
             }
             onSelect={view === "history" ? setHistoryCountry : setSelectedGroup}
           />
@@ -686,6 +748,7 @@ export function ActiveUsersMapAdmin() {
           setSelectedUser(undefined);
         }}
       >
+        <ActiveUsersMapDomainChart users={selectedUsers} />
         <UserList
           users={selectedUsers}
           onSelect={(user) => void openUser(user)}

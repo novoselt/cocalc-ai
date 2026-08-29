@@ -192,6 +192,87 @@ describe("account presence locations", () => {
     expect(result.countries[0].users[0].bay_id).toBe("bay-1");
   });
 
+  it("groups live users by approximate city with regional fallback", async () => {
+    queryMock.mockResolvedValue({
+      rows: [
+        {
+          account_id: "account-1",
+          display_name: "Ada",
+          first_name: "Ada",
+          last_name: "Lovelace",
+          email_address: "ada@example.com",
+          last_active: "2026-07-14T10:00:00.000Z",
+          country_code: "CA",
+          region_code: "AB",
+          region: "Alberta",
+          city: "Calgary",
+          timezone: "America/Edmonton",
+          latitude: "51.04",
+          longitude: "-114.07",
+        },
+        {
+          account_id: "account-2",
+          display_name: "Grace",
+          first_name: "Grace",
+          last_name: "Hopper",
+          email_address: "grace@example.com",
+          last_active: "2026-07-14T09:00:00.000Z",
+          country_code: "CA",
+          region_code: "AB",
+          region: "Alberta",
+          city: "calgary",
+          timezone: "America/Edmonton",
+          latitude: "51.06",
+          longitude: "-114.09",
+        },
+        {
+          account_id: "account-3",
+          display_name: "Katherine",
+          first_name: "Katherine",
+          last_name: "Johnson",
+          email_address: "katherine@example.com",
+          last_active: "2026-07-14T08:00:00.000Z",
+          country_code: "CA",
+          region_code: "BC",
+          region: "British Columbia",
+          city: null,
+          timezone: "America/Vancouver",
+          latitude: "53.73",
+          longitude: "-127.65",
+        },
+      ],
+    });
+    const { getActiveUserMapOverview } =
+      await import("./account-presence-locations");
+    const result = await getActiveUserMapOverview({
+      active_minutes: 60,
+      group_by: "city",
+    });
+
+    expect(result.countries).toEqual([
+      expect.objectContaining({
+        group_id: "city:ca:ab:calgary",
+        granularity: "city",
+        country_code: "CA",
+        region_code: "AB",
+        region: "Alberta",
+        city: "Calgary",
+        count: 2,
+        latitude: 51.05,
+        longitude: -114.08,
+      }),
+      expect.objectContaining({
+        group_id: "region:ca:bc",
+        granularity: "region",
+        country_code: "CA",
+        region_code: "BC",
+        region: "British Columbia",
+        city: null,
+        count: 1,
+      }),
+    ]);
+  });
+
   it("aggregates configured bays and keeps the newest account activity", async () => {
     listConfiguredBaysMock.mockResolvedValue([
       { bay_id: "bay-1" },
@@ -276,7 +357,7 @@ describe("account presence locations", () => {
     expect(getRemoteActiveUserMapMock).toHaveBeenCalledWith(
       "bay-2",
       { timeout_ms: 10_000 },
-      { account_id: "admin-1", active_minutes: 60 },
+      { account_id: "admin-1", active_minutes: 60, group_by: "country" },
     );
     expect(result).toMatchObject({
       bay_id: "all",
