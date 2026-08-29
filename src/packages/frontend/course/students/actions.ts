@@ -224,26 +224,33 @@ export class StudentsActions {
   deleteAllStudents = async (noTrash = false): Promise<void> => {
     const store = this.get_store();
     const students = store.get_students().valueSeq().toArray();
-    try {
-      await map(
-        students,
-        store.get_copy_parallel(),
-        async (student: StudentRecord) => {
+    const failures: string[] = [];
+    let deleted = 0;
+    await map(
+      students,
+      store.get_copy_parallel(),
+      async (student: StudentRecord) => {
+        try {
           await this.course_actions.student_projects.removeFromAllStudentProjects(
             student,
           );
-        },
+          this.doDeleteStudent(student, noTrash, false);
+          deleted += 1;
+        } catch (err) {
+          failures.push(`${student.get("student_id")}: ${err}`);
+        }
+      },
+    );
+    if (deleted > 0) {
+      this.course_actions.commit();
+      await delay(1); // so store is updated, since it is used by configure
+      await this.course_actions.student_projects.configure_all_projects();
+    }
+    if (failures.length > 0) {
+      this.course_actions.set_error(
+        `Error deleting ${failures.length} student${failures.length === 1 ? "" : "s"} - ${failures.join("; ")}`,
       );
-    } catch (err) {
-      this.course_actions.set_error(`Error deleting students - ${err}`);
-      return;
     }
-    for (const student of students) {
-      this.doDeleteStudent(student, noTrash, false);
-    }
-    this.course_actions.commit();
-    await delay(1); // so store is updated, since it is used by configure
-    await this.course_actions.student_projects.configure_all_projects();
   };
 
   private doDeleteStudent = (
