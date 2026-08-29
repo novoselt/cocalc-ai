@@ -182,7 +182,6 @@ export interface SiteLicenseClaimBannerState {
   loading: boolean;
   markCompleted: (opportunities: ClaimableMembershipPackage[]) => void;
   opportunities: ClaimableMembershipPackage[];
-  refresh: () => Promise<void>;
   roleHint: CourseRoleHint;
   suppressTrial: boolean;
   visible: boolean;
@@ -240,19 +239,6 @@ export function useSiteLicenseClaimBannerState({
     setRecentInstructorAt(now);
   }, [accountId, activeProjectTab]);
 
-  async function refresh(): Promise<void> {
-    if (!enabled || !accountId) return;
-    try {
-      const rows = await getClaimableMembershipPackages({
-        include_claimed_site_license_pools: true,
-        site_only: true,
-      });
-      setData({ accountId, rows });
-    } catch {
-      setData({ accountId, rows: [] });
-    }
-  }
-
   useEffect(() => {
     setData(undefined);
     if (
@@ -266,8 +252,15 @@ export function useSiteLicenseClaimBannerState({
     }
     let canceled = false;
     let inFlight = false;
-    const load = async () => {
-      if (canceled || inFlight) return;
+    let forceAfterFlight = false;
+    let loadedAt = 0;
+    const load = async (force = false) => {
+      if (canceled) return;
+      if (inFlight) {
+        forceAfterFlight ||= force;
+        return;
+      }
+      if (!force && Date.now() < loadedAt + REFRESH_MS) return;
       inFlight = true;
       try {
         const rows = await getClaimableMembershipPackages({
@@ -278,20 +271,27 @@ export function useSiteLicenseClaimBannerState({
       } catch {
         if (!canceled) setData({ accountId, rows: [] });
       } finally {
+        loadedAt = Date.now();
         inFlight = false;
+        if (forceAfterFlight) {
+          forceAfterFlight = false;
+          void load(true);
+        }
       }
     };
+    const onMembershipChanged = () => void load(true);
     const onVisibility = () => {
       if (!document.hidden) void load();
     };
-    void load();
-    const interval = window.setInterval(load, REFRESH_MS);
-    window.addEventListener("cocalc:membership-changed", load);
+    void load(true);
+    window.addEventListener("cocalc:membership-changed", onMembershipChanged);
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       canceled = true;
-      window.clearInterval(interval);
-      window.removeEventListener("cocalc:membership-changed", load);
+      window.removeEventListener(
+        "cocalc:membership-changed",
+        onMembershipChanged,
+      );
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [accountId, accountReady, enabled, impersonation, isLoggedIn]);
@@ -346,7 +346,6 @@ export function useSiteLicenseClaimBannerState({
     opportunities,
     roleHint,
     visible,
-    refresh,
     markCompleted: (completedOpportunities) => {
       const keys = completedOpportunities.map(siteLicenseReminderKey);
       setLocalCompletedKeys((current) =>
@@ -402,7 +401,6 @@ export function SiteLicenseClaimBanner({
       }
       state.markCompleted([primary]);
       window.dispatchEvent(new Event("cocalc:membership-changed"));
-      await state.refresh();
     } catch (err) {
       setError(`${err}`);
     } finally {
@@ -476,7 +474,6 @@ export function SiteLicenseClaimBanner({
               setManageOpen(false);
               state.markCompleted(state.opportunities);
               window.dispatchEvent(new Event("cocalc:membership-changed"));
-              void state.refresh();
             }}
           />
         </Suspense>

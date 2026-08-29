@@ -197,6 +197,43 @@ describe("SiteLicenseClaimBanner", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("refreshes stale data on return without polling active clients", async () => {
+    const now = new Date("2026-08-29T12:00:00.000Z").getTime();
+    const dateNow = jest.spyOn(Date, "now").mockReturnValue(now);
+    const hiddenDescriptor = Object.getOwnPropertyDescriptor(
+      document,
+      "hidden",
+    );
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: false,
+    });
+    getClaimableMembershipPackages.mockResolvedValue([opportunity()]);
+
+    try {
+      render(<Harness />);
+      await waitFor(() =>
+        expect(getClaimableMembershipPackages).toHaveBeenCalledTimes(1),
+      );
+
+      fireEvent(document, new Event("visibilitychange"));
+      expect(getClaimableMembershipPackages).toHaveBeenCalledTimes(1);
+
+      dateNow.mockReturnValue(now + 16 * 60 * 1000);
+      fireEvent(document, new Event("visibilitychange"));
+      await waitFor(() =>
+        expect(getClaimableMembershipPackages).toHaveBeenCalledTimes(2),
+      );
+    } finally {
+      dateNow.mockRestore();
+      if (hiddenDescriptor) {
+        Object.defineProperty(document, "hidden", hiddenDescriptor);
+      } else {
+        delete (document as { hidden?: boolean }).hidden;
+      }
+    }
+  });
+
   it("emphasizes the likely choice and opens the shared manager for alternatives", async () => {
     getClaimableMembershipPackages.mockResolvedValue([
       opportunity(),

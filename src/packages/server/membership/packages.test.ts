@@ -37,7 +37,7 @@ jest.mock("@cocalc/server/inter-bay/bridge", () => ({
   })),
 }));
 
-import getPool from "@cocalc/database/pool";
+import getPool, { type PoolClient } from "@cocalc/database/pool";
 import { after, before } from "@cocalc/server/test";
 import {
   createTestAccount,
@@ -1163,6 +1163,65 @@ describe("membership packages", () => {
     await expect(
       claimMembershipPackageSeat({ package_id, account_id }),
     ).rejects.toThrow("no claimable seat found for this account");
+  });
+
+  it("filters site-only discovery in SQL and batches assignment lookup", async () => {
+    const owner_account_id = uuid();
+    const account_id = uuid();
+    const emailAddress = `member-${uuid()}@efficient.example.edu`;
+    await createTestAccount(owner_account_id);
+    await createTestAccount(account_id);
+
+    const sitePackageId = await createTestMembershipPackage({
+      owner_account_id,
+      kind: "site",
+      membership_class: teamTier,
+      seat_count: 2,
+      metadata: { allowed_domains: ["efficient.example.edu"] },
+    });
+    const teamPackageId = await createTestMembershipPackage({
+      owner_account_id,
+      kind: "team",
+      membership_class: teamTier,
+      seat_count: 2,
+    });
+    await assignMembershipPackageSeat({
+      package_id: teamPackageId,
+      email_address: emailAddress,
+      assigned_by_account_id: owner_account_id,
+    });
+
+    const client = getPool("medium");
+    const querySpy = jest.spyOn(client, "query");
+    try {
+      const claimables =
+        await listLocalClaimableMembershipPackagesForVerifiedEmails({
+          account_id,
+          site_only: true,
+          verified_email_addresses: [emailAddress],
+          client: client as unknown as PoolClient,
+        });
+      expect(claimables.some((row) => row.package_id === sitePackageId)).toBe(
+        true,
+      );
+      expect(claimables.some((row) => row.package_id === teamPackageId)).toBe(
+        false,
+      );
+
+      const sqlCalls = querySpy.mock.calls.map(([query]) =>
+        typeof query === "string" ? query : query.text,
+      );
+      expect(
+        sqlCalls.filter((sql) =>
+          sql.includes("FROM membership_package_assignments"),
+        ),
+      ).toHaveLength(1);
+      expect(
+        sqlCalls.find((sql) => sql.includes("FROM membership_packages")),
+      ).toContain("kind = 'site'");
+    } finally {
+      querySpy.mockRestore();
+    }
   });
 
   it("can include already claimed site-license pools for account settings", async () => {

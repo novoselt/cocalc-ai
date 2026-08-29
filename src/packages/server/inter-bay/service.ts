@@ -1559,6 +1559,7 @@ async function startAccountLocalService(): Promise<void> {
       const rows = await listLocalClaimableMembershipPackagesForVerifiedEmails({
         account_id,
         include_claimed_site_license_pools,
+        site_only,
         verified_email_addresses,
       });
       if (site_only) {
