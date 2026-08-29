@@ -45,6 +45,20 @@ async function stagedSnapshotNames(volume: Subvolume): Promise<string[]> {
   }
 }
 
+async function removeSnapshotStagingRoot(
+  volume: Subvolume,
+  knownToExist: boolean,
+): Promise<void> {
+  const root = snapshotStagingRoot(volume);
+  // The privileged storage wrapper resolves paths strictly before invoking
+  // rm, so `rm -rf` is not itself idempotent for a missing staging root.
+  if (!knownToExist && !(await exists(root))) return;
+  await sudo({
+    command: "rm",
+    args: ["-rf", root],
+  });
+}
+
 export async function isSubvolumeReadonly(path: string): Promise<boolean> {
   const { stdout } = await btrfs({
     args: ["property", "get", "-ts", path, "ro"],
@@ -113,10 +127,7 @@ async function restoreLocalSnapshotsUnlocked(volume: Subvolume): Promise<void> {
       await sudo({ command: "mv", args: [source, destination] });
     }
   }
-  await sudo({
-    command: "rm",
-    args: ["-rf", snapshotStagingRoot(volume)],
-  });
+  await removeSnapshotStagingRoot(volume, names.length > 0);
 }
 
 async function deleteStagedArchiveSnapshotsUnlocked(
@@ -130,10 +141,7 @@ async function deleteStagedArchiveSnapshotsUnlocked(
       verbose: false,
     });
   }
-  await sudo({
-    command: "rm",
-    args: ["-rf", snapshotStagingRoot(volume)],
-  });
+  await removeSnapshotStagingRoot(volume, names.length > 0);
 }
 
 export async function deleteStagedArchiveSnapshots(
