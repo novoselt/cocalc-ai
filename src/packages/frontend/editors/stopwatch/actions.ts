@@ -39,6 +39,7 @@ type TimerRecord = TypedMap<Timer>;
 export class TimeActions extends Actions<StopwatchEditorState> {
   private project_id: string;
   private path: string;
+  private autosaveErrorShown = false;
   public syncdb: any;
   public store: Store<StopwatchEditorState>;
 
@@ -77,6 +78,9 @@ export class TimeActions extends Actions<StopwatchEditorState> {
   private async saveToDisk(): Promise<void> {
     try {
       await this.syncdb.save_to_disk();
+      if (this.syncdb?.isClosed?.() || !this.autosaveErrorShown) return;
+      this.autosaveErrorShown = false;
+      this.init_error(undefined);
     } catch (err) {
       if (this.syncdb?.isClosed?.()) return;
       const error = `Stopwatch error '${this.path}' -- ${err}`;
@@ -85,6 +89,7 @@ export class TimeActions extends Actions<StopwatchEditorState> {
         project_id: this.project_id,
         path: this.path,
       });
+      this.autosaveErrorShown = true;
       this.init_error(error);
     }
   }

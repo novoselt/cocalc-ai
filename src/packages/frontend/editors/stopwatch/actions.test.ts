@@ -34,3 +34,37 @@ test("a rejected fire-and-forget save is shown as an editor error", async () => 
     "stopwatch-test",
   );
 });
+
+test("a successful autosave clears an earlier autosave error", async () => {
+  const redux = {
+    getStore: jest.fn(() => ({})),
+    _set_state: jest.fn(),
+  };
+  const actions = new TimeActions("stopwatch-test", redux as any);
+  actions._init("project-1", "timer.stopwatch");
+  actions.syncdb = {
+    set: jest.fn(),
+    commit: jest.fn(),
+    save_to_disk: jest
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary filesystem failure"))
+      .mockResolvedValueOnce(undefined),
+    isClosed: jest.fn(() => false),
+  };
+
+  actions.startStopwatch(1);
+  await Promise.resolve();
+  await Promise.resolve();
+  actions.startStopwatch(1);
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(redux._set_state).toHaveBeenLastCalledWith(
+    {
+      "stopwatch-test": {
+        error: undefined,
+      },
+    },
+    "stopwatch-test",
+  );
+});
