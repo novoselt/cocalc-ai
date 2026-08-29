@@ -195,6 +195,46 @@ describe("Stripe webhook processing", () => {
     expect(mockAlertUncreditedSucceededPayment).not.toHaveBeenCalled();
   });
 
+  it("does not retry unrelated Stripe retrieval failures", async () => {
+    const err = Object.assign(new Error("Stripe is unavailable"), {
+      code: "api_connection_error",
+    });
+    stripe.paymentIntents.retrieve.mockRejectedValueOnce(err);
+    const { processStripeWebhookEvent } = await import("./webhook");
+
+    await expect(
+      processStripeWebhookEvent({
+        type: "payment_intent.succeeded",
+        data: { object: { id: "pi_123" } },
+      }),
+    ).rejects.toBe(err);
+    expect(stripe.paymentIntents.retrieve).toHaveBeenCalledTimes(1);
+    expect(mockProcessPaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a Stripe object lock after bounded retries", async () => {
+    jest.useFakeTimers();
+    try {
+      const err = Object.assign(new Error("object remains locked"), {
+        code: "lock_timeout",
+      });
+      stripe.paymentIntents.retrieve.mockRejectedValue(err);
+      const { processStripeWebhookEvent } = await import("./webhook");
+      const processing = processStripeWebhookEvent({
+        type: "payment_intent.succeeded",
+        data: { object: { id: "pi_123" } },
+      });
+      const rejection = expect(processing).rejects.toBe(err);
+
+      await jest.runAllTimersAsync();
+      await rejection;
+      expect(stripe.paymentIntents.retrieve).toHaveBeenCalledTimes(4);
+      expect(mockProcessPaymentIntent).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it("credits paid service invoices", async () => {
     const { processStripeWebhookEvent } = await import("./webhook");
 
