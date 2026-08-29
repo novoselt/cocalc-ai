@@ -369,6 +369,16 @@ export interface ProjectControlStateRequest {
   epoch?: number;
 }
 
+export interface ProjectControlHardDeleteStatusRequest {
+  project_id: string;
+}
+
+export interface ProjectControlHardDeleteStatusResponse {
+  project_id: string;
+  bay_id: string;
+  status: "live" | "hard-deleted" | "unknown";
+}
+
 export interface ProjectControlSetUsageAccountRequest {
   project_id: string;
   usage_account_id?: string | null;
@@ -2452,6 +2462,7 @@ export type ProjectControlMethod =
   | "restart"
   | "backup"
   | "state"
+  | "hard-delete-status"
   | "set-usage-account"
   | "assign-host"
   | "address"
@@ -2945,6 +2956,9 @@ export interface InterBayProjectControlApi {
   restart: (opts: ProjectControlRestartRequest) => Promise<void>;
   backup: (opts: ProjectControlBackupRequest) => Promise<LroSummary>;
   state: (opts: ProjectControlStateRequest) => Promise<ProjectState>;
+  hardDeleteStatus: (
+    opts: ProjectControlHardDeleteStatusRequest,
+  ) => Promise<ProjectControlHardDeleteStatusResponse>;
   setUsageAccount: (
     opts: ProjectControlSetUsageAccountRequest,
   ) => Promise<ProjectControlSetUsageAccountResponse>;
@@ -5329,6 +5343,15 @@ export function createInterBayProjectControlClient({
     ...serviceClientOptions({ client, timeout }),
     subject: projectControlSubject({ dest_bay, method: "state" }),
   });
+  const hardDeleteStatusClient = createServiceClient<
+    Pick<InterBayProjectControlApi, "hardDeleteStatus">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectControlSubject({
+      dest_bay,
+      method: "hard-delete-status",
+    }),
+  });
   const setUsageAccountClient = createServiceClient<
     Pick<InterBayProjectControlApi, "setUsageAccount">
   >({
@@ -5412,6 +5435,8 @@ export function createInterBayProjectControlClient({
     restart: async (opts) => await restartClient.restart(opts),
     backup: async (opts) => await backupClient.backup(opts),
     state: async (opts) => await stateClient.state(opts),
+    hardDeleteStatus: async (opts) =>
+      await hardDeleteStatusClient.hardDeleteStatus(opts),
     setUsageAccount: async (opts) =>
       await setUsageAccountClient.setUsageAccount(opts),
     assignHost: async (opts) => await assignHostClient.assignHost(opts),
@@ -11820,6 +11845,29 @@ export function createInterBayProjectControlStateHandler({
     subject: projectControlSubject({ dest_bay: bay_id, method: "state" }),
     impl: {
       state: async (opts) => await impl.state(opts),
+    },
+  });
+}
+
+export function createInterBayProjectControlHardDeleteStatusHandler({
+  bay_id,
+  impl,
+  ...options
+}: ServiceHandlerOptions & {
+  bay_id: string;
+  impl: InterBayProjectControlApi;
+}): ConatService {
+  return createServiceHandler<
+    Pick<InterBayProjectControlApi, "hardDeleteStatus">
+  >({
+    ...options,
+    service: "inter-bay-project-control",
+    subject: projectControlSubject({
+      dest_bay: bay_id,
+      method: "hard-delete-status",
+    }),
+    impl: {
+      hardDeleteStatus: async (opts) => await impl.hardDeleteStatus(opts),
     },
   });
 }

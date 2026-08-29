@@ -8,6 +8,9 @@ const expireOrphanedProjectBackupLrosMock = jest.fn();
 
 jest.mock("./lro-db", () => ({
   expireDueLros: (...args: any[]) => expireDueLrosMock(...args),
+}));
+
+jest.mock("./orphan-project-backup-maintenance", () => ({
   expireOrphanedProjectBackupLros: (...args: any[]) =>
     expireOrphanedProjectBackupLrosMock(...args),
 }));

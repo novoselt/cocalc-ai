@@ -467,41 +467,72 @@ export async function expireDueLros({
   return rows as LroSummary[];
 }
 
-export async function expireOrphanedProjectBackupLros({
+export async function listQueuedProjectBackupLroDeletionCandidates({
   limit = 1000,
+  min_age_ms = 10 * 60 * 1000,
 }: {
   limit?: number;
+  min_age_ms?: number;
 } = {}): Promise<LroSummary[]> {
   await ensureLroSchema();
   const boundedLimit = Math.max(1, Math.min(10_000, Math.floor(limit)));
+  const boundedMinAge = Math.max(0, Math.floor(min_age_ms));
   const { rows } = await pool().query(
     `
-      WITH candidates AS (
-        SELECT lro.op_id
-        FROM long_running_operations AS lro
-        WHERE lro.kind='project-backup'
-          AND lro.scope_type='project'
-          AND lro.status='queued'
-          AND lro.dismissed_at IS NULL
-          AND NOT EXISTS (
-            SELECT 1
-            FROM projects
-            WHERE projects.project_id=lro.scope_id
-          )
-        ORDER BY lro.created_at
-        FOR UPDATE OF lro SKIP LOCKED
-        LIMIT $1
-      )
-      UPDATE long_running_operations
-      SET status='expired',
-          error='project no longer exists',
-          finished_at=COALESCE(finished_at, now()),
-          updated_at=now()
-      FROM candidates
-      WHERE long_running_operations.op_id = candidates.op_id
-      RETURNING long_running_operations.*
+      SELECT *
+      FROM long_running_operations
+      WHERE kind='project-backup'
+        AND scope_type='project'
+        AND status='queued'
+        AND dismissed_at IS NULL
+        AND NULLIF(BTRIM(input ->> 'owning_bay_id'), '') IS NOT NULL
+        AND updated_at < NOW() - ($2::text || ' milliseconds')::interval
+      ORDER BY updated_at, created_at
+      LIMIT $1
     `,
-    [boundedLimit],
+    [boundedLimit, boundedMinAge],
+  );
+  return rows as LroSummary[];
+}
+
+export async function finishProjectBackupLroDeletionChecks({
+  checked_op_ids,
+  hard_deleted_op_ids,
+}: {
+  checked_op_ids: string[];
+  hard_deleted_op_ids: string[];
+}): Promise<LroSummary[]> {
+  await ensureLroSchema();
+  if (checked_op_ids.length === 0) return [];
+  const { rows } = await pool().query(
+    `
+      WITH checked AS (
+        UPDATE long_running_operations
+        SET status = CASE
+              WHEN op_id = ANY($2::uuid[]) THEN 'expired'
+              ELSE status
+            END,
+            error = CASE
+              WHEN op_id = ANY($2::uuid[])
+                THEN 'project is authoritatively hard-deleted'
+              ELSE error
+            END,
+            finished_at = CASE
+              WHEN op_id = ANY($2::uuid[])
+                THEN COALESCE(finished_at, NOW())
+              ELSE finished_at
+            END,
+            updated_at = NOW()
+        WHERE op_id = ANY($1::uuid[])
+          AND kind='project-backup'
+          AND scope_type='project'
+          AND status='queued'
+          AND dismissed_at IS NULL
+        RETURNING *
+      )
+      SELECT * FROM checked WHERE status='expired'
+    `,
+    [checked_op_ids, hard_deleted_op_ids],
   );
   return rows as LroSummary[];
 }

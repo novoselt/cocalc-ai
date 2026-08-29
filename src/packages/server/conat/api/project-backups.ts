@@ -166,6 +166,7 @@ async function createBackupLro({
   replace_oldest_at_limit,
   freeze_source,
   dedupe_key,
+  owning_bay_id,
 }: {
   account_id?: string;
   project_id: string;
@@ -175,6 +176,7 @@ async function createBackupLro({
   replace_oldest_at_limit?: boolean;
   freeze_source?: boolean;
   dedupe_key?: string;
+  owning_bay_id: string;
 }): Promise<LroSummary> {
   return await createLro({
     kind: "project-backup",
@@ -189,6 +191,7 @@ async function createBackupLro({
       managed_egress_override,
       replace_oldest_at_limit,
       freeze_source,
+      owning_bay_id,
     },
     status: "queued",
     dedupe_key: dedupe_key ?? backupLroDedupeKey(project_id),
@@ -315,12 +318,14 @@ export async function createBackup(
     managed_egress_override: opts?.managed_egress_override,
   });
   const limit = await getProjectBackupLimit({ project_id });
+  let owningBayId = getConfiguredBayId();
   if (!opts?.skip_owner_route) {
     const ownership = await resolveProjectBay(project_id);
     if (ownership == null) {
       throw new Error(`project ${project_id} not found`);
     }
     if (ownership.bay_id !== getConfiguredBayId()) {
+      owningBayId = ownership.bay_id;
       opts?.on_lro_create_started?.();
       const op = await createBackupLro({
         account_id,
@@ -331,6 +336,7 @@ export async function createBackup(
         replace_oldest_at_limit: opts?.replace_oldest_at_limit,
         freeze_source: opts?.freeze_source,
         dedupe_key: opts?.dedupe_key,
+        owning_bay_id: owningBayId,
       });
       await publishQueuedLroSafe({
         op,
@@ -359,6 +365,7 @@ export async function createBackup(
       }
       return lroResponse({ op, project_id });
     }
+    owningBayId = ownership.bay_id;
   }
   if (!opts?.skip_rootfs_portability_check) {
     await assertPortableProjectRootfs({
@@ -376,6 +383,7 @@ export async function createBackup(
     replace_oldest_at_limit: opts?.replace_oldest_at_limit,
     freeze_source: opts?.freeze_source,
     dedupe_key: opts?.dedupe_key,
+    owning_bay_id: owningBayId,
   });
   await publishQueuedLroSafe({
     op,

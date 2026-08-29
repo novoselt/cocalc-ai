@@ -57,6 +57,33 @@ describe("inter-bay typed service transport", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("routes hard-delete evidence to the exact destination bay", async () => {
+    const response = {
+      project_id: "p1",
+      bay_id: "bay-1",
+      status: "hard-deleted" as const,
+    };
+    const fastRpcRequest = jest.fn(async () => ({
+      raw: encode({ encoding: DataEncoding.MsgPack, mesg: response }),
+    }));
+    const request = jest.fn();
+    const client = createInterBayProjectControlClient({
+      client: { fastRpcRequest, request } as any,
+      dest_bay: "bay-1",
+      timeout: 10_000,
+    });
+
+    await expect(
+      client.hardDeleteStatus({ project_id: "p1" }),
+    ).resolves.toEqual(response);
+    expect(fastRpcRequest).toHaveBeenCalledWith(
+      "bay.bay-1.rpc.project-control.hard-delete-status",
+      { raw: expect.any(Uint8Array) },
+      { timeout: 10_000 },
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("uses request transport for long-running host-control calls", async () => {
     const fastRpcRequest = jest.fn();
     const request = jest.fn(async () => ({ data: { project_id: "p1" } }));

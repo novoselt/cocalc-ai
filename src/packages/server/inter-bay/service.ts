@@ -27,6 +27,7 @@ import {
   createInterBayBayDirectoryHandlers,
   createInterBayDirectoryHandlers,
   createInterBayProjectControlGetEntitlementOverrideHandler,
+  createInterBayProjectControlHardDeleteStatusHandler,
   createInterBayProjectControlHandler,
   createInterBayProjectControlAcceptRehomeHandler,
   createInterBayProjectControlSetUsageAccountHandler,
@@ -333,6 +334,7 @@ import {
   handleProjectControlClearEntitlementOverride,
   handleProjectControlAcceptRehome,
   handleProjectControlGetEntitlementOverride,
+  handleProjectControlHardDeleteStatus,
   handleProjectControlSetUsageAccount,
   handleProjectControlAssignHost,
   handleProjectControlMove,
@@ -1889,6 +1891,8 @@ async function startProjectControlStartService(): Promise<void> {
     },
     backup: async (opts) => await handleProjectControlBackup(opts),
     state: async (opts) => await handleProjectControlState(opts),
+    hardDeleteStatus: async (opts) =>
+      await handleProjectControlHardDeleteStatus(opts),
     setUsageAccount: async (opts) =>
       await handleProjectControlSetUsageAccount(opts),
     assignHost: async (opts) => await handleProjectControlAssignHost(opts),
@@ -1941,6 +1945,12 @@ async function startProjectControlStartService(): Promise<void> {
       impl,
     }),
     createInterBayProjectControlStateHandler({
+      client,
+      bay_id,
+      parallel: true,
+      impl,
+    }),
+    createInterBayProjectControlHardDeleteStatusHandler({
       client,
       bay_id,
       parallel: true,

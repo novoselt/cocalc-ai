@@ -329,7 +329,12 @@ describe("project-backups.createBackup", () => {
         kind: "project-backup",
         scope_type: "project",
         scope_id: "proj-1",
-        input: { project_id: "proj-1", tags: undefined, limit: 5 },
+        input: expect.objectContaining({
+          project_id: "proj-1",
+          tags: undefined,
+          limit: 5,
+          owning_bay_id: "bay-0",
+        }),
       }),
     );
     expect(result).toEqual({

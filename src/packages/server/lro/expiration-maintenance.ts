@@ -4,7 +4,8 @@
  */
 
 import getLogger from "@cocalc/backend/logger";
-import { expireDueLros, expireOrphanedProjectBackupLros } from "./lro-db";
+import { expireDueLros } from "./lro-db";
+import { expireOrphanedProjectBackupLros } from "./orphan-project-backup-maintenance";
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const BATCH_SIZE = 1000;

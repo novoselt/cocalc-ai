@@ -79,16 +79,28 @@ describe("expireDueLros", () => {
   });
 });
 
-describe("expireOrphanedProjectBackupLros", () => {
+describe("project backup LRO deletion checks", () => {
   beforeEach(() => {
     jest.resetModules();
     connectQueryMock = jest.fn(async () => ({ rows: [] }));
     queryMock = jest.fn(async (sql: string) => {
-      if (sql.includes("project no longer exists")) {
+      if (sql.includes("input ->> 'owning_bay_id'")) {
         return {
           rows: [
             {
-              op_id: "11111111-1111-1111-1111-111111111111",
+              op_id: "11111111-1111-4111-8111-111111111111",
+              kind: "project-backup",
+              status: "queued",
+              input: { owning_bay_id: "bay-2" },
+            },
+          ],
+        };
+      }
+      if (sql.includes("authoritatively hard-deleted")) {
+        return {
+          rows: [
+            {
+              op_id: "11111111-1111-4111-8111-111111111111",
               kind: "project-backup",
               status: "expired",
             },
@@ -99,26 +111,51 @@ describe("expireOrphanedProjectBackupLros", () => {
     });
   });
 
-  it("only expires queued project backups with no project row", async () => {
-    const { expireOrphanedProjectBackupLros } = await import("./lro-db");
+  it("lists only stale queued backups carrying an owning bay", async () => {
+    const { listQueuedProjectBackupLroDeletionCandidates } =
+      await import("./lro-db");
 
     await expect(
-      expireOrphanedProjectBackupLros({ limit: 25 }),
+      listQueuedProjectBackupLroDeletionCandidates({
+        limit: 25,
+        min_age_ms: 60_000,
+      }),
     ).resolves.toEqual([
       expect.objectContaining({
         kind: "project-backup",
-        status: "expired",
+        status: "queued",
       }),
     ]);
 
-    const expireCall = queryMock.mock.calls.find(([sql]) =>
-      `${sql}`.includes("project no longer exists"),
+    const listCall = queryMock.mock.calls.find(([sql]) =>
+      `${sql}`.includes("input ->> 'owning_bay_id'"),
     );
-    expect(expireCall?.[0]).toContain("lro.kind='project-backup'");
-    expect(expireCall?.[0]).toContain("lro.status='queued'");
-    expect(expireCall?.[0]).toContain("NOT EXISTS");
-    expect(expireCall?.[0]).toContain("projects.project_id=lro.scope_id");
-    expect(expireCall?.[1]).toEqual([25]);
+    expect(listCall?.[0]).toContain("kind='project-backup'");
+    expect(listCall?.[0]).toContain("status='queued'");
+    expect(listCall?.[0]).toContain("updated_at < NOW()");
+    expect(listCall?.[0]).not.toContain("FROM projects");
+    expect(listCall?.[1]).toEqual([25, 60_000]);
+  });
+
+  it("expires only checked operations with confirmed tombstones", async () => {
+    const { finishProjectBackupLroDeletionChecks } = await import("./lro-db");
+    const op_id = "11111111-1111-4111-8111-111111111111";
+
+    await expect(
+      finishProjectBackupLroDeletionChecks({
+        checked_op_ids: [op_id, "22222222-2222-4222-8222-222222222222"],
+        hard_deleted_op_ids: [op_id],
+      }),
+    ).resolves.toEqual([expect.objectContaining({ status: "expired", op_id })]);
+    const finishCall = queryMock.mock.calls.find(([sql]) =>
+      `${sql}`.includes("authoritatively hard-deleted"),
+    );
+    expect(finishCall?.[0]).toContain("status='queued'");
+    expect(finishCall?.[0]).toContain("op_id = ANY($2::uuid[])");
+    expect(finishCall?.[1]).toEqual([
+      [op_id, "22222222-2222-4222-8222-222222222222"],
+      [op_id],
+    ]);
   });
 });
 
