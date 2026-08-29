@@ -83,5 +83,8 @@ describe("CRM customer queue views", () => {
       owner_account_id: owner,
     });
     expect(queueFilterRequest("active")).toEqual({ statuses: ["active"] });
+    expect(queueFilterRequest("unassigned", owner)).toEqual({
+      unassigned: true,
+    });
   });
 });

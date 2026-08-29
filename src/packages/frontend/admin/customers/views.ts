@@ -68,7 +68,9 @@ export function queueFilterRequest(
 ): Partial<CrmOrganizationListRequest> {
   return {
     ...viewRequest(view),
-    ...(ownerAccountId ? { owner_account_id: ownerAccountId } : {}),
+    ...(view !== "unassigned" && ownerAccountId
+      ? { owner_account_id: ownerAccountId }
+      : {}),
   };
 }
 

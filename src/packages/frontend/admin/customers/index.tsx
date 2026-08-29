@@ -1304,7 +1304,12 @@ function CustomerQueue({
             <Select
               aria-describedby="crm-view-description"
               id="crm-view"
-              onChange={setView}
+              onChange={(nextView) => {
+                setView(nextView);
+                if (nextView === "unassigned") {
+                  setOwner(undefined);
+                }
+              }}
               options={VIEW_OPTIONS}
               style={{ width: "100%" }}
               value={view}
@@ -1339,11 +1344,14 @@ function CustomerQueue({
             <AccountSelector
               accountKind="admin"
               ariaLabel="Relationship owner"
+              disabled={view === "unassigned"}
               onChange={setOwner}
               value={owner}
             />
             <Text className="crm-filter-help" type="secondary">
-              Clear the selection to include every owner.
+              {view === "unassigned"
+                ? "This view only includes organizations without an owner."
+                : "Clear the selection to include every owner."}
             </Text>
           </div>
           <div className="crm-filter-action">
