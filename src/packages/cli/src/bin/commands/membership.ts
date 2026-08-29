@@ -510,10 +510,7 @@ function toDateOrNull(value: unknown): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function isSiteLicenseActiveNow(
-  record: SiteLicenseRecord,
-  now: Date,
-): boolean {
+function isSiteLicenseActiveNow(record: SiteLicenseRecord, now: Date): boolean {
   const starts = toDateOrNull(record.starts_at);
   if (starts != null && starts > now) return false;
   const expires = toDateOrNull(record.expires_at);
@@ -524,6 +521,25 @@ function isSiteLicenseActiveNow(
 function isSiteLicenseExpired(record: SiteLicenseRecord, now: Date): boolean {
   const expires = toDateOrNull(record.expires_at);
   return expires != null && expires <= now;
+}
+
+function getSiteLicensePoolDomains(
+  pool: SiteLicenseOverview["pools"][number],
+): string[] {
+  const candidates = [
+    pool.metadata?.allowed_domains,
+    pool.metadata?.domains,
+    pool.metadata?.email_domains,
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.filter(
+        (value): value is string =>
+          typeof value === "string" && value.trim().length > 0,
+      );
+    }
+  }
+  return [];
 }
 
 function getSiteLicenseOverviewSearchText(
@@ -539,6 +555,7 @@ function getSiteLicenseOverviewSearchText(
     overview.site_license.owner_account_id,
     ...(overview.site_license.allowed_domains ?? []),
     ...overview.pools.map((pool) => pool.pool_name),
+    ...overview.pools.flatMap(getSiteLicensePoolDomains),
     ...overview.managers.map((manager) => manager.account_id),
     ...details.map((entry) => entry.email_address),
     ...details.map((entry) => entry.display_name),

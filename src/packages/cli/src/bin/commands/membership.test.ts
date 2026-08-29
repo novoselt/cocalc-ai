@@ -1489,6 +1489,7 @@ function sampleSiteLicenseOverviews() {
         requires_approval: false,
         verification_policy: "email-domain",
         exclusive_group: "default",
+        metadata: { allowed_domains: ["faculty.collegeofidaho.edu"] },
       },
     ],
     managers: [
@@ -1682,7 +1683,9 @@ test("membership site-license list --manager filters by unrevoked managers", asy
       assert.equal(identifier, "manager@collegeofidaho.edu");
       // uppercase on purpose: the filter must lowercase before comparing
       // against the always-lowercase uuids in overviews
-      return { account_id: "33333333-3333-3333-3333-333333333333".toUpperCase() };
+      return {
+        account_id: "33333333-3333-3333-3333-333333333333".toUpperCase(),
+      };
     },
     resolveProject: async () => {
       throw new Error("should not resolve a project");
@@ -1697,6 +1700,50 @@ test("membership site-license list --manager filters by unrevoked managers", asy
     "list",
     "--manager",
     "manager@collegeofidaho.edu",
+  ]);
+
+  assert.equal(captured?.length, 1);
+  assert.equal(
+    captured?.[0]?.site_license_id,
+    "cccccccc-cccc-cccc-cccc-cccccccccccc",
+  );
+});
+
+test("membership site-license list searches pool-specific domains", async () => {
+  let captured: any;
+  const { idahoOverview, expiredOverview } = sampleSiteLicenseOverviews();
+  const program = new Command();
+  registerMembershipCommand(program, {
+    withContext: async (_command, _label, fn) => {
+      captured = await fn({
+        accountId: "11111111-1111-1111-1111-111111111111",
+        hub: {
+          purchases: {
+            listSiteLicenseOverviews: async () => [
+              idahoOverview,
+              expiredOverview,
+            ],
+          },
+        },
+      });
+    },
+    toIso: (value) => value,
+    resolveAccountByIdentifier: async () => {
+      throw new Error("should not resolve an account");
+    },
+    resolveProject: async () => {
+      throw new Error("should not resolve a project");
+    },
+  } as any);
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "membership",
+    "site-license",
+    "list",
+    "--search",
+    "faculty.collegeofidaho.edu",
   ]);
 
   assert.equal(captured?.length, 1);
