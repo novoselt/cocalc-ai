@@ -650,15 +650,16 @@ describe("receivable order detail", () => {
       }),
     );
 
+    const paymentDialog = await screen.findByRole("dialog", {
+      name: "Record manual payment",
+    });
+    await waitFor(() => expect(paymentDialog).toBeVisible());
     expect(
-      await screen.findByText(
+      await within(paymentDialog).findByText(
         "This Stripe invoice is already fully paid, so no additional manual payment can be recorded.",
       ),
     ).toBeVisible();
-    expect(
-      screen.getByRole("dialog", { name: "Record manual payment" }),
-    ).toBeVisible();
-    expect(screen.getByText("Technical details")).toBeVisible();
+    expect(within(paymentDialog).getByText("Technical details")).toBeVisible();
   });
 
   it("uses provider-appropriate invoice controls and blocks Stripe actions in manual mode", async () => {
