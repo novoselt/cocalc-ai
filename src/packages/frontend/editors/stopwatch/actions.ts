@@ -12,7 +12,10 @@ import { history_path } from "@cocalc/util/misc";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { Actions, Store, TypedMap } from "@cocalc/frontend/app-framework";
 import { canUseSyncDocHistory } from "@cocalc/frontend/lib/syncdoc-history";
+import { getLogger } from "@cocalc/conat/logger";
 import { List } from "immutable";
+
+const logger = getLogger("frontend:stopwatch:actions");
 
 export interface StopwatchEditorState {
   name: string;
@@ -36,6 +39,7 @@ type TimerRecord = TypedMap<Timer>;
 export class TimeActions extends Actions<StopwatchEditorState> {
   private project_id: string;
   private path: string;
+  private autosaveErrorShown = false;
   public syncdb: any;
   public store: Store<StopwatchEditorState>;
 
@@ -68,7 +72,26 @@ export class TimeActions extends Actions<StopwatchEditorState> {
   private _set(obj: Partial<Timer>): void {
     this.syncdb.set(obj);
     this.syncdb.commit();
-    this.syncdb.save_to_disk();
+    void this.saveToDisk();
+  }
+
+  private async saveToDisk(): Promise<void> {
+    try {
+      await this.syncdb.save_to_disk();
+      if (this.syncdb?.isClosed?.() || !this.autosaveErrorShown) return;
+      this.autosaveErrorShown = false;
+      this.init_error(undefined);
+    } catch (err) {
+      if (this.syncdb?.isClosed?.()) return;
+      const error = `Stopwatch error '${this.path}' -- ${err}`;
+      logger.warn("stopwatch autosave to disk failed", {
+        err: `${err}`,
+        project_id: this.project_id,
+        path: this.path,
+      });
+      this.autosaveErrorShown = true;
+      this.init_error(error);
+    }
   }
 
   public addStopwatch(): void {
@@ -93,7 +116,7 @@ export class TimeActions extends Actions<StopwatchEditorState> {
       this.addStopwatch();
     }
     this.syncdb.commit();
-    this.syncdb.save_to_disk();
+    void this.saveToDisk();
   }
 
   public resetStopwatch(id: number): void {

@@ -2,16 +2,16 @@
  *  This file is part of CoCalc: Copyright © 2020 Sagemath, Inc.
  *  License: MS-RSL – see LICENSE.md for details
  */
-import { Editor, Operation, Point } from "slate";
-import { isEqual } from "lodash";
+import { createEditor, Editor, Operation, Point } from "slate";
+import { cloneDeep, isEqual } from "lodash";
 import type { SlateEditor } from "./editable-markdown";
 import { getScrollState, setScrollState } from "./scroll";
 
 export function applyOperations(
   editor: SlateEditor,
   operations: Operation[],
-): void {
-  if (operations.length == 0) return;
+): boolean {
+  if (operations.length == 0) return true;
 
   // window.operations = operations;
 
@@ -22,34 +22,44 @@ export function applyOperations(
     focus: editor.selection?.focus ?? null,
   };
 
+  let applicableOperations: Operation[];
   try {
-    editor.applyingOperations = true; // TODO: not sure if this is at all necessary...
+    applicableOperations = operations.filter((op) => !skipCursor(cursor, op));
+  } catch (err) {
+    warnUnableToApply(err, operations);
+    return false;
+  }
 
+  // Heterogeneous merge_node operations are the observed source of invalid
+  // partial batches. Validate those batches transactionally, but keep common
+  // text-only synchronization on the fast path without cloning the document.
+  if (applicableOperations.some(({ type }) => type === "merge_node")) {
+    const probe = createEditor();
+    probe.children = cloneDeep(editor.children);
+    probe.selection = cloneDeep(editor.selection);
     try {
-      Editor.withoutNormalizing(editor, () => {
-        for (const op of operations) {
-          // Should skip due to just removing whitespace right
-          // before the user's cursor?
-          if (skipCursor(cursor, op)) continue;
-          try {
-            // This can rarely throw an error in production
-            // if somehow the op isn't valid.  Instead of
-            // crashing, we print a warning, and document
-            // "applyOperations" above as "best effort".
-            // The document *should* converge
-            // when the next diff/patch round occurs.
-            editor.apply(op);
-          } catch (err) {
-            console.warn(
-              `WARNING: Slate issue -- unable to apply an operation to the document -- err=${err}, op=${op}`,
-            );
-          }
+      Editor.withoutNormalizing(probe, () => {
+        for (const op of applicableOperations) {
+          probe.apply(op);
         }
       });
     } catch (err) {
-      console.warn(
-        `WARNING: Slate issue -- unable to apply operations to the document -- err=${err} -- could create invalid state`,
-      );
+      warnUnableToApply(err, applicableOperations);
+      return false;
+    }
+  }
+
+  try {
+    editor.applyingOperations = true; // TODO: not sure if this is at all necessary...
+    try {
+      Editor.withoutNormalizing(editor, () => {
+        for (const op of applicableOperations) {
+          editor.apply(op);
+        }
+      });
+    } catch (err) {
+      warnUnableToApply(err, applicableOperations);
+      return false;
     }
 
     /* console.log(
@@ -60,6 +70,14 @@ export function applyOperations(
   } finally {
     editor.applyingOperations = false;
   }
+  return true;
+}
+
+function warnUnableToApply(err: unknown, operations: Operation[]): void {
+  console.warn(
+    "WARNING: Slate issue -- unable to apply operations; falling back to a direct value reset",
+    { err, operations },
+  );
 }
 
 /*

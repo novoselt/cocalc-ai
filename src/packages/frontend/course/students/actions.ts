@@ -195,18 +195,24 @@ export class StudentsActions {
     if (student == null) {
       return;
     }
-    this.doDeleteStudent(student, noTrash);
     // We always remove any deleted student from all student projects and the
     // shared project when they are deleted, since this best aligns with
     // user expectations.  We do this, even if "allow collaborators" is enabled.
-    await this.course_actions.student_projects.removeFromAllStudentProjects(
-      student,
-    );
+    try {
+      await this.course_actions.student_projects.removeFromAllStudentProjects(
+        student,
+      );
+    } catch (err) {
+      this.course_actions.set_error(`Error deleting student - ${err}`);
+      return;
+    }
+    this.doDeleteStudent(student, noTrash);
   }
 
   undelete_student = async (student_id: string): Promise<void> => {
     this.course_actions.set({
       deleted: false,
+      last_email_invite: undefined,
       student_id,
       table: "students",
     });
@@ -218,12 +224,33 @@ export class StudentsActions {
   deleteAllStudents = async (noTrash = false): Promise<void> => {
     const store = this.get_store();
     const students = store.get_students().valueSeq().toArray();
-    for (const student of students) {
-      this.doDeleteStudent(student, noTrash, false);
+    const failures: string[] = [];
+    let deleted = 0;
+    await map(
+      students,
+      store.get_copy_parallel(),
+      async (student: StudentRecord) => {
+        try {
+          await this.course_actions.student_projects.removeFromAllStudentProjects(
+            student,
+          );
+          this.doDeleteStudent(student, noTrash, false);
+          deleted += 1;
+        } catch (err) {
+          failures.push(`${student.get("student_id")}: ${err}`);
+        }
+      },
+    );
+    if (deleted > 0) {
+      this.course_actions.commit();
+      await delay(1); // so store is updated, since it is used by configure
+      await this.course_actions.student_projects.configure_all_projects();
     }
-    this.course_actions.commit();
-    await delay(1); // so store is updated, since it is used by configure
-    await this.course_actions.student_projects.configure_all_projects();
+    if (failures.length > 0) {
+      this.course_actions.set_error(
+        `Error deleting ${failures.length} student${failures.length === 1 ? "" : "s"} - ${failures.join("; ")}`,
+      );
+    }
   };
 
   private doDeleteStudent = (
@@ -247,6 +274,7 @@ export class StudentsActions {
       this.course_actions.set(
         {
           deleted: true,
+          last_email_invite: undefined,
           student_id: student.get("student_id"),
           table: "students",
         },
