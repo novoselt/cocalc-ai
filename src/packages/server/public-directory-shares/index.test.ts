@@ -418,6 +418,46 @@ describe("public directory temporary viewer grants", () => {
     expect(mockGetClusterPublicSharePublisherProfile).not.toHaveBeenCalled();
   });
 
+  it("keeps the original publisher when a collaborator updates the share", async () => {
+    await getPool().query(
+      `INSERT INTO projects (project_id, title, users, last_edited)
+       VALUES ($1, 'Publish project', '{}'::jsonb, NOW())
+       ON CONFLICT (project_id) DO NOTHING`,
+      [PROJECT_ID],
+    );
+    const share = await create({
+      account_id: OWNER_ID,
+      project_id: PROJECT_ID,
+      path: "share",
+      slug: "immutable-publisher-share",
+      reader_instructions: "Temporary override.",
+    });
+    mockGetClusterPublicSharePublisherProfile.mockResolvedValue({
+      reader_instructions_markdown: "Original publisher instructions.",
+    });
+
+    const updated = await update({
+      account_id: ACCOUNT_ID,
+      id: share.id,
+      title: "Edited by a collaborator",
+      reader_instructions: null,
+    });
+    expect(updated.publisher_account_id).toBe(OWNER_ID);
+    expect(updated.reader_instructions).toBeNull();
+
+    const grant = await grantTemporaryViewerAccess({
+      account_id: ACCOUNT_ID,
+      slug: share.slug,
+    });
+    expect(grant.publisher_account_id).toBe(OWNER_ID);
+    expect(grant.publisher_reader_instructions).toBe(
+      "Original publisher instructions.",
+    );
+    expect(mockGetClusterPublicSharePublisherProfile).toHaveBeenCalledWith(
+      OWNER_ID,
+    );
+  });
+
   it("publishes regular files with an exact read policy", async () => {
     await getPool().query(
       `INSERT INTO projects (project_id, title, users, last_edited)

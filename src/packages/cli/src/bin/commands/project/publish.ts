@@ -6,6 +6,7 @@
 import { Command } from "commander";
 
 import type { PublicDirectoryShareSummary } from "@cocalc/conat/hub/api/public-directory-shares";
+import { MAX_PUBLIC_SHARE_READER_INSTRUCTIONS_LENGTH } from "@cocalc/util/public-directory-share-labels";
 import type { ProjectCommandDeps } from "../project";
 
 type PublishOptions = {
@@ -39,6 +40,18 @@ function parseDurationDays(value?: string): number | undefined {
     throw new Error("site-license duration must be a positive number of days");
   }
   return Math.trunc(parsed);
+}
+
+function parseReaderInstructions(value?: string): string | null | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim();
+  if (!normalized) return null;
+  if (normalized.length > MAX_PUBLIC_SHARE_READER_INSTRUCTIONS_LENGTH) {
+    throw new Error(
+      `reader instructions must be at most ${MAX_PUBLIC_SHARE_READER_INSTRUCTIONS_LENGTH.toLocaleString()} characters`,
+    );
+  }
+  return normalized;
 }
 
 export function registerProjectPublishCommands(
@@ -91,7 +104,9 @@ export function registerProjectPublishCommands(
               slug: opts.slug,
               title: opts.title,
               description: opts.description,
-              reader_instructions: opts.readerInstructions,
+              reader_instructions: parseReaderInstructions(
+                opts.readerInstructions,
+              ),
               license: opts.license,
               site_license_grant_on_copy: grantOnCopy,
               site_license_copy_requires_grant:
