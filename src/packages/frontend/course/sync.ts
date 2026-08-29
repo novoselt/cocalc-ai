@@ -69,6 +69,7 @@ export function create_sync_db(
         title: defaultCourseTitle(store.get("course_filename")),
         description: "No description",
         allow_collabs: true,
+        require_invite_email_match: false,
       },
       assignments: {},
       students: {},

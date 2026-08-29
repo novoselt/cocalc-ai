@@ -7,14 +7,62 @@ let poolConnectReleaseMock: jest.Mock;
 let resolveProjectBayMock: jest.Mock;
 let interBayStopMock: jest.Mock;
 let deleteProjectDataOnHostMock: jest.Mock;
+let deleteProjectDataOnHostAfterBackupMock: jest.Mock;
+let releaseProjectDataArchiveFreezeOnHostMock: jest.Mock;
 let appendProjectOutboxEventForProjectMock: jest.Mock;
 let assertProjectNotRehomingMock: jest.Mock;
+let withProjectRehomeWriteFenceMock: jest.Mock;
 let publishProjectAccountFeedEventsBestEffortMock: jest.Mock;
 let routedClientCloseMock: jest.Mock;
 let getExplicitProjectRoutedClientMock: jest.Mock;
 let assertCanPerformDestructiveStorageActionMock: jest.Mock;
 let createProjectArchiveLifecycleJobMock: jest.Mock;
 let updateProjectArchiveLifecycleJobMock: jest.Mock;
+let getProjectArchiveLifecycleFinalBackupMock: jest.Mock;
+let recordProjectArchiveLifecycleFinalBackupMock: jest.Mock;
+let clearProjectArchiveLifecycleFinalBackupMock: jest.Mock;
+let createBackupMock: jest.Mock;
+let waitForDurableLroCompletionMock: jest.Mock;
+let listLrosByDedupeMock: jest.Mock;
+let attestReleasedLroDedupeSuccessesMock: jest.Mock;
+
+const AUTOMATIC_PROJECT_ID = "11111111-1111-4111-8111-111111111111";
+const AUTOMATIC_HOST_ID = "22222222-2222-4222-8222-222222222222";
+const AUTOMATIC_JOB_ID = "77777777-7777-4777-8777-777777777777";
+
+function automaticArchiveRow(overrides: Record<string, any> = {}) {
+  return {
+    project_id: AUTOMATIC_PROJECT_ID,
+    owning_bay_id: "bay-1",
+    host_id: AUTOMATIC_HOST_ID,
+    backup_repo_id: "33333333-3333-4333-8333-333333333333",
+    provisioned: true,
+    state: { state: "archiving" },
+    host_status: "active",
+    last_changed: new Date("2026-06-15T04:00:00.000Z"),
+    last_changed_generation: 10,
+    last_backup: new Date("2026-06-15T05:00:00.000Z"),
+    last_backup_generation: 10,
+    archive_lifecycle_job_id: AUTOMATIC_JOB_ID,
+    ...overrides,
+  };
+}
+
+jest.mock("@cocalc/backend/conat", () => ({
+  __esModule: true,
+  conat: jest.fn(() => ({ name: "test-conat-client" })),
+}));
+
+jest.mock("@cocalc/server/conat/api/project-backups", () => ({
+  __esModule: true,
+  createBackup: (...args: any[]) => createBackupMock(...args),
+}));
+
+jest.mock("@cocalc/server/lro/wait", () => ({
+  __esModule: true,
+  waitForDurableLroCompletion: (...args: any[]) =>
+    waitForDurableLroCompletionMock(...args),
+}));
 
 jest.mock("@cocalc/server/projects/archive-lifecycle-db", () => ({
   __esModule: true,
@@ -22,6 +70,12 @@ jest.mock("@cocalc/server/projects/archive-lifecycle-db", () => ({
     createProjectArchiveLifecycleJobMock(...args),
   updateProjectArchiveLifecycleJob: (...args: any[]) =>
     updateProjectArchiveLifecycleJobMock(...args),
+  getProjectArchiveLifecycleFinalBackup: (...args: any[]) =>
+    getProjectArchiveLifecycleFinalBackupMock(...args),
+  recordProjectArchiveLifecycleFinalBackup: (...args: any[]) =>
+    recordProjectArchiveLifecycleFinalBackupMock(...args),
+  clearProjectArchiveLifecycleFinalBackup: (...args: any[]) =>
+    clearProjectArchiveLifecycleFinalBackupMock(...args),
 }));
 
 jest.mock("@cocalc/server/projects/create", () => ({
@@ -48,6 +102,11 @@ jest.mock("@cocalc/backend/logger", () => ({
 jest.mock("@cocalc/server/accounts/is-admin", () => ({
   __esModule: true,
   default: (...args: any[]) => isAdminMock(...args),
+}));
+
+jest.mock("@cocalc/server/bay-config", () => ({
+  __esModule: true,
+  getConfiguredBayId: jest.fn(() => "bay-1"),
 }));
 
 jest.mock("@cocalc/server/projects/collaborators", () => ({
@@ -81,6 +140,10 @@ jest.mock("@cocalc/server/project-host/control", () => ({
   takeStartProjectPhaseTimings: jest.fn(() => undefined),
   deleteProjectDataOnHost: (...args: any[]) =>
     deleteProjectDataOnHostMock(...args),
+  deleteProjectDataOnHostAfterBackup: (...args: any[]) =>
+    deleteProjectDataOnHostAfterBackupMock(...args),
+  releaseProjectDataArchiveFreezeOnHost: (...args: any[]) =>
+    releaseProjectDataArchiveFreezeOnHostMock(...args),
 }));
 
 jest.mock("@cocalc/server/conat/route-client", () => ({
@@ -116,6 +179,9 @@ jest.mock("@cocalc/server/lro/lro-db", () => ({
   __esModule: true,
   createLro: jest.fn(),
   updateLro: jest.fn(),
+  listLrosByDedupe: (...args: any[]) => listLrosByDedupeMock(...args),
+  attestReleasedLroDedupeSuccesses: (...args: any[]) =>
+    attestReleasedLroDedupeSuccessesMock(...args),
 }));
 
 jest.mock("@cocalc/server/projects/start-lro-progress", () => ({
@@ -154,7 +220,8 @@ jest.mock("@cocalc/database/postgres/project-rehome-fence", () => ({
   __esModule: true,
   assertProjectNotRehoming: (...args: any[]) =>
     assertProjectNotRehomingMock(...args),
-  withProjectRehomeWriteFence: jest.fn(),
+  withProjectRehomeWriteFence: (...args: any[]) =>
+    withProjectRehomeWriteFenceMock(...args),
 }));
 
 jest.mock("@cocalc/server/account/project-feed", () => ({
@@ -198,8 +265,18 @@ describe("projects.archiveProject", () => {
     }));
     interBayStopMock = jest.fn(async () => undefined);
     deleteProjectDataOnHostMock = jest.fn(async () => undefined);
+    deleteProjectDataOnHostAfterBackupMock = jest.fn(async () => undefined);
+    releaseProjectDataArchiveFreezeOnHostMock = jest.fn(async () => ({
+      status: "released",
+    }));
     appendProjectOutboxEventForProjectMock = jest.fn(async () => undefined);
     assertProjectNotRehomingMock = jest.fn(async () => undefined);
+    withProjectRehomeWriteFenceMock = jest.fn(
+      async ({ fn }) =>
+        await fn({
+          query: jest.fn(async () => ({ rowCount: 1, rows: [{ exists: 1 }] })),
+        }),
+    );
     publishProjectAccountFeedEventsBestEffortMock = jest.fn(
       async () => undefined,
     );
@@ -214,6 +291,31 @@ describe("projects.archiveProject", () => {
       id: "77777777-7777-4777-8777-777777777777",
     }));
     updateProjectArchiveLifecycleJobMock = jest.fn(async () => undefined);
+    getProjectArchiveLifecycleFinalBackupMock = jest.fn(async () => undefined);
+    recordProjectArchiveLifecycleFinalBackupMock = jest.fn(
+      async () => undefined,
+    );
+    clearProjectArchiveLifecycleFinalBackupMock = jest.fn(
+      async () => undefined,
+    );
+    listLrosByDedupeMock = jest.fn(async () => []);
+    attestReleasedLroDedupeSuccessesMock = jest.fn(async () => []);
+    createBackupMock = jest.fn(async (_input, opts) => {
+      opts?.on_lro_create_started?.();
+      return {
+        op_id: "88888888-8888-4888-8888-888888888888",
+        scope_type: "project",
+        scope_id: "11111111-1111-4111-8111-111111111111",
+      };
+    });
+    waitForDurableLroCompletionMock = jest.fn(async () => ({
+      status: "succeeded",
+      result: {
+        id: "final-backup-id",
+        time: "2026-06-15T05:30:00.000Z",
+        generation: 10,
+      },
+    }));
   });
 
   it("archives a provisioned project with durable backup metadata", async () => {
@@ -363,7 +465,7 @@ describe("projects.archiveProject", () => {
 
   it("automatic archive never stops and requires its current claim", async () => {
     const jobId = "77777777-7777-4777-8777-777777777777";
-    poolQueryMock.mockResolvedValueOnce({
+    poolQueryMock.mockResolvedValue({
       rows: [
         {
           project_id: "11111111-1111-4111-8111-111111111111",
@@ -395,7 +497,836 @@ describe("projects.archiveProject", () => {
     ).resolves.toBeUndefined();
 
     expect(interBayStopMock).not.toHaveBeenCalled();
-    expect(deleteProjectDataOnHostMock).toHaveBeenCalledTimes(1);
+    expect(createBackupMock).toHaveBeenCalledWith(
+      {
+        project_id: "11111111-1111-4111-8111-111111111111",
+        tags: ["automatic-project-archive-final"],
+      },
+      expect.objectContaining({
+        skip_collab_check: true,
+        skip_rootfs_portability_check: true,
+        replace_oldest_at_limit: true,
+        freeze_source: true,
+        dedupe_key:
+          "automatic-project-archive-final:77777777-7777-4777-8777-777777777777",
+      }),
+    );
+    expect(waitForDurableLroCompletionMock).toHaveBeenCalledTimes(1);
+    expect(recordProjectArchiveLifecycleFinalBackupMock).toHaveBeenCalledWith({
+      job_id: jobId,
+      backup_id: "final-backup-id",
+      backup_generation: 10,
+      backup_time: "2026-06-15T05:30:00.000Z",
+      expected_previous_backup_id: null,
+    });
+    expect(
+      recordProjectArchiveLifecycleFinalBackupMock.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      deleteProjectDataOnHostAfterBackupMock.mock.invocationCallOrder[0],
+    );
+    expect(deleteProjectDataOnHostAfterBackupMock).toHaveBeenCalledWith({
+      project_id: "11111111-1111-4111-8111-111111111111",
+      host_id: "22222222-2222-4222-8222-222222222222",
+      expected_backup_id: "final-backup-id",
+      expected_generation: 10,
+    });
+    expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
+  });
+
+  it("releases the final backup freeze when ownership changes during backup", async () => {
+    const localOwnership = { bay_id: "bay-1", epoch: 7 };
+    resolveProjectBayMock
+      .mockResolvedValueOnce(localOwnership)
+      .mockResolvedValueOnce(localOwnership)
+      .mockResolvedValueOnce(localOwnership)
+      .mockResolvedValueOnce({ bay_id: "bay-2", epoch: 8 });
+    poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+
+    const { archiveProjectStorage, ProjectArchiveStorageError } =
+      await import("@cocalc/server/projects/archive");
+    const error = await archiveProjectStorage({
+      project_id: AUTOMATIC_PROJECT_ID,
+      mode: "automatic",
+      job_id: AUTOMATIC_JOB_ID,
+      reason: "free-inactive",
+      expected_host_id: AUTOMATIC_HOST_ID,
+    }).catch((err) => err);
+
+    expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+    expect(error.message).toContain(
+      "automatic archive ownership changed for project",
+    );
+    expect(error.hostCleanupCompleted).toBe(false);
+    expect(error.reopenSafe).toBe(true);
+    expect(recordProjectArchiveLifecycleFinalBackupMock).not.toHaveBeenCalled();
+    expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+    expect(releaseProjectDataArchiveFreezeOnHostMock).toHaveBeenCalledWith({
+      project_id: AUTOMATIC_PROJECT_ID,
+      host_id: AUTOMATIC_HOST_ID,
+      expected_generation: 10,
+    });
+    expect(clearProjectArchiveLifecycleFinalBackupMock).toHaveBeenCalledWith({
+      job_id: AUTOMATIC_JOB_ID,
+      backup_id: "final-backup-id",
+      backup_generation: 10,
+    });
+  });
+
+  it("holds the rehome fence across checked host deletion and finalization", async () => {
+    poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+    let rehomeFenceHeld = false;
+    assertProjectNotRehomingMock.mockImplementationOnce(async () => {
+      rehomeFenceHeld = true;
+    });
+    deleteProjectDataOnHostAfterBackupMock.mockImplementationOnce(async () => {
+      expect(rehomeFenceHeld).toBe(true);
+    });
+    poolConnectQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === "BEGIN") return { rowCount: 0, rows: [] };
+      if (sql === "COMMIT" || sql === "ROLLBACK") {
+        rehomeFenceHeld = false;
+        return { rowCount: 0, rows: [] };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: AUTOMATIC_PROJECT_ID,
+        mode: "automatic",
+        job_id: AUTOMATIC_JOB_ID,
+        reason: "free-inactive",
+        expected_host_id: AUTOMATIC_HOST_ID,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(deleteProjectDataOnHostAfterBackupMock).toHaveBeenCalledTimes(1);
+    expect(rehomeFenceHeld).toBe(false);
+  });
+
+  it("does not delete after the fenced ownership claim becomes stale", async () => {
+    poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+    poolConnectQueryMock.mockImplementation(async (sql: string) => {
+      if (sql.includes("SELECT 1") && sql.includes("FOR UPDATE")) {
+        return { rowCount: 0, rows: [] };
+      }
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
+        return { rowCount: 0, rows: [] };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+
+    const { archiveProjectStorage, ProjectArchiveStorageError } =
+      await import("@cocalc/server/projects/archive");
+    const error = await archiveProjectStorage({
+      project_id: AUTOMATIC_PROJECT_ID,
+      mode: "automatic",
+      job_id: AUTOMATIC_JOB_ID,
+      reason: "free-inactive",
+      expected_host_id: AUTOMATIC_HOST_ID,
+    }).catch((err) => err);
+
+    expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+    expect(error.message).toContain(
+      "automatic archive ownership, claim, or placement changed before cleanup",
+    );
+    expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+    expect(releaseProjectDataArchiveFreezeOnHostMock).toHaveBeenCalledWith({
+      project_id: AUTOMATIC_PROJECT_ID,
+      host_id: AUTOMATIC_HOST_ID,
+      expected_generation: 10,
+    });
+  });
+
+  it("recovers a succeeded final-backup LRO before fresh admission checks", async () => {
+    listLrosByDedupeMock.mockResolvedValueOnce([
+      {
+        op_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        scope_type: "project",
+        scope_id: AUTOMATIC_PROJECT_ID,
+        status: "failed",
+        result: { archive_freeze_recovery: "released" },
+      },
+      {
+        op_id: "88888888-8888-4888-8888-888888888888",
+        scope_type: "project",
+        scope_id: AUTOMATIC_PROJECT_ID,
+        status: "succeeded",
+        result: {
+          id: "recovered-final-backup-id",
+          time: "2026-06-15T05:30:00.000Z",
+          generation: 10,
+        },
+      },
+    ]);
+    poolQueryMock.mockResolvedValue({
+      rows: [
+        automaticArchiveRow({
+          host_status: "off",
+          last_backup: null,
+          last_backup_generation: null,
+        }),
+      ],
+    });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: AUTOMATIC_PROJECT_ID,
+        mode: "automatic",
+        job_id: AUTOMATIC_JOB_ID,
+        reason: "free-inactive",
+        expected_host_id: AUTOMATIC_HOST_ID,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(createBackupMock).not.toHaveBeenCalled();
+    expect(waitForDurableLroCompletionMock).not.toHaveBeenCalled();
+    expect(recordProjectArchiveLifecycleFinalBackupMock).toHaveBeenCalledWith({
+      job_id: AUTOMATIC_JOB_ID,
+      backup_id: "recovered-final-backup-id",
+      backup_generation: 10,
+      backup_time: "2026-06-15T05:30:00.000Z",
+      expected_previous_backup_id: null,
+    });
+    expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse a succeeded final-backup LRO after its freeze was released", async () => {
+    listLrosByDedupeMock.mockResolvedValueOnce([
+      {
+        op_id: "88888888-8888-4888-8888-888888888888",
+        scope_type: "project",
+        scope_id: AUTOMATIC_PROJECT_ID,
+        status: "succeeded",
+        result: {
+          id: "released-final-backup-id",
+          time: "2026-06-15T05:30:00.000Z",
+          generation: 10,
+          archive_freeze_recovery: "released",
+        },
+      },
+    ]);
+    poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: AUTOMATIC_PROJECT_ID,
+        mode: "automatic",
+        job_id: AUTOMATIC_JOB_ID,
+        reason: "free-inactive",
+        expected_host_id: AUTOMATIC_HOST_ID,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(createBackupMock).toHaveBeenCalledTimes(1);
+    expect(recordProjectArchiveLifecycleFinalBackupMock).toHaveBeenCalledWith(
+      expect.objectContaining({ backup_id: "final-backup-id" }),
+    );
+  });
+
+  it("resumes an active final-backup LRO instead of creating another", async () => {
+    listLrosByDedupeMock.mockResolvedValueOnce([
+      {
+        op_id: "99999999-9999-4999-8999-999999999999",
+        scope_type: "project",
+        scope_id: AUTOMATIC_PROJECT_ID,
+        status: "running",
+      },
+    ]);
+    poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: AUTOMATIC_PROJECT_ID,
+        mode: "automatic",
+        job_id: AUTOMATIC_JOB_ID,
+        reason: "free-inactive",
+        expected_host_id: AUTOMATIC_HOST_ID,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(createBackupMock).not.toHaveBeenCalled();
+    expect(waitForDurableLroCompletionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        op_id: "99999999-9999-4999-8999-999999999999",
+        scope_type: "project",
+        scope_id: AUTOMATIC_PROJECT_ID,
+      }),
+    );
+    expect(deleteProjectDataOnHostAfterBackupMock).toHaveBeenCalledWith({
+      project_id: AUTOMATIC_PROJECT_ID,
+      host_id: AUTOMATIC_HOST_ID,
+      expected_backup_id: "final-backup-id",
+      expected_generation: 10,
+    });
+  });
+
+  it("does not recover an older success across a newer uncertain attempt", async () => {
+    listLrosByDedupeMock.mockResolvedValueOnce([
+      {
+        op_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        scope_type: "project",
+        scope_id: AUTOMATIC_PROJECT_ID,
+        status: "failed",
+        result: { archive_freeze_recovery: "uncertain" },
+      },
+      {
+        op_id: "88888888-8888-4888-8888-888888888888",
+        scope_type: "project",
+        scope_id: AUTOMATIC_PROJECT_ID,
+        status: "succeeded",
+        result: {
+          id: "possibly-pruned-backup-id",
+          time: "2026-06-15T05:15:00.000Z",
+          generation: 10,
+        },
+      },
+    ]);
+    poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: AUTOMATIC_PROJECT_ID,
+        mode: "automatic",
+        job_id: AUTOMATIC_JOB_ID,
+        reason: "free-inactive",
+        expected_host_id: AUTOMATIC_HOST_ID,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(createBackupMock).toHaveBeenCalledTimes(1);
+    expect(recordProjectArchiveLifecycleFinalBackupMock).toHaveBeenCalledWith(
+      expect.objectContaining({ backup_id: "final-backup-id" }),
+    );
+  });
+
+  it.each([
+    ["not started", { archive_freeze_recovery: "not-started" }],
+    ["released", { archive_freeze_recovery: "released" }],
+  ])(
+    "does not let a new %s failure override older uncertain freeze history",
+    async (_case, result) => {
+      listLrosByDedupeMock.mockResolvedValueOnce([
+        {
+          op_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          scope_type: "project",
+          scope_id: AUTOMATIC_PROJECT_ID,
+          status: "failed",
+          result: { archive_freeze_recovery: "uncertain" },
+        },
+      ]);
+      waitForDurableLroCompletionMock.mockResolvedValueOnce({
+        status: "failed",
+        error: "new retry failed safely",
+        result,
+      });
+      poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+
+      const { archiveProjectStorage, ProjectArchiveStorageError } =
+        await import("@cocalc/server/projects/archive");
+      const error = await archiveProjectStorage({
+        project_id: AUTOMATIC_PROJECT_ID,
+        mode: "automatic",
+        job_id: AUTOMATIC_JOB_ID,
+        reason: "free-inactive",
+        expected_host_id: AUTOMATIC_HOST_ID,
+      }).catch((err) => err);
+
+      expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+      expect(error.reopenSafe).toBe(false);
+    },
+  );
+
+  it.each([
+    ["uncertain", { archive_freeze_recovery: "uncertain" }, false],
+    ["released", { archive_freeze_recovery: "released" }, true],
+  ])(
+    "treats a pre-admission failure after %s LRO history safely",
+    async (_case, result, reopenSafe) => {
+      listLrosByDedupeMock.mockResolvedValueOnce([
+        {
+          op_id: "88888888-8888-4888-8888-888888888888",
+          scope_type: "project",
+          scope_id: AUTOMATIC_PROJECT_ID,
+          status: "failed",
+          result,
+        },
+      ]);
+      createBackupMock.mockRejectedValueOnce(
+        new Error("managed backup egress blocked before LRO creation"),
+      );
+      poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+
+      const { archiveProjectStorage, ProjectArchiveStorageError } =
+        await import("@cocalc/server/projects/archive");
+      const error = await archiveProjectStorage({
+        project_id: AUTOMATIC_PROJECT_ID,
+        mode: "automatic",
+        job_id: AUTOMATIC_JOB_ID,
+        reason: "free-inactive",
+        expected_host_id: AUTOMATIC_HOST_ID,
+      }).catch((err) => err);
+
+      expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+      expect(error.message).toContain(
+        "managed backup egress blocked before LRO creation",
+      );
+      expect(error.reopenSafe).toBe(reopenSafe);
+      expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+      expect(releaseProjectDataArchiveFreezeOnHostMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fails closed when final-backup LRO history cannot be read", async () => {
+    listLrosByDedupeMock.mockRejectedValueOnce(
+      new Error("LRO database unavailable"),
+    );
+    poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+
+    const { archiveProjectStorage, ProjectArchiveStorageError } =
+      await import("@cocalc/server/projects/archive");
+    const error = await archiveProjectStorage({
+      project_id: AUTOMATIC_PROJECT_ID,
+      mode: "automatic",
+      job_id: AUTOMATIC_JOB_ID,
+      reason: "free-inactive",
+      expected_host_id: AUTOMATIC_HOST_ID,
+    }).catch((err) => err);
+
+    expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+    expect(error.message).toContain("LRO database unavailable");
+    expect(error.reopenSafe).toBe(false);
+    expect(createBackupMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when LRO creation starts but its result is lost", async () => {
+    createBackupMock.mockImplementationOnce(async (_input, opts) => {
+      opts?.on_lro_create_started?.();
+      throw new Error("backup LRO commit response lost");
+    });
+    poolQueryMock.mockResolvedValue({ rows: [automaticArchiveRow()] });
+
+    const { archiveProjectStorage, ProjectArchiveStorageError } =
+      await import("@cocalc/server/projects/archive");
+    const error = await archiveProjectStorage({
+      project_id: AUTOMATIC_PROJECT_ID,
+      mode: "automatic",
+      job_id: AUTOMATIC_JOB_ID,
+      reason: "free-inactive",
+      expected_host_id: AUTOMATIC_HOST_ID,
+    }).catch((err) => err);
+
+    expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+    expect(error.message).toContain("backup LRO commit response lost");
+    expect(error.reopenSafe).toBe(false);
+  });
+
+  it("automatic archive retries cleanup without backing up a deleted volume", async () => {
+    const jobId = "77777777-7777-4777-8777-777777777777";
+    getProjectArchiveLifecycleFinalBackupMock.mockResolvedValueOnce({
+      id: "final-backup-id",
+      generation: 10,
+      time: "2026-06-15T05:30:00.000Z",
+    });
+    poolQueryMock.mockResolvedValue({
+      rows: [
+        {
+          project_id: "11111111-1111-4111-8111-111111111111",
+          owning_bay_id: "bay-1",
+          host_id: "22222222-2222-4222-8222-222222222222",
+          backup_repo_id: "33333333-3333-4333-8333-333333333333",
+          provisioned: true,
+          state: { state: "archiving" },
+          host_status: "active",
+          last_changed: new Date("2026-06-15T04:00:00.000Z"),
+          last_changed_generation: 10,
+          last_backup: new Date("2026-06-15T05:00:00.000Z"),
+          last_backup_generation: 10,
+          archive_lifecycle_job_id: jobId,
+        },
+      ],
+    });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: "11111111-1111-4111-8111-111111111111",
+        mode: "automatic",
+        job_id: jobId,
+        reason: "free-inactive",
+        expected_host_id: "22222222-2222-4222-8222-222222222222",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(createBackupMock).not.toHaveBeenCalled();
+    expect(waitForDurableLroCompletionMock).not.toHaveBeenCalled();
+    expect(recordProjectArchiveLifecycleFinalBackupMock).not.toHaveBeenCalled();
+    expect(deleteProjectDataOnHostAfterBackupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("finalizes from a persisted final backup when the host is unavailable", async () => {
+    const jobId = "77777777-7777-4777-8777-777777777777";
+    getProjectArchiveLifecycleFinalBackupMock.mockResolvedValueOnce({
+      id: "final-backup-id",
+      generation: 10,
+      time: "2026-06-15T05:30:00.000Z",
+    });
+    poolQueryMock.mockResolvedValue({
+      rows: [
+        {
+          project_id: "11111111-1111-4111-8111-111111111111",
+          owning_bay_id: "bay-1",
+          host_id: "22222222-2222-4222-8222-222222222222",
+          backup_repo_id: "33333333-3333-4333-8333-333333333333",
+          provisioned: true,
+          state: { state: "archiving" },
+          host_status: "off",
+          last_changed: new Date("2026-06-15T04:00:00.000Z"),
+          last_changed_generation: 10,
+          last_backup: new Date("2026-06-15T05:00:00.000Z"),
+          last_backup_generation: 10,
+          archive_lifecycle_job_id: jobId,
+        },
+      ],
+    });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: "11111111-1111-4111-8111-111111111111",
+        mode: "automatic",
+        job_id: jobId,
+        reason: "free-inactive",
+        expected_host_id: "22222222-2222-4222-8222-222222222222",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(createBackupMock).not.toHaveBeenCalled();
+    expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+    expect(poolConnectQueryMock).toHaveBeenCalledWith(
+      expect.stringContaining("UPDATE projects"),
+      expect.anything(),
+    );
+  });
+
+  it("finalizes an already deprovisioned automatic archive without a host", async () => {
+    const jobId = "77777777-7777-4777-8777-777777777777";
+    poolQueryMock.mockResolvedValue({
+      rows: [
+        {
+          project_id: "11111111-1111-4111-8111-111111111111",
+          owning_bay_id: "bay-1",
+          host_id: "22222222-2222-4222-8222-222222222222",
+          backup_repo_id: "33333333-3333-4333-8333-333333333333",
+          provisioned: false,
+          state: { state: "archiving" },
+          host_status: "deprovisioned",
+          last_backup: new Date("2026-06-15T05:00:00.000Z"),
+          archive_lifecycle_job_id: jobId,
+        },
+      ],
+    });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: "11111111-1111-4111-8111-111111111111",
+        mode: "automatic",
+        job_id: jobId,
+        reason: "free-inactive",
+        expected_host_id: "22222222-2222-4222-8222-222222222222",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(createBackupMock).not.toHaveBeenCalled();
+    expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["absent", true, false, false, false],
+    ["released", false, true, true, false],
+    ["already-writable", false, true, true, false],
+    ["released with marker-clear failure", false, false, true, true],
+  ])(
+    "handles a %s volume after a lost deletion response",
+    async (
+      status,
+      hostCleanupCompleted,
+      reopenSafe,
+      markerClearCalled,
+      markerClearFails,
+    ) => {
+      const jobId = "77777777-7777-4777-8777-777777777777";
+      const row = {
+        project_id: "11111111-1111-4111-8111-111111111111",
+        owning_bay_id: "bay-1",
+        host_id: "22222222-2222-4222-8222-222222222222",
+        backup_repo_id: "33333333-3333-4333-8333-333333333333",
+        provisioned: true,
+        state: { state: "archiving" },
+        host_status: "active",
+        last_changed: new Date("2026-06-15T04:00:00.000Z"),
+        last_changed_generation: 10,
+        last_backup: new Date("2026-06-15T05:00:00.000Z"),
+        last_backup_generation: 10,
+        archive_lifecycle_job_id: jobId,
+      };
+      poolQueryMock
+        .mockResolvedValueOnce({ rows: [row] })
+        .mockResolvedValueOnce({ rows: [row] });
+      deleteProjectDataOnHostAfterBackupMock.mockRejectedValueOnce(
+        new Error("host response lost"),
+      );
+      releaseProjectDataArchiveFreezeOnHostMock.mockResolvedValueOnce({
+        status: status.startsWith("released") ? "released" : status,
+      });
+      if (markerClearFails) {
+        clearProjectArchiveLifecycleFinalBackupMock.mockRejectedValueOnce(
+          new Error("marker clear failed"),
+        );
+      }
+
+      const { archiveProjectStorage, ProjectArchiveStorageError } =
+        await import("@cocalc/server/projects/archive");
+      const error = await archiveProjectStorage({
+        project_id: row.project_id,
+        mode: "automatic",
+        job_id: jobId,
+        reason: "free-inactive",
+        expected_host_id: row.host_id,
+      }).catch((err) => err);
+
+      expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+      expect(error.hostCleanupCompleted).toBe(hostCleanupCompleted);
+      expect(error.reopenSafe).toBe(reopenSafe);
+      expect(clearProjectArchiveLifecycleFinalBackupMock).toHaveBeenCalledTimes(
+        markerClearCalled ? 1 : 0,
+      );
+    },
+  );
+
+  it("does not reopen after release while another LRO remains uncertain", async () => {
+    const row = automaticArchiveRow();
+    poolQueryMock.mockResolvedValue({ rows: [row] });
+    deleteProjectDataOnHostAfterBackupMock.mockRejectedValueOnce(
+      new Error("host response lost"),
+    );
+    releaseProjectDataArchiveFreezeOnHostMock.mockResolvedValueOnce({
+      status: "released",
+    });
+    attestReleasedLroDedupeSuccessesMock.mockResolvedValueOnce([
+      {
+        op_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        status: "failed",
+        result: { archive_freeze_recovery: "uncertain" },
+      },
+      {
+        op_id: "88888888-8888-4888-8888-888888888888",
+        status: "succeeded",
+        result: { id: "final-backup-id", generation: 10 },
+      },
+    ]);
+
+    const { archiveProjectStorage, ProjectArchiveStorageError } =
+      await import("@cocalc/server/projects/archive");
+    const error = await archiveProjectStorage({
+      project_id: AUTOMATIC_PROJECT_ID,
+      mode: "automatic",
+      job_id: AUTOMATIC_JOB_ID,
+      reason: "free-inactive",
+      expected_host_id: AUTOMATIC_HOST_ID,
+    }).catch((err) => err);
+
+    expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+    expect(error.reopenSafe).toBe(false);
+    expect(attestReleasedLroDedupeSuccessesMock).toHaveBeenCalledWith({
+      scope_type: "project",
+      scope_id: AUTOMATIC_PROJECT_ID,
+      dedupe_key: `automatic-project-archive-final:${AUTOMATIC_JOB_ID}`,
+      expected_result_id: "final-backup-id",
+      expected_generation: 10,
+    });
+    expect(clearProjectArchiveLifecycleFinalBackupMock).toHaveBeenCalledTimes(
+      1,
+    );
+  });
+
+  it("automatic archive replaces a stale final-backup marker after reopening", async () => {
+    const jobId = "77777777-7777-4777-8777-777777777777";
+    getProjectArchiveLifecycleFinalBackupMock.mockResolvedValueOnce({
+      id: "stale-final-backup-id",
+      generation: 9,
+      time: "2026-06-15T03:30:00.000Z",
+    });
+    poolQueryMock.mockResolvedValue({
+      rows: [
+        {
+          project_id: "11111111-1111-4111-8111-111111111111",
+          owning_bay_id: "bay-1",
+          host_id: "22222222-2222-4222-8222-222222222222",
+          backup_repo_id: "33333333-3333-4333-8333-333333333333",
+          provisioned: true,
+          state: { state: "archiving" },
+          host_status: "active",
+          last_changed: new Date("2026-06-15T04:00:00.000Z"),
+          last_changed_generation: 10,
+          last_backup: new Date("2026-06-15T05:00:00.000Z"),
+          last_backup_generation: 10,
+          archive_lifecycle_job_id: jobId,
+        },
+      ],
+    });
+
+    const { archiveProjectStorage } =
+      await import("@cocalc/server/projects/archive");
+    await expect(
+      archiveProjectStorage({
+        project_id: "11111111-1111-4111-8111-111111111111",
+        mode: "automatic",
+        job_id: jobId,
+        reason: "free-inactive",
+        expected_host_id: "22222222-2222-4222-8222-222222222222",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(createBackupMock).toHaveBeenCalledTimes(1);
+    expect(recordProjectArchiveLifecycleFinalBackupMock).toHaveBeenCalledWith({
+      job_id: jobId,
+      backup_id: "final-backup-id",
+      backup_generation: 10,
+      backup_time: "2026-06-15T05:30:00.000Z",
+      expected_previous_backup_id: "stale-final-backup-id",
+    });
+    expect(deleteProjectDataOnHostAfterBackupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["not started", { archive_freeze_recovery: "not-started" }, true],
+    ["confirmed released", { archive_freeze_recovery: "released" }, true],
+    ["uncertain", { archive_freeze_recovery: "uncertain" }, false],
+  ])(
+    "automatic archive preserves host data after a %s final-backup failure",
+    async (_case, result, reopenSafe) => {
+      const jobId = "77777777-7777-4777-8777-777777777777";
+      poolQueryMock.mockResolvedValue({
+        rows: [
+          {
+            project_id: "11111111-1111-4111-8111-111111111111",
+            owning_bay_id: "bay-1",
+            host_id: "22222222-2222-4222-8222-222222222222",
+            backup_repo_id: "33333333-3333-4333-8333-333333333333",
+            provisioned: true,
+            state: { state: "archiving" },
+            host_status: "active",
+            last_changed: new Date("2026-06-15T04:00:00.000Z"),
+            last_changed_generation: 10,
+            last_backup: new Date("2026-06-15T05:00:00.000Z"),
+            last_backup_generation: 10,
+            archive_lifecycle_job_id: jobId,
+          },
+        ],
+      });
+      waitForDurableLroCompletionMock.mockResolvedValueOnce({
+        status: "failed",
+        error: "R2 unavailable",
+        result,
+      });
+
+      const { archiveProjectStorage, ProjectArchiveStorageError } =
+        await import("@cocalc/server/projects/archive");
+      const error = await archiveProjectStorage({
+        project_id: "11111111-1111-4111-8111-111111111111",
+        mode: "automatic",
+        job_id: jobId,
+        reason: "free-inactive",
+        expected_host_id: "22222222-2222-4222-8222-222222222222",
+      }).catch((err) => err);
+
+      expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+      expect(error.message).toContain(
+        "final automatic archive backup failed: R2 unavailable",
+      );
+      expect(error.hostCleanupCompleted).toBe(false);
+      expect(error.reopenSafe).toBe(reopenSafe);
+      expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
+      expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+      expect(releaseProjectDataArchiveFreezeOnHostMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("automatic archive revalidates generation coverage after final backup", async () => {
+    const jobId = "77777777-7777-4777-8777-777777777777";
+    const row = {
+      project_id: "11111111-1111-4111-8111-111111111111",
+      owning_bay_id: "bay-1",
+      host_id: "22222222-2222-4222-8222-222222222222",
+      backup_repo_id: "33333333-3333-4333-8333-333333333333",
+      provisioned: true,
+      state: { state: "archiving" },
+      host_status: "active",
+      last_changed: new Date("2026-06-15T04:00:00.000Z"),
+      last_changed_generation: 10,
+      last_backup: new Date("2026-06-15T05:00:00.000Z"),
+      last_backup_generation: 10,
+      archive_lifecycle_job_id: jobId,
+    };
+    poolQueryMock
+      .mockResolvedValueOnce({ rows: [row] })
+      .mockResolvedValueOnce({ rows: [row] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            ...row,
+            last_changed: new Date("2026-06-15T06:00:00.000Z"),
+            last_changed_generation: 11,
+            last_backup: new Date("2026-06-15T06:30:00.000Z"),
+            last_backup_generation: 11,
+          },
+        ],
+      });
+
+    const { archiveProjectStorage, ProjectArchiveStorageError } =
+      await import("@cocalc/server/projects/archive");
+    const error = await archiveProjectStorage({
+      project_id: "11111111-1111-4111-8111-111111111111",
+      mode: "automatic",
+      job_id: jobId,
+      reason: "free-inactive",
+      expected_host_id: "22222222-2222-4222-8222-222222222222",
+    }).catch((err) => err);
+
+    expect(error).toBeInstanceOf(ProjectArchiveStorageError);
+    expect(error.message).toContain(
+      "final automatic archive backup does not cover the current filesystem generation",
+    );
+    expect(error.reopenSafe).toBe(true);
+
+    expect(recordProjectArchiveLifecycleFinalBackupMock).not.toHaveBeenCalled();
+    expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
+    expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
+    expect(releaseProjectDataArchiveFreezeOnHostMock).toHaveBeenCalledWith({
+      project_id: "11111111-1111-4111-8111-111111111111",
+      host_id: "22222222-2222-4222-8222-222222222222",
+      expected_generation: 10,
+    });
+    expect(clearProjectArchiveLifecycleFinalBackupMock).toHaveBeenCalledWith({
+      job_id: "77777777-7777-4777-8777-777777777777",
+      backup_id: "final-backup-id",
+      backup_generation: 10,
+    });
   });
 
   it("automatic archive rejects a busy project without stopping or deleting it", async () => {
@@ -430,5 +1361,6 @@ describe("projects.archiveProject", () => {
 
     expect(interBayStopMock).not.toHaveBeenCalled();
     expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
+    expect(deleteProjectDataOnHostAfterBackupMock).not.toHaveBeenCalled();
   });
 });

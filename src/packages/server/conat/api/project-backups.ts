@@ -163,14 +163,20 @@ async function createBackupLro({
   tags,
   limit,
   managed_egress_override,
+  replace_oldest_at_limit,
+  freeze_source,
   dedupe_key,
+  owning_bay_id,
 }: {
   account_id?: string;
   project_id: string;
   tags?: string[];
   limit?: number;
   managed_egress_override?: ManagedBackupEgressOverride;
+  replace_oldest_at_limit?: boolean;
+  freeze_source?: boolean;
   dedupe_key?: string;
+  owning_bay_id: string;
 }): Promise<LroSummary> {
   return await createLro({
     kind: "project-backup",
@@ -178,7 +184,15 @@ async function createBackupLro({
     scope_id: project_id,
     created_by: account_id,
     routing: "hub",
-    input: { project_id, tags, limit, managed_egress_override },
+    input: {
+      project_id,
+      tags,
+      limit,
+      managed_egress_override,
+      replace_oldest_at_limit,
+      freeze_source,
+      owning_bay_id,
+    },
     status: "queued",
     dedupe_key: dedupe_key ?? backupLroDedupeKey(project_id),
   });
@@ -192,6 +206,8 @@ async function runRemoteBackup({
   dest_bay,
   epoch,
   managed_egress_override,
+  replace_oldest_at_limit,
+  freeze_source,
 }: {
   account_id?: string;
   project_id: string;
@@ -200,6 +216,8 @@ async function runRemoteBackup({
   dest_bay: string;
   epoch?: number;
   managed_egress_override?: ManagedBackupEgressOverride;
+  replace_oldest_at_limit?: boolean;
+  freeze_source?: boolean;
 }) {
   const running = await updateLro({
     op_id: op.op_id,
@@ -229,6 +247,8 @@ async function runRemoteBackup({
         tags,
         epoch,
         managed_egress_override,
+        replace_oldest_at_limit,
+        freeze_source,
       });
     const updated = await updateLro({
       op_id: op.op_id,
@@ -277,7 +297,10 @@ export async function createBackup(
     skip_rootfs_portability_check?: boolean;
     skip_owner_route?: boolean;
     managed_egress_override?: ManagedBackupEgressOverride;
+    replace_oldest_at_limit?: boolean;
+    freeze_source?: boolean;
     dedupe_key?: string;
+    on_lro_create_started?: () => void;
   },
 ): Promise<{
   op_id: string;
@@ -295,19 +318,25 @@ export async function createBackup(
     managed_egress_override: opts?.managed_egress_override,
   });
   const limit = await getProjectBackupLimit({ project_id });
+  let owningBayId = getConfiguredBayId();
   if (!opts?.skip_owner_route) {
     const ownership = await resolveProjectBay(project_id);
     if (ownership == null) {
       throw new Error(`project ${project_id} not found`);
     }
     if (ownership.bay_id !== getConfiguredBayId()) {
+      owningBayId = ownership.bay_id;
+      opts?.on_lro_create_started?.();
       const op = await createBackupLro({
         account_id,
         project_id,
         tags,
         limit,
         managed_egress_override: opts?.managed_egress_override,
+        replace_oldest_at_limit: opts?.replace_oldest_at_limit,
+        freeze_source: opts?.freeze_source,
         dedupe_key: opts?.dedupe_key,
+        owning_bay_id: owningBayId,
       });
       await publishQueuedLroSafe({
         op,
@@ -323,6 +352,8 @@ export async function createBackup(
           dest_bay: ownership.bay_id,
           epoch: ownership.epoch,
           managed_egress_override: opts?.managed_egress_override,
+          replace_oldest_at_limit: opts?.replace_oldest_at_limit,
+          freeze_source: opts?.freeze_source,
         }).catch((err) =>
           log.warn("remote backup failed", {
             op_id: op.op_id,
@@ -334,6 +365,7 @@ export async function createBackup(
       }
       return lroResponse({ op, project_id });
     }
+    owningBayId = ownership.bay_id;
   }
   if (!opts?.skip_rootfs_portability_check) {
     await assertPortableProjectRootfs({
@@ -341,13 +373,17 @@ export async function createBackup(
       operation: "backup",
     });
   }
+  opts?.on_lro_create_started?.();
   const op = await createBackupLro({
     account_id,
     project_id,
     tags,
     limit,
     managed_egress_override: opts?.managed_egress_override,
+    replace_oldest_at_limit: opts?.replace_oldest_at_limit,
+    freeze_source: opts?.freeze_source,
     dedupe_key: opts?.dedupe_key,
+    owning_bay_id: owningBayId,
   });
   await publishQueuedLroSafe({
     op,

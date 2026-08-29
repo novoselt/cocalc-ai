@@ -62,7 +62,7 @@ import "./receivables.css";
 
 const { Paragraph, Text, Title } = Typography;
 
-type SavedView =
+export type SavedView =
   | "needs-action"
   | "unassigned"
   | "awaiting-customer"
@@ -121,15 +121,23 @@ const UNPAID_COLLECTION_STATES: CommercialCollectionState[] = [
   "uncollectible",
 ];
 
-function savedViewRequest(view: SavedView) {
+export function savedViewRequest(view: SavedView) {
   switch (view) {
     case "needs-action":
-      return { needs_action: true };
+      return {
+        workflow_states: [
+          "draft",
+          "ready_to_invoice",
+        ] as CommercialWorkflowState[],
+      };
     case "unassigned":
       return { assignee_account_id: null, needs_action: true };
     case "awaiting-customer":
       return {
-        workflow_states: ["awaiting_customer"] as CommercialWorkflowState[],
+        workflow_states: [
+          "awaiting_customer",
+          "awaiting_payment",
+        ] as CommercialWorkflowState[],
       };
     case "ready-to-invoice":
       return {

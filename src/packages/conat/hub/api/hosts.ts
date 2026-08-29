@@ -1152,6 +1152,10 @@ export interface HostPlacementSnapshot {
 export interface HostRuntimeExceptionSummary {
   host_override_count: number;
   host_override_targets: HostRuntimeDeploymentTarget[];
+  host_overrides?: Array<{
+    target_type: HostRuntimeDeploymentTargetType;
+    target: HostRuntimeDeploymentTarget;
+  }>;
 }
 
 export interface HostPublicRouteProbe {

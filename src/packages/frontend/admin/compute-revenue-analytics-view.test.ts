@@ -106,10 +106,17 @@ describe("compute revenue analytics view", () => {
       end: "2026-08-24",
     });
     expect(view.series.map(({ label }) => label)).toEqual([
+      "Virtual machines",
+      "Dedicated hosts",
       "Personal",
       "Team license",
-      "Dedicated hosts",
+    ]);
+    expect(view.summary.map(({ label }) => label)).toEqual([
+      "Total",
       "Virtual machines",
+      "Dedicated hosts",
+      "Personal",
+      "Team license",
     ]);
     expect(view.summary[0].revenueCents).toBe(1650);
   });

@@ -62,6 +62,7 @@ test("project publish calls public directory share create API", async () => {
     slug: "Cambridge/Book Code",
     title: "Book Code",
     description: "Examples",
+    reader_instructions: undefined,
     license: undefined,
     site_license_grant_on_copy: false,
     site_license_copy_requires_grant: true,
@@ -70,6 +71,59 @@ test("project publish calls public directory share create API", async () => {
     site_license_duration_days: undefined,
   });
   assert.equal(output.url_path, "/share/Cambridge/Book%20Code");
+});
+
+test("project publish validates reader instructions", async () => {
+  const captured: any[] = [];
+  const deps = {
+    withContext: async (_command, _label, fn) => {
+      await fn({});
+    },
+    hubCallByName: async (_ctx, _name, args) => {
+      captured.push(args[0]);
+      return {
+        id: "share-id",
+        project_id: "project-id",
+        path: "x",
+        slug: "cambridge/x",
+      };
+    },
+    resolveProjectFromArgOrContext: async () => ({
+      project_id: "project-id",
+      title: "Project",
+    }),
+  };
+
+  async function publish(readerInstructions: string) {
+    const program = new Command();
+    program.exitOverride();
+    program.name("cocalc");
+    const project = program.command("project");
+    registerProjectPublishCommands(project, deps as any);
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "project",
+      "publish",
+      "x",
+      "--slug",
+      "cambridge/x",
+      "--reader-instructions",
+      readerInstructions,
+    ]);
+  }
+
+  await publish("  Select **Copy**.  ");
+  assert.equal(captured[0].reader_instructions, "Select **Copy**.");
+
+  await publish("   ");
+  assert.equal(captured[1].reader_instructions, null);
+
+  await assert.rejects(
+    publish("x".repeat(8001)),
+    /reader instructions must be at most 8,000 characters/,
+  );
+  assert.equal(captured.length, 2);
 });
 
 test("project publish enables site-license grants from pool option", async () => {

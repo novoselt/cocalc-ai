@@ -194,7 +194,7 @@ export const AccountStorageWarning: React.FC<{
     const load = async () => {
       if (!shouldPollUsageWarnings()) return;
       try {
-        const next = await getWarningMembershipDetails();
+        const next = await getWarningMembershipDetails(account_id);
         if (mounted) {
           setDetails(next ?? null);
         }
@@ -211,7 +211,7 @@ export const AccountStorageWarning: React.FC<{
     );
     const refresh = () => void load();
     const updateFromFreshDetails = (event: Event) => {
-      const next = getMembershipDetailsRefreshedEventDetail(event);
+      const next = getMembershipDetailsRefreshedEventDetail(event, account_id);
       if (mounted && next) {
         setDetails(next);
       }

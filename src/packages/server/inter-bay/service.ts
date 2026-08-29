@@ -27,6 +27,7 @@ import {
   createInterBayBayDirectoryHandlers,
   createInterBayDirectoryHandlers,
   createInterBayProjectControlGetEntitlementOverrideHandler,
+  createInterBayProjectControlHardDeleteStatusHandler,
   createInterBayProjectControlHandler,
   createInterBayProjectControlAcceptRehomeHandler,
   createInterBayProjectControlSetUsageAccountHandler,
@@ -91,6 +92,10 @@ import {
 import { getArchiveLifecycleAccountStatusesLocal } from "@cocalc/server/accounts/archive-lifecycle-status";
 import adminVerifyEmailAddressLocal from "@cocalc/server/accounts/admin-verify-email-address";
 import sendEmailVerificationLocal from "@cocalc/server/accounts/send-email-verification";
+import {
+  getPublicSharePublisherProfileLocal,
+  updatePublicSharePublisherProfileLocal,
+} from "@cocalc/server/accounts/public-share-publisher-profile";
 import {
   grantAdminRole as grantAdminRoleLocal,
   revokeAdminRole as revokeAdminRoleLocal,
@@ -329,6 +334,7 @@ import {
   handleProjectControlClearEntitlementOverride,
   handleProjectControlAcceptRehome,
   handleProjectControlGetEntitlementOverride,
+  handleProjectControlHardDeleteStatus,
   handleProjectControlSetUsageAccount,
   handleProjectControlAssignHost,
   handleProjectControlMove,
@@ -679,8 +685,8 @@ async function startBayOpsService(): Promise<void> {
       seed_bay_id: getConfiguredClusterSeedBayId(),
       bays: [{ bay_id, ok: true }],
     }),
-    getActiveUserMap: async ({ active_minutes }) =>
-      await getActiveUserMapOverview({ active_minutes }),
+    getActiveUserMap: async ({ active_minutes, group_by }) =>
+      await getActiveUserMapOverview({ active_minutes, group_by }),
     getActiveUserMapHistoryReport: async (opts) =>
       await getActiveUserMapHistoryReport(opts),
     getActiveUserMapHistorySeries: async (opts) => {
@@ -1160,6 +1166,10 @@ async function startAccountLocalService(): Promise<void> {
     getVerifiedEmailAddresses: async ({ account_id }) => ({
       email_addresses: await getVerifiedEmailAddressesForAccount(account_id),
     }),
+    getPublicSharePublisherProfile: async (opts) =>
+      await getPublicSharePublisherProfileLocal(opts),
+    updatePublicSharePublisherProfile: async (opts) =>
+      await updatePublicSharePublisherProfileLocal(opts),
     createLegacyMigrationProject: async ({
       account_id,
       legacy_project_id,
@@ -1881,6 +1891,8 @@ async function startProjectControlStartService(): Promise<void> {
     },
     backup: async (opts) => await handleProjectControlBackup(opts),
     state: async (opts) => await handleProjectControlState(opts),
+    hardDeleteStatus: async (opts) =>
+      await handleProjectControlHardDeleteStatus(opts),
     setUsageAccount: async (opts) =>
       await handleProjectControlSetUsageAccount(opts),
     assignHost: async (opts) => await handleProjectControlAssignHost(opts),
@@ -1933,6 +1945,12 @@ async function startProjectControlStartService(): Promise<void> {
       impl,
     }),
     createInterBayProjectControlStateHandler({
+      client,
+      bay_id,
+      parallel: true,
+      impl,
+    }),
+    createInterBayProjectControlHardDeleteStatusHandler({
       client,
       bay_id,
       parallel: true,
@@ -2910,6 +2928,14 @@ async function startHostControlService(): Promise<void> {
       await (await getHostClient(host_id, 30_000)).applyPendingCopies(apply),
     deleteProjectData: async ({ host_id, del }) =>
       await (await getHostClient(host_id, 30_000)).deleteProjectData(del),
+    deleteProjectDataAfterBackup: async ({ host_id, del }) =>
+      await (
+        await getHostClient(host_id, 30_000)
+      ).deleteProjectDataAfterBackup(del),
+    releaseProjectDataArchiveFreeze: async ({ host_id, release }) =>
+      await (
+        await getHostClient(host_id, 30_000)
+      ).releaseProjectDataArchiveFreeze(release),
     upgradeSoftware: async ({ host_id, upgrade }) =>
       await (
         await getHostClient(host_id, 10 * 60 * 1000)

@@ -24,6 +24,7 @@ let createNotificationEventGraphMock: jest.Mock;
 let resolveNotificationTargetHomeBaysMock: jest.Mock;
 let appendProjectLogRowBestEffortMock: jest.Mock;
 let claimCourseMembershipPackageSeatsForAcceptedInviteMock: jest.Mock;
+let getVerifiedEmailAddressForAccountMock: jest.Mock;
 
 jest.mock("@cocalc/server/conat/project-local-access", () => ({
   __esModule: true,
@@ -128,6 +129,12 @@ jest.mock("@cocalc/server/accounts/trusted-product-access", () => ({
   __esModule: true,
   assertAccountTrustedForProductAccess: (...args: any[]) =>
     assertAccountTrustedForProductAccessMock(...args),
+}));
+
+jest.mock("@cocalc/server/accounts/verified-email-address", () => ({
+  __esModule: true,
+  getVerifiedEmailAddressForAccount: (...args: any[]) =>
+    getVerifiedEmailAddressForAccountMock(...args),
 }));
 
 jest.mock("@cocalc/server/membership/resolve", () => ({
@@ -292,6 +299,7 @@ describe("project collaborators local bay access", () => {
     claimCourseMembershipPackageSeatsForAcceptedInviteMock = jest.fn(
       async () => [],
     );
+    getVerifiedEmailAddressForAccountMock = jest.fn(async () => undefined);
     createNotificationEventGraphMock = jest.fn(async () => ({
       event: { event_id: "99999999-9999-4999-8999-999999999999" },
       targets: [],
@@ -1473,6 +1481,7 @@ describe("project collaborators local bay access", () => {
           to: "nobody@example.com",
           email: "<p>Hello</p>",
           message: "Please join",
+          require_email_match: true,
         },
       }),
     ).resolves.toMatchObject({
@@ -1486,6 +1495,12 @@ describe("project collaborators local bay access", () => {
         }),
       ],
     });
+    expect(queryMock).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO project_collab_invites"),
+      expect.arrayContaining([
+        JSON.stringify({ require_invite_email_match: true }),
+      ]),
+    );
   });
 
   it("blocks course email invites at the pending-per-course limit", async () => {
@@ -1987,6 +2002,7 @@ describe("project collaborators local bay access", () => {
               email_ciphertext: encryptedInviteEmail("invite@example.com"),
               context: {
                 course_project_id: courseProjectId,
+                require_invite_email_match: true,
                 student_id: studentId,
                 student_project_id: PROJECT_ID,
               },
@@ -2049,6 +2065,9 @@ describe("project collaborators local bay access", () => {
     });
 
     const { redeemEmailProjectInvite } = await import("./collaborators");
+    getVerifiedEmailAddressForAccountMock.mockResolvedValue(
+      "invite@example.com",
+    );
     resolveProjectReferenceAllowRemoteMock.mockResolvedValueOnce({
       project_id: courseProjectId,
       users: { [ACCOUNT_ID]: { group: "collaborator" } },
@@ -2101,6 +2120,87 @@ describe("project collaborators local bay access", () => {
       project_id: courseProjectId,
       warmRoute: false,
     });
+  });
+
+  it("rejects a protected project invite for a different verified email", async () => {
+    const inviteId = "77777777-7777-4777-8777-777777777777";
+    const token = "email-bound-project-invite";
+    getVerifiedEmailAddressForAccountMock.mockResolvedValue(
+      "other@example.com",
+    );
+    queryMock = jest.fn(async (sql: string) => {
+      if (
+        sql.includes(
+          "SELECT invite_id, project_id, inviter_account_id, status, token_hash",
+        )
+      ) {
+        return {
+          rows: [
+            {
+              invite_id: inviteId,
+              project_id: PROJECT_ID,
+              inviter_account_id: TARGET_ACCOUNT_ID,
+              status: "pending",
+              token_hash: inviteTokenHash(token),
+              scope: "project_collab",
+              email_ciphertext: encryptedInviteEmail("invite@example.com"),
+              context: { require_invite_email_match: true },
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const { redeemEmailProjectInvite } = await import("./collaborators");
+    await expect(
+      redeemEmailProjectInvite({
+        account_id: ACCOUNT_ID,
+        invite_id: inviteId,
+        token,
+      }),
+    ).rejects.toThrow(
+      "does not use the verified email address that received this invitation",
+    );
+    expect(addUserToProject).not.toHaveBeenCalled();
+    expect(ensureAccountSecurityStateReadyMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a protected invite when the signed-in email is unverified", async () => {
+    const inviteId = "77777777-7777-4777-8777-777777777777";
+    const token = "verified-email-required-token";
+    queryMock = jest.fn(async (sql: string) => {
+      if (
+        sql.includes(
+          "SELECT invite_id, project_id, inviter_account_id, status, token_hash",
+        )
+      ) {
+        return {
+          rows: [
+            {
+              invite_id: inviteId,
+              project_id: PROJECT_ID,
+              inviter_account_id: TARGET_ACCOUNT_ID,
+              status: "pending",
+              token_hash: inviteTokenHash(token),
+              email_ciphertext: encryptedInviteEmail("invite@example.com"),
+              context: { require_invite_email_match: true },
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const { previewEmailProjectInvite } = await import("./collaborators");
+    await expect(
+      previewEmailProjectInvite({
+        account_id: ACCOUNT_ID,
+        invite_id: inviteId,
+        token,
+      }),
+    ).rejects.toThrow("requires a verified email address");
+    expect(addUserToProject).not.toHaveBeenCalled();
   });
 
   it("rejects email invite acceptance when the sender is no longer a project collaborator", async () => {

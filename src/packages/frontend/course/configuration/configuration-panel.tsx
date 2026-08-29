@@ -13,6 +13,7 @@ import HelpPopover from "@cocalc/frontend/course/common/help-popover";
 import { course } from "@cocalc/frontend/i18n";
 import { MarkdownInput } from "@cocalc/frontend/markdown/markdown-input/main";
 import { SharedProjectPanel } from "@cocalc/frontend/course/shared-project/shared-project-panel";
+import { COLORS } from "@cocalc/util/theme";
 import { CourseActions } from "../actions";
 import { CourseSettingsRecord, CourseStore } from "../store";
 import ConfigurationCopying from "./configuration-copying";
@@ -26,6 +27,7 @@ import { StudentProjectHostConfig } from "./student-project-host";
 import { StudentProjectRootfsConfig } from "./student-project-rootfs";
 import { SharedSecrets } from "./shared-secrets";
 import StudentPay from "./student-pay";
+import { InviteEmailAddressRequirement } from "@cocalc/frontend/collaborators/invite-email-address-requirement";
 
 interface Props {
   frame_id: string;
@@ -73,7 +75,7 @@ export function ConfigurationPanel({
             name={name}
           />
           <br />
-          <EmailInvitation actions={actions} name={name} />
+          <EmailInvitation actions={actions} name={name} settings={settings} />
           <br />
           <SharedProjectPanel
             settings={settings}
@@ -205,7 +207,7 @@ export function TitleAndDescription({ actions, settings, name }) {
   );
 }
 
-export function EmailInvitation({ actions, name }) {
+export function EmailInvitation({ actions, name, settings }) {
   const intl = useIntl();
   const store = useStore<CourseStore>({ name });
 
@@ -241,7 +243,7 @@ export function EmailInvitation({ actions, name }) {
     >
       <div
         style={{
-          border: "1px solid lightgrey",
+          border: `1px solid ${COLORS.GRAY_L}`,
           padding: "10px",
           borderRadius: "5px",
         }}
@@ -254,6 +256,12 @@ export function EmailInvitation({ actions, name }) {
           on_save={saveEmailInvite}
         />
       </div>
+      <InviteEmailAddressRequirement
+        checked={!!settings.get("require_invite_email_match")}
+        onChange={async (required) =>
+          await actions.configuration.set_require_invite_email_match(required)
+        }
+      />
     </Card>
   );
 }

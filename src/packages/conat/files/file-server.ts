@@ -43,6 +43,11 @@ import { isValidUUID } from "@cocalc/util/misc";
 
 const SUBJECT = "file-server";
 
+// Returned only when a freeze-capable backup failed and the project host
+// confirmed that the source is writable with staged snapshots restored.
+export const ARCHIVE_BACKUP_SOURCE_RELEASED_ERROR_CODE =
+  "archive-backup-source-released";
+
 export type RestoreMode = "none" | "auto" | "recover" | "required";
 export type SnapshotRestoreMode = "home" | "rootfs" | "both";
 
@@ -332,7 +337,9 @@ export interface Fileserver {
     tags?: string[];
     lro?: LroRef;
     managed_egress_override?: ManagedBackupEgressOverride;
-  }) => Promise<{ time: Date; id: string }>;
+    replace_oldest_at_limit?: boolean;
+    freeze_source?: boolean;
+  }) => Promise<{ time: Date; id: string; generation: number | null }>;
   // Back up the source project HOME into an externally supplied rustic
   // repository. This is used for admin site-to-site migration; rootfs state
   // must be pruned before the backup is written.

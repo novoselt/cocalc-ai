@@ -722,6 +722,19 @@ export interface HostControlApi {
     limit?: number;
   }) => Promise<{ claimed: number }>;
   deleteProjectData: (opts: { project_id: string }) => Promise<void>;
+  // Deliberately separate from deleteProjectData: old hosts must reject this
+  // archive barrier instead of silently ignoring expected_generation.
+  deleteProjectDataAfterBackup: (opts: {
+    project_id: string;
+    expected_backup_id: string;
+    expected_generation: number;
+  }) => Promise<void>;
+  releaseProjectDataArchiveFreeze: (opts: {
+    project_id: string;
+    expected_generation: number;
+  }) => Promise<{
+    status: "absent" | "already-writable" | "released";
+  }>;
   upgradeSoftware: (
     opts: UpgradeSoftwareRequest,
   ) => Promise<UpgradeSoftwareResponse>;

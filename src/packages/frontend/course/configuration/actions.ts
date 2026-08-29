@@ -111,6 +111,22 @@ export class ConfigurationActions {
     this.set({ email_invite: body, table: "settings" });
   };
 
+  set_require_invite_email_match = async (
+    require_invite_email_match: boolean,
+  ): Promise<void> => {
+    // Publish the local settings change before constructing the reconfigure
+    // request so every managed project receives the new invite policy.
+    this.course_actions.set(
+      {
+        require_invite_email_match,
+        table: "settings",
+      },
+      true,
+      true,
+    );
+    await this.course_actions.student_projects.configure_all_projects();
+  };
+
   // Set membership payment requirements and propagate the course field to every
   // student project so project-level access checks see the current course state.
   set_course_membership = async ({

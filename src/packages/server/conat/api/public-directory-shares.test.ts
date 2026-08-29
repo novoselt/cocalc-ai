@@ -27,6 +27,8 @@ let mockCurrentBayId = "bay-0";
 let mockSeedBayId = "bay-0";
 const mockListClusterBayRegistry = jest.fn();
 const mockResolveProjectBayAcrossCluster = jest.fn();
+const mockGetClusterPublicSharePublisherProfile = jest.fn();
+const mockUpdateClusterPublicSharePublisherProfile = jest.fn();
 
 jest.mock("@cocalc/backend/logger", () => () => ({
   warn: jest.fn(),
@@ -58,6 +60,13 @@ jest.mock("@cocalc/server/inter-bay/directory", () => ({
 jest.mock("@cocalc/server/inter-bay/fabric", () => ({
   getInterBayFabricClient: (...args: any[]) =>
     mockGetInterBayFabricClient(...args),
+}));
+
+jest.mock("@cocalc/server/inter-bay/accounts", () => ({
+  getClusterPublicSharePublisherProfile: (...args: any[]) =>
+    mockGetClusterPublicSharePublisherProfile(...args),
+  updateClusterPublicSharePublisherProfile: (...args: any[]) =>
+    mockUpdateClusterPublicSharePublisherProfile(...args),
 }));
 
 jest.mock("@cocalc/server/public-directory-shares", () => ({
@@ -118,6 +127,34 @@ describe("public directory share conat API routing", () => {
       { bay_id: "bay-0" },
       { bay_id: "bay-1" },
     ]);
+  });
+
+  it("routes publisher profile reads and writes through the account home bay", async () => {
+    mockGetClusterPublicSharePublisherProfile.mockResolvedValue({
+      reader_instructions_markdown: "Use Copy.",
+    });
+    mockUpdateClusterPublicSharePublisherProfile.mockResolvedValue({
+      reader_instructions_markdown: "Use Copy, then open figures.",
+    });
+
+    await expect(
+      publicDirectoryShares.getPublisherProfile({ account_id: "account-id" }),
+    ).resolves.toEqual({ reader_instructions_markdown: "Use Copy." });
+    await expect(
+      publicDirectoryShares.updatePublisherProfile({
+        account_id: "account-id",
+        reader_instructions_markdown: "Use Copy, then open figures.",
+      }),
+    ).resolves.toEqual({
+      reader_instructions_markdown: "Use Copy, then open figures.",
+    });
+    expect(mockGetClusterPublicSharePublisherProfile).toHaveBeenCalledWith(
+      "account-id",
+    );
+    expect(mockUpdateClusterPublicSharePublisherProfile).toHaveBeenCalledWith({
+      account_id: "account-id",
+      reader_instructions_markdown: "Use Copy, then open figures.",
+    });
   });
 
   it("resolves a share from another registered bay when local seed lookup misses", async () => {

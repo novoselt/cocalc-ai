@@ -1,7 +1,37 @@
 import {
   runtimeDeploymentsForManagedComponentVersion,
   shouldAlignRuntimeStackForSoftwareArtifacts,
+  withoutRuntimeArtifactOverride,
 } from "./runtime-deployments";
+
+describe("withoutRuntimeArtifactOverride", () => {
+  it("removes only the selected artifact and preserves component overrides", () => {
+    const deployments = [
+      {
+        target_type: "artifact" as const,
+        target: "project-host" as const,
+        desired_version: "ph-v2",
+      },
+      {
+        target_type: "component" as const,
+        target: "acp-worker" as const,
+        desired_version: "ph-v1",
+      },
+      {
+        target_type: "artifact" as const,
+        target: "tools" as const,
+        desired_version: "tools-v1",
+      },
+    ];
+
+    expect(
+      withoutRuntimeArtifactOverride({
+        deployments,
+        artifact: "project-host",
+      }),
+    ).toEqual([deployments[1], deployments[2]]);
+  });
+});
 
 describe("runtimeDeploymentsForManagedComponentVersion", () => {
   it("pins the matching project-host artifact alongside the component target", () => {

@@ -69,6 +69,10 @@ interface Snapshot {
   summary: { [key: string]: string | number };
 }
 
+interface CreatedSnapshot extends Snapshot {
+  snapshotGeneration: number;
+}
+
 function flattenSnapshotGroups(groups: any): any[] {
   if (!Array.isArray(groups)) {
     return [];
@@ -173,7 +177,7 @@ export class SubvolumeRustic {
 
   private async createTempBackupSnapshot(
     name: string,
-  ): Promise<{ snapshotPath: string }> {
+  ): Promise<{ snapshotPath: string; generation: number }> {
     const stagingRoot = this.backupStagingRoot();
     await sudo({ command: "mkdir", args: ["-p", stagingRoot] });
     const snapshotPath = join(stagingRoot, name);
@@ -194,7 +198,27 @@ export class SubvolumeRustic {
         invalidateBtrfsQgroupShowRaw(this.subvolume.filesystem.opts.mount);
       },
     });
-    return { snapshotPath };
+    try {
+      const { stdout } = await btrfs({
+        args: ["subvolume", "show", snapshotPath],
+        err_on_exit: true,
+        verbose: false,
+      });
+      const match = `${stdout}`.match(/^\s*Generation\s*:\s*(\d+)\s*$/im);
+      const snapshotGeneration = Number.parseInt(match?.[1] ?? "", 10);
+      if (
+        !Number.isSafeInteger(snapshotGeneration) ||
+        snapshotGeneration <= 0
+      ) {
+        throw new Error(
+          `unable to read temporary backup snapshot generation: ${snapshotPath}`,
+        );
+      }
+      return { snapshotPath, generation: snapshotGeneration };
+    } catch (err) {
+      await this.deleteTempBackupSnapshot(snapshotPath).catch(() => undefined);
+      throw err;
+    }
   }
 
   private async deleteTempBackupSnapshot(snapshotPath: string): Promise<void> {
@@ -232,7 +256,7 @@ export class SubvolumeRustic {
     parent,
     progress,
     runner,
-  }: RusticBackupOptions = {}): Promise<Snapshot> => {
+  }: RusticBackupOptions = {}): Promise<CreatedSnapshot> => {
     if (limit != null && (await this.snapshots()).length >= limit) {
       // 507 = "insufficient storage" for http
       throw new ConatError(`there is a limit of ${limit} backups`, {
@@ -249,7 +273,8 @@ export class SubvolumeRustic {
       glob,
     ]);
     const tempSnapshot = makeTempRusticSnapshotName();
-    const { snapshotPath } = await this.createTempBackupSnapshot(tempSnapshot);
+    const { snapshotPath, generation: snapshotGeneration } =
+      await this.createTempBackupSnapshot(tempSnapshot);
     try {
       logger.debug(
         `backup: created ${tempSnapshot} at ${snapshotPath} to get a consistent backup`,
@@ -298,6 +323,7 @@ export class SubvolumeRustic {
         time: backupTime,
         id,
         summary,
+        snapshotGeneration,
       };
     } finally {
       this.snapshotsCache = null;
@@ -309,7 +335,7 @@ export class SubvolumeRustic {
   };
 
   // create a new rustic backup
-  backup = async (opts: RusticBackupOptions = {}): Promise<Snapshot> => {
+  backup = async (opts: RusticBackupOptions = {}): Promise<CreatedSnapshot> => {
     return await this.backupUnlocked(opts);
   };
 
@@ -349,11 +375,7 @@ export class SubvolumeRustic {
 
   // returns list of backups, sorted from oldest to newest
   private snapshotsCache: Snapshot[] | null = null;
-  snapshots = reuseInFlight(async (): Promise<Snapshot[]> => {
-    if (this.snapshotsCache) {
-      // potentially very expensive to get list -- we clear this on delete or create
-      return this.snapshotsCache;
-    }
+  private listSnapshotsFresh = async (): Promise<Snapshot[]> => {
     const { stdout, truncated } = parseOutput(
       await this.rusticHost(["snapshots", "--json"], {
         timeout: DEFAULT_SNAPSHOTS_TIMEOUT_MS,
@@ -421,7 +443,23 @@ export class SubvolumeRustic {
     });
     this.snapshotsCache = v;
     return v;
+  };
+
+  snapshots = reuseInFlight(async (): Promise<Snapshot[]> => {
+    if (this.snapshotsCache) {
+      // potentially very expensive to get list -- we clear this on delete or create
+      return this.snapshotsCache;
+    }
+    return await this.listSnapshotsFresh();
   });
+
+  // Archive deletion must not trust a cache that may predate a concurrent
+  // forget operation for the only durable copy of the project.
+  snapshotExists = async ({ id }: { id: string }): Promise<boolean> => {
+    return (await this.listSnapshotsFresh()).some(
+      (snapshot) => snapshot.id === id,
+    );
+  };
 
   // Delete this backup.  It's genuinely not accessible anymore, though
   // this doesn't actually clean up disk space -- purge must be done separately

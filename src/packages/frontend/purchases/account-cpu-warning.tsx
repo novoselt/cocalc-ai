@@ -176,7 +176,7 @@ export const AccountCpuWarning: React.FC<{
     const load = async () => {
       if (!shouldPollUsageWarnings()) return;
       try {
-        const next = await getWarningAccountUsageOverview();
+        const next = await getWarningAccountUsageOverview(account_id);
         if (mounted) {
           setOverview(next ?? null);
         }
@@ -193,7 +193,10 @@ export const AccountCpuWarning: React.FC<{
     );
     const refresh = () => void load();
     const updateFromFreshOverview = (event: Event) => {
-      const next = getAccountUsageOverviewRefreshedEventDetail(event);
+      const next = getAccountUsageOverviewRefreshedEventDetail(
+        event,
+        account_id,
+      );
       if (mounted && next) {
         setOverview(next);
       }

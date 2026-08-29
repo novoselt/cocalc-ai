@@ -62,6 +62,18 @@ export function viewRequest(
   }
 }
 
+export function queueFilterRequest(
+  view: CustomerView,
+  ownerAccountId?: string,
+): Partial<CrmOrganizationListRequest> {
+  return {
+    ...viewRequest(view),
+    ...(view !== "unassigned" && ownerAccountId
+      ? { owner_account_id: ownerAccountId }
+      : {}),
+  };
+}
+
 function hasOpenOpportunity(
   customer: CrmOrganizationSummary,
   kind: CrmOpportunityKind,

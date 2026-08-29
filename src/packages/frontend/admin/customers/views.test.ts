@@ -7,6 +7,7 @@ import type { CrmOrganizationSummary } from "@cocalc/util/crm";
 import {
   customerMatchesView,
   emptyViewDescription,
+  queueFilterRequest,
   viewDescription,
   viewRequest,
 } from "./views";
@@ -73,5 +74,17 @@ describe("CRM customer queue views", () => {
     expect(emptyViewDescription("pilots", true)).toBe(
       "No search results match this view.",
     );
+  });
+
+  it("combines a saved view with a relationship-owner filter", () => {
+    const owner = "00000000-0000-4000-8000-000000000003";
+    expect(queueFilterRequest("pilots", owner)).toEqual({
+      opportunity_kinds: ["adoption_pilot"],
+      owner_account_id: owner,
+    });
+    expect(queueFilterRequest("active")).toEqual({ statuses: ["active"] });
+    expect(queueFilterRequest("unassigned", owner)).toEqual({
+      unassigned: true,
+    });
   });
 });

@@ -16,6 +16,8 @@ import type {
   ProjectControlBackupRequest,
   ProjectControlClearEntitlementOverrideRequest,
   ProjectControlGetEntitlementOverrideRequest,
+  ProjectControlHardDeleteStatusRequest,
+  ProjectControlHardDeleteStatusResponse,
   ProjectControlMoveRequest,
   ProjectControlMoveResponse,
   ProjectControlRehomeRequest,
@@ -85,6 +87,7 @@ import { assertProjectNotHardDeleting } from "@cocalc/server/projects/hard-delet
 import { assertProjectSoleOwner } from "@cocalc/server/projects/sole-owner";
 import { mergeStartProjectTimings } from "@cocalc/server/projects/start-timings";
 import { assertFreeProjectStartAllowed } from "@cocalc/server/launch/kill-switches";
+import { getAuthoritativeProjectHardDeleteStatus } from "@cocalc/server/projects/hard-delete-evidence";
 import { countsTowardManagedCpuBudgetForHost } from "@cocalc/server/membership/managed-cpu-scope";
 import {
   formatManagedProjectCpuPolicyBlockMessage,
@@ -94,6 +97,12 @@ import {
 const BACKUP_POLL_INTERVAL_MS = 1_000;
 const PROJECT_RUNTIME_SLOT_TTL_MS = 30 * 60 * 1000;
 const logger = getLogger("inter-bay:project-control");
+
+export async function handleProjectControlHardDeleteStatus(
+  opts: ProjectControlHardDeleteStatusRequest,
+): Promise<ProjectControlHardDeleteStatusResponse> {
+  return await getAuthoritativeProjectHardDeleteStatus(opts);
+}
 
 async function assertManagedCpuStartAllowed({
   project_id,
@@ -539,6 +548,8 @@ export async function handleProjectControlBackup(
       skip_collab_check: true,
       skip_owner_route: true,
       managed_egress_override: req.managed_egress_override,
+      replace_oldest_at_limit: req.replace_oldest_at_limit,
+      freeze_source: req.freeze_source,
     },
   );
   const deadline = Date.now() + BACKUP_TIMEOUT_MS + 60_000;

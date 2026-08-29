@@ -6649,8 +6649,21 @@ describe("hosts.listHosts bootstrap normalization", () => {
       if (sql.includes("FROM project_host_runtime_deployments")) {
         return {
           rows: [
-            { host_id: HOST_ID, target: "project-host" },
-            { host_id: HOST_ID, target: "conat-router" },
+            {
+              host_id: HOST_ID,
+              target_type: "artifact",
+              target: "project-host",
+            },
+            {
+              host_id: HOST_ID,
+              target_type: "component",
+              target: "conat-router",
+            },
+            {
+              host_id: HOST_ID,
+              target_type: "component",
+              target: "project-host",
+            },
           ],
         };
       }
@@ -6680,8 +6693,13 @@ describe("hosts.listHosts bootstrap normalization", () => {
       }),
     ]);
     expect(hosts[0].runtime_exception_summary).toEqual({
-      host_override_count: 2,
+      host_override_count: 3,
       host_override_targets: ["conat-router", "project-host"],
+      host_overrides: [
+        { target_type: "artifact", target: "project-host" },
+        { target_type: "component", target: "conat-router" },
+        { target_type: "component", target: "project-host" },
+      ],
     });
   });
 

@@ -218,7 +218,7 @@ export const ManagedEgressWarning: React.FC<{
     const load = async () => {
       if (!shouldPollUsageWarnings()) return;
       try {
-        const next = await getWarningMembershipDetails();
+        const next = await getWarningMembershipDetails(account_id);
         if (mounted) {
           setDetails(next ?? null);
         }

@@ -33,12 +33,14 @@ import {
 import { Loading, TimeAgo, Tooltip } from "@cocalc/frontend/components";
 import CopyButton from "@cocalc/frontend/components/copy-button";
 import { normalizeUserFacingError } from "@cocalc/frontend/components/user-facing-error";
+import StaticMarkdown from "@cocalc/frontend/editors/slate/static-markdown-public";
 import { load_target } from "@cocalc/frontend/history";
 import { ProjectTitle } from "@cocalc/frontend/projects/project-title";
 import { listSiteLicenseOverviews } from "@cocalc/frontend/purchases/api";
 import { User } from "@cocalc/frontend/users/user";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import type { SiteLicenseOverview } from "@cocalc/conat/hub/api/purchases";
+import { MAX_PUBLIC_SHARE_READER_INSTRUCTIONS_LENGTH } from "@cocalc/util/public-directory-share-labels";
 import { legacyMigrationProjectHref } from "./legacy-migration-link";
 import type { SettingsPageDefinition } from "./settings-page";
 
@@ -80,6 +82,14 @@ type LegacyPublicSharesState = {
   query: string;
   shares: LegacyMigrationPublicShareSummary[];
   totalCount: number;
+};
+
+type PublisherProfileState = {
+  error: string;
+  instructions: string;
+  loading: boolean;
+  saved: boolean;
+  saving: boolean;
 };
 
 interface SiteLicensePoolOption {
@@ -249,6 +259,149 @@ function legacyShareStatusTag({
     return <Tag color="red">Project restore failed</Tag>;
   }
   return <Tag color="gold">Project restore pending</Tag>;
+}
+
+export function PublicSharePublisherProfileCard() {
+  const [profile, setProfile] = useState<PublisherProfileState>({
+    error: "",
+    instructions: "",
+    loading: false,
+    saved: false,
+    saving: false,
+  });
+
+  async function loadProfile() {
+    setProfile((prev) => ({
+      ...prev,
+      error: "",
+      loading: true,
+      saved: false,
+    }));
+    try {
+      const result =
+        await webapp_client.conat_client.hub.publicDirectoryShares.getPublisherProfile(
+          {},
+        );
+      setProfile({
+        error: "",
+        instructions: result.reader_instructions_markdown ?? "",
+        loading: false,
+        saved: false,
+        saving: false,
+      });
+    } catch (err) {
+      setProfile((prev) => ({
+        ...prev,
+        error: normalizeUserFacingError(err).message,
+        loading: false,
+      }));
+    }
+  }
+
+  async function saveProfile() {
+    setProfile((prev) => ({
+      ...prev,
+      error: "",
+      saved: false,
+      saving: true,
+    }));
+    try {
+      const result =
+        await webapp_client.conat_client.hub.publicDirectoryShares.updatePublisherProfile(
+          {
+            reader_instructions_markdown: profile.instructions,
+          },
+        );
+      setProfile((prev) => ({
+        ...prev,
+        instructions: result.reader_instructions_markdown ?? "",
+        saved: true,
+        saving: false,
+      }));
+    } catch (err) {
+      setProfile((prev) => ({
+        ...prev,
+        error: normalizeUserFacingError(err).message,
+        saving: false,
+      }));
+    }
+  }
+
+  useEffect(() => {
+    void loadProfile();
+  }, []);
+
+  return (
+    <Card title="Reader instructions for all your public shares">
+      <Space vertical size="middle" style={{ width: "100%" }}>
+        <Alert
+          type="info"
+          showIcon
+          title="One update applies to every publication from your account"
+          description="Use this for reusable workflow instructions. Keep article titles, abstracts, citations, and other publication-specific metadata in each share's description. An individual share can override these instructions when necessary."
+        />
+        <label htmlFor="public-share-reader-instructions">
+          <Text strong>Instructions shown beside Copy</Text>
+        </label>
+        <Input.TextArea
+          id="public-share-reader-instructions"
+          aria-describedby="public-share-reader-instructions-help"
+          value={profile.instructions}
+          disabled={profile.loading}
+          maxLength={MAX_PUBLIC_SHARE_READER_INSTRUCTIONS_LENGTH}
+          autoSize={{ minRows: 6, maxRows: 18 }}
+          placeholder="Explain how readers should copy and use your publications. Markdown is supported."
+          onChange={(event) =>
+            setProfile((prev) => ({
+              ...prev,
+              instructions: event.target.value,
+              saved: false,
+            }))
+          }
+        />
+        <Text id="public-share-reader-instructions-help" type="secondary">
+          Markdown supported. Clearing this field removes the account-wide
+          instructions. {profile.instructions.length.toLocaleString()}/
+          {MAX_PUBLIC_SHARE_READER_INSTRUCTIONS_LENGTH.toLocaleString()}
+        </Text>
+        <Space wrap>
+          <Button
+            type="primary"
+            loading={profile.saving}
+            disabled={profile.loading}
+            onClick={() => void saveProfile()}
+          >
+            Save reader instructions
+          </Button>
+          <Button
+            disabled={profile.loading || profile.saving}
+            onClick={() =>
+              setProfile((prev) => ({
+                ...prev,
+                instructions: "",
+                saved: false,
+              }))
+            }
+          >
+            Clear
+          </Button>
+          <span aria-live="polite">
+            {profile.saved ? (
+              <Text type="success">Saved for all your public shares.</Text>
+            ) : null}
+          </span>
+        </Space>
+        {profile.error ? (
+          <Alert type="error" showIcon title={profile.error} />
+        ) : null}
+        {profile.instructions.trim() ? (
+          <Card size="small" title="Reader preview">
+            <StaticMarkdown value={profile.instructions.trim()} />
+          </Card>
+        ) : null}
+      </Space>
+    </Card>
+  );
 }
 
 function PublicSharesPage() {
@@ -543,6 +696,7 @@ function PublicSharesPage() {
 
   return (
     <Space vertical size="large" style={{ width: "100%" }}>
+      <PublicSharePublisherProfileCard />
       <Card>
         <Space vertical size="middle" style={{ width: "100%" }}>
           <div>

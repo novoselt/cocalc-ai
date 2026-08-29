@@ -63,6 +63,30 @@
   padding: 16px;
 }
 
+.crm-filter-grid {
+  align-items: start;
+  display: grid;
+  gap: 12px;
+  grid-template-columns:
+    minmax(190px, 0.75fr) minmax(300px, 1.45fr) minmax(220px, 0.9fr)
+    auto;
+}
+
+.crm-filter-field {
+  display: grid;
+  gap: 6px;
+  grid-template-rows: auto auto 1fr;
+  min-width: 0;
+}
+
+.crm-filter-help {
+  line-height: 1.35;
+}
+
+.crm-filter-action {
+  padding-top: 28px;
+}
+
 .crm-summary-grid,
 .crm-record-grid,
 .crm-detail-grid {
@@ -157,6 +181,10 @@
   .crm-detail-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .crm-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 520px) {
@@ -166,6 +194,18 @@
 
   .crm-filter-panel {
     padding: 12px;
+  }
+
+  .crm-filter-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .crm-filter-action {
+    padding-top: 0;
+  }
+
+  .crm-filter-action .ant-btn {
+    width: 100%;
   }
 
   .crm-record-grid,

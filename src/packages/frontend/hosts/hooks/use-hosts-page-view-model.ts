@@ -46,9 +46,9 @@ import {
   getHostFundingModeOptions,
 } from "../utils/funding-mode";
 import {
-  PROJECT_HOST_RUNTIME_STACK_COMPONENTS,
   runtimeDeploymentsForManagedComponentVersion,
   shouldAlignRuntimeStackForSoftwareArtifacts,
+  withoutRuntimeArtifactOverride,
 } from "../utils/runtime-deployments";
 import {
   activeSpotRecoveryPolicy,
@@ -1240,28 +1240,18 @@ export const useHostsPageViewModel = () => {
           scope_type: "host",
           id: host.id,
         });
-        const remaining = current
-          .filter(
-            (deployment) =>
-              !(
-                (deployment.target_type === "artifact" &&
-                  deployment.target === artifact) ||
-                (artifact === "project-host" &&
-                  deployment.target_type === "component" &&
-                  PROJECT_HOST_RUNTIME_STACK_COMPONENTS.includes(
-                    deployment.target as ManagedComponentKind,
-                  ))
-              ),
-          )
-          .map((deployment) => ({
-            target_type: deployment.target_type,
-            target: deployment.target,
-            desired_version: deployment.desired_version,
-            rollout_policy: deployment.rollout_policy,
-            drain_deadline_seconds: deployment.drain_deadline_seconds,
-            rollout_reason: deployment.rollout_reason,
-            metadata: deployment.metadata,
-          }));
+        const remaining = withoutRuntimeArtifactOverride({
+          deployments: current,
+          artifact,
+        }).map((deployment) => ({
+          target_type: deployment.target_type,
+          target: deployment.target,
+          desired_version: deployment.desired_version,
+          rollout_policy: deployment.rollout_policy,
+          drain_deadline_seconds: deployment.drain_deadline_seconds,
+          rollout_reason: deployment.rollout_reason,
+          metadata: deployment.metadata,
+        }));
         if (remaining.length === current.length) {
           alert_message({
             type: "info",

@@ -264,10 +264,12 @@ export interface VisitorLocationHeaderTestResult {
 }
 
 export type ActiveUserMapWindowMinutes = 5 | 15 | 60 | 1440;
+export type ActiveUserMapGrouping = "country" | "city";
 
 export interface ActiveUserMapQuery {
   account_id?: string;
   active_minutes: ActiveUserMapWindowMinutes;
+  group_by?: ActiveUserMapGrouping;
 }
 
 export interface BrowserSessionLocation {
@@ -304,7 +306,12 @@ export interface ActiveUserMapBayStatus {
 }
 
 export interface ActiveUserMapCountry {
+  group_id?: string;
+  granularity?: "country" | "region" | "city";
   country_code: string;
+  region_code?: string | null;
+  region?: string | null;
+  city?: string | null;
   latitude: number;
   longitude: number;
   count: number;

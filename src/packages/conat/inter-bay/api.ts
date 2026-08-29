@@ -90,6 +90,7 @@ import type {
   ListMyPublicDirectorySharesOptions,
   ListProjectPublicDirectorySharesOptions,
   ListPublicDirectorySharesResponse,
+  PublicSharePublisherProfile,
   PublicDirectoryShareSummary,
   ResolveLegacyPublicDirectorySharePathOptions,
   ResolveLegacyPublicDirectorySharePathResponse,
@@ -358,12 +359,24 @@ export interface ProjectControlBackupRequest {
   account_id?: string;
   tags?: string[];
   managed_egress_override?: ManagedProjectEgressOverride;
+  replace_oldest_at_limit?: boolean;
+  freeze_source?: boolean;
   epoch?: number;
 }
 
 export interface ProjectControlStateRequest {
   project_id: string;
   epoch?: number;
+}
+
+export interface ProjectControlHardDeleteStatusRequest {
+  project_id: string;
+}
+
+export interface ProjectControlHardDeleteStatusResponse {
+  project_id: string;
+  bay_id: string;
+  status: "live" | "hard-deleted" | "unknown";
 }
 
 export interface ProjectControlSetUsageAccountRequest {
@@ -993,6 +1006,15 @@ export interface AccountLocalGetVerifiedEmailAddressesRequest {
 
 export interface AccountLocalGetVerifiedEmailAddressesResult {
   email_addresses: string[];
+}
+
+export interface AccountLocalGetPublicSharePublisherProfileRequest {
+  account_id: string;
+}
+
+export interface AccountLocalUpdatePublicSharePublisherProfileRequest {
+  account_id: string;
+  reader_instructions_markdown?: string | null;
 }
 
 export interface AccountLocalCreateLegacyMigrationProjectRequest {
@@ -2227,6 +2249,7 @@ export interface ProjectCollabInviteWithoutAccountRequest {
     send_email?: boolean;
     invite_context?: Record<string, unknown>;
     invite_scope?: string;
+    require_email_match?: boolean;
     invite_role?: Exclude<ProjectUserRole, "owner">;
     invite_base_url?: string;
     read_policy?: ProjectViewerReadPolicy | null;
@@ -2439,6 +2462,7 @@ export type ProjectControlMethod =
   | "restart"
   | "backup"
   | "state"
+  | "hard-delete-status"
   | "set-usage-account"
   | "assign-host"
   | "address"
@@ -2552,6 +2576,8 @@ export type HostControlMethod =
   | "setup-project-secret-ssh-key"
   | "apply-pending-copies"
   | "delete-project-data"
+  | "delete-project-data-after-backup"
+  | "release-project-data-archive-freeze"
   | "upgrade-software"
   | "stage-project-host-artifact"
   | "rollout-managed-components"
@@ -2667,6 +2693,8 @@ export type AccountLocalMethod =
   | "get-account-usage-overview"
   | "record-site-funded-codex-usage"
   | "get-verified-email-addresses"
+  | "get-public-share-publisher-profile"
+  | "update-public-share-publisher-profile"
   | "create-legacy-migration-project"
   | "get-admin-assigned-membership"
   | "set-admin-assigned-membership"
@@ -2928,6 +2956,9 @@ export interface InterBayProjectControlApi {
   restart: (opts: ProjectControlRestartRequest) => Promise<void>;
   backup: (opts: ProjectControlBackupRequest) => Promise<LroSummary>;
   state: (opts: ProjectControlStateRequest) => Promise<ProjectState>;
+  hardDeleteStatus: (
+    opts: ProjectControlHardDeleteStatusRequest,
+  ) => Promise<ProjectControlHardDeleteStatusResponse>;
   setUsageAccount: (
     opts: ProjectControlSetUsageAccountRequest,
   ) => Promise<ProjectControlSetUsageAccountResponse>;
@@ -3770,6 +3801,14 @@ export interface InterBayHostControlApi {
     host_id: string;
     del: HostControlArg<"deleteProjectData">;
   }) => Promise<void>;
+  deleteProjectDataAfterBackup: (opts: {
+    host_id: string;
+    del: HostControlArg<"deleteProjectDataAfterBackup">;
+  }) => Promise<void>;
+  releaseProjectDataArchiveFreeze: (opts: {
+    host_id: string;
+    release: HostControlArg<"releaseProjectDataArchiveFreeze">;
+  }) => ReturnType<HostControlApi["releaseProjectDataArchiveFreeze"]>;
   upgradeSoftware: (opts: {
     host_id: string;
     upgrade: UpgradeSoftwareRequest;
@@ -4134,6 +4173,12 @@ export interface InterBayAccountLocalApi {
   getVerifiedEmailAddresses: (
     opts: AccountLocalGetVerifiedEmailAddressesRequest,
   ) => Promise<AccountLocalGetVerifiedEmailAddressesResult>;
+  getPublicSharePublisherProfile: (
+    opts: AccountLocalGetPublicSharePublisherProfileRequest,
+  ) => Promise<PublicSharePublisherProfile>;
+  updatePublicSharePublisherProfile: (
+    opts: AccountLocalUpdatePublicSharePublisherProfileRequest,
+  ) => Promise<PublicSharePublisherProfile>;
   createLegacyMigrationProject: (
     opts: AccountLocalCreateLegacyMigrationProjectRequest,
   ) => Promise<AccountLocalCreateLegacyMigrationProjectResult>;
@@ -4733,6 +4778,14 @@ const HOST_CONTROL_METHOD_SPECS = [
   { name: "setupProjectSecretSshKey", method: "setup-project-secret-ssh-key" },
   { name: "applyPendingCopies", method: "apply-pending-copies" },
   { name: "deleteProjectData", method: "delete-project-data" },
+  {
+    name: "deleteProjectDataAfterBackup",
+    method: "delete-project-data-after-backup",
+  },
+  {
+    name: "releaseProjectDataArchiveFreeze",
+    method: "release-project-data-archive-freeze",
+  },
   { name: "upgradeSoftware", method: "upgrade-software" },
   {
     name: "stageProjectHostArtifact",
@@ -5290,6 +5343,15 @@ export function createInterBayProjectControlClient({
     ...serviceClientOptions({ client, timeout }),
     subject: projectControlSubject({ dest_bay, method: "state" }),
   });
+  const hardDeleteStatusClient = createServiceClient<
+    Pick<InterBayProjectControlApi, "hardDeleteStatus">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectControlSubject({
+      dest_bay,
+      method: "hard-delete-status",
+    }),
+  });
   const setUsageAccountClient = createServiceClient<
     Pick<InterBayProjectControlApi, "setUsageAccount">
   >({
@@ -5373,6 +5435,8 @@ export function createInterBayProjectControlClient({
     restart: async (opts) => await restartClient.restart(opts),
     backup: async (opts) => await backupClient.backup(opts),
     state: async (opts) => await stateClient.state(opts),
+    hardDeleteStatus: async (opts) =>
+      await hardDeleteStatusClient.hardDeleteStatus(opts),
     setUsageAccount: async (opts) =>
       await setUsageAccountClient.setUsageAccount(opts),
     assignHost: async (opts) => await assignHostClient.assignHost(opts),
@@ -6790,6 +6854,24 @@ export function createInterBayAccountLocalClient({
       method: "get-verified-email-addresses",
     }),
   });
+  const getPublicSharePublisherProfileClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "getPublicSharePublisherProfile">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "get-public-share-publisher-profile",
+    }),
+  });
+  const updatePublicSharePublisherProfileClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "updatePublicSharePublisherProfile">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "update-public-share-publisher-profile",
+    }),
+  });
   const createLegacyMigrationProjectClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "createLegacyMigrationProject">
   >({
@@ -7714,6 +7796,14 @@ export function createInterBayAccountLocalClient({
       await recordSiteFundedCodexUsageClient.recordSiteFundedCodexUsage(opts),
     getVerifiedEmailAddresses: async (opts) =>
       await getVerifiedEmailAddressesClient.getVerifiedEmailAddresses(opts),
+    getPublicSharePublisherProfile: async (opts) =>
+      await getPublicSharePublisherProfileClient.getPublicSharePublisherProfile(
+        opts,
+      ),
+    updatePublicSharePublisherProfile: async (opts) =>
+      await updatePublicSharePublisherProfileClient.updatePublicSharePublisherProfile(
+        opts,
+      ),
     createLegacyMigrationProject: async (opts) =>
       await createLegacyMigrationProjectClient.createLegacyMigrationProject(
         opts,
@@ -8554,6 +8644,34 @@ export function createInterBayAccountLocalHandler({
       impl: {
         getVerifiedEmailAddresses: async (opts) =>
           await impl.getVerifiedEmailAddresses(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "getPublicSharePublisherProfile">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "get-public-share-publisher-profile",
+      }),
+      impl: {
+        getPublicSharePublisherProfile: async (opts) =>
+          await impl.getPublicSharePublisherProfile(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "updatePublicSharePublisherProfile">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "update-public-share-publisher-profile",
+      }),
+      impl: {
+        updatePublicSharePublisherProfile: async (opts) =>
+          await impl.updatePublicSharePublisherProfile(opts),
       },
     }),
     createServiceHandler<
@@ -11727,6 +11845,29 @@ export function createInterBayProjectControlStateHandler({
     subject: projectControlSubject({ dest_bay: bay_id, method: "state" }),
     impl: {
       state: async (opts) => await impl.state(opts),
+    },
+  });
+}
+
+export function createInterBayProjectControlHardDeleteStatusHandler({
+  bay_id,
+  impl,
+  ...options
+}: ServiceHandlerOptions & {
+  bay_id: string;
+  impl: InterBayProjectControlApi;
+}): ConatService {
+  return createServiceHandler<
+    Pick<InterBayProjectControlApi, "hardDeleteStatus">
+  >({
+    ...options,
+    service: "inter-bay-project-control",
+    subject: projectControlSubject({
+      dest_bay: bay_id,
+      method: "hard-delete-status",
+    }),
+    impl: {
+      hardDeleteStatus: async (opts) => await impl.hardDeleteStatus(opts),
     },
   });
 }

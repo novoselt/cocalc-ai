@@ -138,7 +138,7 @@ export const AIUsageWarning: React.FC<{
     const load = async () => {
       if (!shouldPollUsageWarnings()) return;
       try {
-        const next = await getWarningAIUsage();
+        const next = await getWarningAIUsage(account_id);
         if (mounted) {
           setStatus(next ?? null);
         }

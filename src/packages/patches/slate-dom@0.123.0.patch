@@ -1,0 +1,33 @@
+diff --git a/dist/index.es.js b/dist/index.es.js
+index 60379e131c5f6d5d7fcd302cb93024bc98239574..3f37c8f04f305fcd0396d6a2352d05b899ff4332 100644
+--- a/dist/index.es.js
++++ b/dist/index.es.js
+@@ -845,7 +845,7 @@ var DOMEditor = {
+         if (searchDirection === 'backward' || !searchDirection) {
+           var _leafNodes$findLast;
+           var _leafNodes = [...getLeafNodes(elementNode === null || elementNode === void 0 ? void 0 : elementNode.previousElementSibling), ...getLeafNodes(elementNode)];
+-          leafNode = (_leafNodes$findLast = _leafNodes.findLast(leaf => isBefore(nonEditableNode, leaf))) !== null && _leafNodes$findLast !== void 0 ? _leafNodes$findLast : null;
++          leafNode = (_leafNodes$findLast = _leafNodes.reverse().find(leaf => isBefore(nonEditableNode, leaf))) !== null && _leafNodes$findLast !== void 0 ? _leafNodes$findLast : null;
+         }
+         if (searchDirection === 'forward' || !searchDirection) {
+           var _leafNodes2$find;
+diff --git a/dist/index.js b/dist/index.js
+index ffae0ab259fd9940b0ad5595d807faf7f52bb75a..23581367549f8393a60316a6a99da3c6880a6de8 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1078,7 +1078,7 @@ var DOMEditor = {
+         if (searchDirection === 'backward' || !searchDirection) {
+           var _leafNodes$findLast;
+           var _leafNodes = [].concat(_toConsumableArray(getLeafNodes(elementNode === null || elementNode === void 0 ? void 0 : elementNode.previousElementSibling)), _toConsumableArray(getLeafNodes(elementNode)));
+-          leafNode = (_leafNodes$findLast = _leafNodes.findLast(function (leaf) {
++          leafNode = (_leafNodes$findLast = _leafNodes.reverse().find(function (leaf) {
+             return isBefore(nonEditableNode, leaf);
+           })) !== null && _leafNodes$findLast !== void 0 ? _leafNodes$findLast : null;
+         }
+diff --git a/dist/slate-dom.js b/dist/slate-dom.js
+index 99eb6005ab91ef0c8dfdb38b3c7e2ce05dbf00a8..a3ea225aff20684772df0ddb6c8cbf9e1713cc2f 100644
+--- a/dist/slate-dom.js
++++ b/dist/slate-dom.js
+@@ -1082,1 +1082,1 @@
+-	          leafNode = (_leafNodes$findLast = _leafNodes.findLast(function (leaf) {
++	          leafNode = (_leafNodes$findLast = _leafNodes.reverse().find(function (leaf) {

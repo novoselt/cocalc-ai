@@ -203,6 +203,9 @@ function studentCourseInfo({
     ...(settings.course_ends_at
       ? { course_ends_at: settings.course_ends_at }
       : {}),
+    ...(settings.require_invite_email_match
+      ? { require_invite_email_match: true }
+      : {}),
     ...(student.account_id ? { account_id: student.account_id } : {}),
     ...(student.email_address ? { email_address: student.email_address } : {}),
     ...(settings.student_project_functionality

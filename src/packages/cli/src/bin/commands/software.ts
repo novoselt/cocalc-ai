@@ -4401,23 +4401,9 @@ Supported deploy/smoke components:
                     artifact.artifact_id,
                     "--base-url",
                     hostBaseUrl,
+                    "--preserve-desired-state",
                     "--wait",
                   ]);
-                  if (component === "project" || component === "tools") {
-                    commandArgsList.push([
-                      ...cli.args,
-                      "--profile",
-                      deployTarget,
-                      "host",
-                      "deploy",
-                      "resume-default",
-                      "--all-hosts",
-                      "--artifact",
-                      runtimeArtifactForHostUpgradeArtifact(
-                        hostTarget.upgradeArtifact,
-                      ),
-                    ]);
-                  }
                 }
               }
             } else if (hostBootstrapTarget) {

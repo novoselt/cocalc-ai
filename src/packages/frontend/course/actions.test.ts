@@ -73,4 +73,16 @@ describe("CourseActions SyncDB mutations", () => {
       "set:student-3",
     ]);
   });
+
+  it("ignores late errors after the course store is removed", () => {
+    const redux = {
+      _set_state: jest.fn(),
+      getStore: jest.fn(() => undefined),
+    };
+    const actions = new CourseActions("course", redux as any);
+
+    expect(() => actions.set_error("late SyncDB failure")).not.toThrow();
+    expect(actions.is_closed()).toBe(true);
+    expect(redux._set_state).not.toHaveBeenCalled();
+  });
 });

@@ -33,10 +33,13 @@ import { viewerReadPolicyAllowsPath } from "@cocalc/util/project-access";
 let mockGetProjectFsClient: jest.Mock;
 let mockGetProjectShareFsClient: jest.Mock;
 let mockGetClusterAccountsByIds: jest.Mock;
+let mockGetClusterPublicSharePublisherProfile: jest.Mock;
 
 jest.mock("@cocalc/server/inter-bay/accounts", () => ({
   getClusterAccountsByIds: (...args: any[]) =>
     mockGetClusterAccountsByIds(...args),
+  getClusterPublicSharePublisherProfile: (...args: any[]) =>
+    mockGetClusterPublicSharePublisherProfile(...args),
 }));
 
 jest.mock("@cocalc/server/conat/file-server-client", () => ({
@@ -273,6 +276,7 @@ describe("public directory temporary viewer grants", () => {
 
   beforeEach(async () => {
     mockGetClusterAccountsByIds = jest.fn(async () => []);
+    mockGetClusterPublicSharePublisherProfile = jest.fn(async () => ({}));
     mockGetProjectFsClient = jest.fn(async () => ({
       getListing: jest.fn(async () => ({ files: {}, truncated: false })),
       lstat: jest.fn(async () => ({
@@ -352,10 +356,106 @@ describe("public directory temporary viewer grants", () => {
 
     expect(share.path).toBe("share");
     expect(share.path_type).toBe("directory");
+    expect(share.publisher_account_id).toBe(OWNER_ID);
     expect(mockGetProjectFsClient).toHaveBeenCalledWith({
       account_id: OWNER_ID,
       project_id: PROJECT_ID,
     });
+  });
+
+  it("resolves account-wide reader instructions without copying them into the share", async () => {
+    await getPool().query(
+      `INSERT INTO projects (project_id, title, users, last_edited)
+       VALUES ($1, 'Publish project', '{}'::jsonb, NOW())
+       ON CONFLICT (project_id) DO NOTHING`,
+      [PROJECT_ID],
+    );
+    mockGetClusterPublicSharePublisherProfile.mockResolvedValue({
+      reader_instructions_markdown:
+        "Use **Copy**, then open the figure folder.",
+    });
+    const share = await create({
+      account_id: OWNER_ID,
+      project_id: PROJECT_ID,
+      path: "share",
+      slug: "publisher-profile-share",
+    });
+
+    const grant = await grantTemporaryViewerAccess({
+      account_id: ACCOUNT_ID,
+      slug: share.slug,
+    });
+    expect(grant.reader_instructions).toBeNull();
+    expect(grant.publisher_reader_instructions).toBe(
+      "Use **Copy**, then open the figure folder.",
+    );
+    expect(mockGetClusterPublicSharePublisherProfile).toHaveBeenCalledWith(
+      OWNER_ID,
+    );
+  });
+
+  it("uses per-share reader instructions instead of the publisher profile", async () => {
+    await getPool().query(
+      `INSERT INTO projects (project_id, title, users, last_edited)
+       VALUES ($1, 'Publish project', '{}'::jsonb, NOW())
+       ON CONFLICT (project_id) DO NOTHING`,
+      [PROJECT_ID],
+    );
+    const share = await create({
+      account_id: OWNER_ID,
+      project_id: PROJECT_ID,
+      path: "share",
+      slug: "override-instructions-share",
+      reader_instructions: "Use this special workflow.",
+    });
+
+    const grant = await grantTemporaryViewerAccess({
+      account_id: ACCOUNT_ID,
+      slug: share.slug,
+    });
+    expect(grant.reader_instructions).toBe("Use this special workflow.");
+    expect(grant.publisher_reader_instructions).toBeNull();
+    expect(mockGetClusterPublicSharePublisherProfile).not.toHaveBeenCalled();
+  });
+
+  it("keeps the original publisher when a collaborator updates the share", async () => {
+    await getPool().query(
+      `INSERT INTO projects (project_id, title, users, last_edited)
+       VALUES ($1, 'Publish project', '{}'::jsonb, NOW())
+       ON CONFLICT (project_id) DO NOTHING`,
+      [PROJECT_ID],
+    );
+    const share = await create({
+      account_id: OWNER_ID,
+      project_id: PROJECT_ID,
+      path: "share",
+      slug: "immutable-publisher-share",
+      reader_instructions: "Temporary override.",
+    });
+    mockGetClusterPublicSharePublisherProfile.mockResolvedValue({
+      reader_instructions_markdown: "Original publisher instructions.",
+    });
+
+    const updated = await update({
+      account_id: ACCOUNT_ID,
+      id: share.id,
+      title: "Edited by a collaborator",
+      reader_instructions: null,
+    });
+    expect(updated.publisher_account_id).toBe(OWNER_ID);
+    expect(updated.reader_instructions).toBeNull();
+
+    const grant = await grantTemporaryViewerAccess({
+      account_id: ACCOUNT_ID,
+      slug: share.slug,
+    });
+    expect(grant.publisher_account_id).toBe(OWNER_ID);
+    expect(grant.publisher_reader_instructions).toBe(
+      "Original publisher instructions.",
+    );
+    expect(mockGetClusterPublicSharePublisherProfile).toHaveBeenCalledWith(
+      OWNER_ID,
+    );
   });
 
   it("publishes regular files with an exact read policy", async () => {

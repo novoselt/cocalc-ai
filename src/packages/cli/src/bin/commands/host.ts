@@ -627,10 +627,12 @@ async function resumeHostRuntimeDeploymentDefault({
   ctx,
   host,
   parsedTarget,
+  runtimeStack = false,
 }: {
   ctx: any;
   host: { id: string; name?: string | null };
   parsedTarget: { target_type: "artifact" | "component"; target: string };
+  runtimeStack?: boolean;
 }) {
   const current = await ctx.hub.hosts.listHostRuntimeDeployments({
     scope_type: "host",
@@ -642,7 +644,8 @@ async function resumeHostRuntimeDeploymentDefault({
         !(
           (deployment.target_type === parsedTarget.target_type &&
             deployment.target === parsedTarget.target) ||
-          (parsedTarget.target_type === "artifact" &&
+          (runtimeStack &&
+            parsedTarget.target_type === "artifact" &&
             parsedTarget.target === "project-host" &&
             deployment.target_type === "component" &&
             PROJECT_HOST_RUNTIME_STACK_COMPONENTS.has(`${deployment.target}`))
@@ -671,6 +674,30 @@ async function resumeHostRuntimeDeploymentDefault({
 function formatList(values: unknown): string {
   if (!Array.isArray(values) || values.length === 0) return "";
   return values.map((value) => `${value ?? ""}`.trim()).join(", ");
+}
+
+function runtimeArtifactTargetForUpgradeArtifact(artifact: string): string {
+  return artifact === "project" ? "project-bundle" : artifact;
+}
+
+function hostOverridesUpgradeArtifact({
+  host,
+  artifacts,
+}: {
+  host: HostRow;
+  artifacts: string[];
+}): boolean {
+  const summary = host.runtime_exception_summary;
+  const overrideTargets = new Set<string>(
+    summary?.host_overrides != null
+      ? summary.host_overrides
+          .filter(({ target_type }) => target_type === "artifact")
+          .map(({ target }) => target)
+      : (summary?.host_override_targets ?? []),
+  );
+  return artifacts.some((artifact) =>
+    overrideTargets.has(runtimeArtifactTargetForUpgradeArtifact(artifact)),
+  );
 }
 
 function formatBytesValue(value: unknown): string {
@@ -2986,6 +3013,10 @@ export function registerHostCommand(
       "--align-runtime-stack",
       "also align project-host, conat-router, conat-persist, and acp-worker to the selected project-host build",
     )
+    .option(
+      "--preserve-desired-state",
+      "install artifacts without creating or updating host-scoped deployment overrides",
+    )
     .option("--wait", "wait for completion")
     .addHelpText(
       "after",
@@ -2999,6 +3030,11 @@ Use \`--align-runtime-stack\` when you intentionally want the upgrade request
 to make the host fully match a selected project-host build. That also records
 the matching desired versions for \`project-host\`, \`conat-router\`,
 \`conat-persist\`, and \`acp-worker\`.
+
+Use \`--preserve-desired-state\` for a fleet operation that has already set
+the global desired version. The artifacts are installed without creating
+temporary host overrides. With \`--all-online\`, hosts that already override a
+selected artifact are skipped so their exceptions remain effective.
 
 Examples:
   cocalc host upgrade my-project-host --artifact project-host --hub-source --wait
@@ -3017,6 +3053,7 @@ Examples:
           baseUrl?: string;
           allOnline?: boolean;
           alignRuntimeStack?: boolean;
+          preserveDesiredState?: boolean;
           wait?: boolean;
         },
         command: Command,
@@ -3046,7 +3083,7 @@ Examples:
             artifact,
             ...(version ? { version } : { channel }),
           }));
-          const hosts = opts.allOnline
+          const candidateHosts = opts.allOnline
             ? (
                 (await listHosts(ctx, {
                   include_deleted: false,
@@ -3055,13 +3092,36 @@ Examples:
                 })) as HostRow[]
               ).filter(isHostOnlineForUpgrade)
             : [await resolveHost(ctx, hostIdentifier)];
+          const excludedOverrideHosts =
+            opts.allOnline && opts.preserveDesiredState
+              ? candidateHosts.filter((host) =>
+                  hostOverridesUpgradeArtifact({ host, artifacts }),
+                )
+              : [];
+          const hosts = candidateHosts.filter(
+            (host) =>
+              !excludedOverrideHosts.some(
+                (excluded) => excluded.id === host.id,
+              ),
+          );
+          const excludedOverrideResult = excludedOverrideHosts.length
+            ? {
+                excluded_override_hosts: excludedOverrideHosts.map((host) => ({
+                  host_id: host.id,
+                  name: host.name,
+                })),
+              }
+            : {};
 
           if (hosts.length === 0) {
             return {
               status: "skipped",
-              reason: "no online hosts matched",
+              reason: excludedOverrideHosts.length
+                ? "all online hosts have matching deployment overrides"
+                : "no online hosts matched",
               targets,
               hosts: [],
+              ...excludedOverrideResult,
             };
           }
 
@@ -3072,6 +3132,9 @@ Examples:
                 targets,
                 base_url: baseUrl,
                 align_runtime_stack: !!opts.alignRuntimeStack,
+                ...(opts.preserveDesiredState
+                  ? { record_runtime_deployments: false }
+                  : {}),
               });
               return {
                 host_id: h.id,
@@ -3089,6 +3152,7 @@ Examples:
                 op_id: queued[0].op_id,
                 status: queued[0].status,
                 targets,
+                ...excludedOverrideResult,
               };
             }
             return {
@@ -3096,6 +3160,7 @@ Examples:
               count: queued.length,
               targets,
               hosts: queued,
+              ...excludedOverrideResult,
             };
           }
 
@@ -3137,6 +3202,7 @@ Examples:
               op_id: waited[0].op_id,
               status: waited[0].status,
               targets,
+              ...excludedOverrideResult,
             };
           }
           return {
@@ -3144,6 +3210,7 @@ Examples:
             count: waited.length,
             targets,
             hosts: waited,
+            ...excludedOverrideResult,
           };
         });
       },
@@ -3961,12 +4028,21 @@ version when available, or \`--to-version\` to force a specific published versio
       "--artifact <artifact>",
       "artifact: project-host, container-runtime, project-bundle, tools, bootstrap-environment",
     )
+    .option(
+      "--runtime-stack",
+      "with --artifact project-host, also remove managed component overrides",
+    )
     .addHelpText(
       "after",
       `
 This removes the selected host-scoped desired-state record and replaces the
 host scope with the remaining records unchanged. After that, the effective
 desired state for the selected target falls back to the global default.
+
+Use \`--artifact project-host --runtime-stack\` to deliberately remove the
+project-host, conat-router, conat-persist, and acp-worker component overrides
+at the same time. Without \`--runtime-stack\`, only the selected artifact or
+component record is removed.
 
 With \`--all-hosts\`, this applies to every non-deleted host visible in the
 admin host list, including user-created dedicated hosts.
@@ -3978,7 +4054,12 @@ automatic reconcile or artifact upgrade work.
     .action(
       async (
         hostIdentifier: string | undefined,
-        opts: { allHosts?: boolean; component?: string; artifact?: string },
+        opts: {
+          allHosts?: boolean;
+          component?: string;
+          artifact?: string;
+          runtimeStack?: boolean;
+        },
         command: Command,
       ) => {
         await withContext(
@@ -3986,6 +4067,17 @@ automatic reconcile or artifact upgrade work.
           "host deploy resume-default",
           async (ctx) => {
             const parsedTarget = parseRuntimeDeploymentTarget(opts);
+            if (
+              opts.runtimeStack &&
+              !(
+                parsedTarget.target_type === "artifact" &&
+                parsedTarget.target === "project-host"
+              )
+            ) {
+              throw new Error(
+                "--runtime-stack requires --artifact project-host",
+              );
+            }
             if (
               !ctx.hub.hosts.listHostRuntimeDeployments ||
               !ctx.hub.hosts.setHostRuntimeDeployments
@@ -4009,6 +4101,7 @@ automatic reconcile or artifact upgrade work.
                     ctx,
                     host,
                     parsedTarget,
+                    runtimeStack: !!opts.runtimeStack,
                   }),
                 );
               }
@@ -4029,6 +4122,7 @@ automatic reconcile or artifact upgrade work.
               ctx,
               host,
               parsedTarget,
+              runtimeStack: !!opts.runtimeStack,
             });
           },
         );

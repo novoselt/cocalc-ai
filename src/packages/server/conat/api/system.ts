@@ -148,7 +148,7 @@ import type {
   UxLatencySummary,
   VisitorLocationHeaderTestResult,
   ActiveUserMapOverview,
-  ActiveUserMapWindowMinutes,
+  ActiveUserMapQuery,
   BrowserSessionLocation,
 } from "@cocalc/conat/hub/api/system";
 import { UX_LATENCY_HEALTH_METRICS } from "@cocalc/conat/hub/api/system";
@@ -6726,14 +6726,13 @@ export async function upsertBrowserSession({
 export async function getActiveUserMap({
   account_id,
   active_minutes,
-}: {
-  account_id?: string;
-  active_minutes: ActiveUserMapWindowMinutes;
-}): Promise<ActiveUserMapOverview> {
+  group_by,
+}: ActiveUserMapQuery): Promise<ActiveUserMapOverview> {
   await assertAdmin(account_id);
   return await getActiveUserMapOverviewAcrossBays({
     account_id,
     active_minutes,
+    group_by,
   });
 }
 

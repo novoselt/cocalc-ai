@@ -3714,6 +3714,83 @@ test("software deploy project-host accepts explicit rollout tuning", async () =>
   assert.equal(history.deployments[0].artifact_id, artifactId);
 });
 
+test("software deploy project rollout preserves host-scoped desired state", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-deploy-project-"));
+  const localStore = join(dir, "store");
+  const source = join(dir, "bundle-linux.tar.xz");
+  writeFileSync(source, "project bundle");
+  const runs: CapturedRun[] = [];
+  const r2 = makeR2Client();
+  const program = createProgram(
+    makeDeps({ localStore, runs, env: r2Env, r2Client: r2.client }),
+  );
+  const originalArgv1 = process.argv[1];
+  process.argv[1] = "software";
+
+  try {
+    await program.parseAsync([
+      "node",
+      "test",
+      "--quiet",
+      "software",
+      "build",
+      "project",
+      "project-deploy",
+      "--from-file",
+      source,
+      "--artifact-name",
+      "bundle-linux.tar.xz",
+    ]);
+    await program.parseAsync([
+      "node",
+      "test",
+      "--quiet",
+      "software",
+      "deploy",
+      "--rollout",
+      "project",
+      "project-deploy",
+      "staging",
+      "--env-file",
+      join(dir, "missing.env"),
+    ]);
+  } finally {
+    process.argv[1] = originalArgv1;
+  }
+
+  const artifactId = "20260614T235912Z-e882d124-project-deploy";
+  assert.equal(runs.length, 2);
+  assert.deepEqual(runs[0].args, [
+    "--profile",
+    "staging",
+    "host",
+    "deploy",
+    "set",
+    "--global",
+    "--artifact",
+    "project-bundle",
+    "--desired-version",
+    artifactId,
+    "--reason",
+    "software-deploy-project",
+  ]);
+  assert.deepEqual(runs[1].args, [
+    "--profile",
+    "staging",
+    "host",
+    "upgrade",
+    "--all-online",
+    "--artifact",
+    "project",
+    "--artifact-version",
+    artifactId,
+    "--base-url",
+    "https://software.example.test/software",
+    "--preserve-desired-state",
+    "--wait",
+  ]);
+});
+
 test("software deploy tools publishes both architecture compatibility objects", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-deploy-tools-"));
   const localStore = join(dir, "store");
@@ -3783,7 +3860,7 @@ test("software deploy tools publishes both architecture compatibility objects", 
     );
     assert.equal(versions.versions[0].version, artifactId);
   }
-  assert.equal(runs.length, 4);
+  assert.equal(runs.length, 3);
   assert.deepEqual(runs[1].args, [
     "--profile",
     "staging",
@@ -3810,17 +3887,8 @@ test("software deploy tools publishes both architecture compatibility objects", 
     artifactId,
     "--base-url",
     "https://software.example.test/software",
+    "--preserve-desired-state",
     "--wait",
-  ]);
-  assert.deepEqual(runs[3].args, [
-    "--profile",
-    "staging",
-    "host",
-    "deploy",
-    "resume-default",
-    "--all-hosts",
-    "--artifact",
-    "tools",
   ]);
   const history = JSON.parse(
     r2.objects

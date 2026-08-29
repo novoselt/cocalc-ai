@@ -55,6 +55,7 @@ import {
 import getLogger from "@cocalc/backend/logger";
 import { send_invite_email } from "@cocalc/server/hub/email";
 import getEmailAddress from "@cocalc/server/accounts/get-email-address";
+import { getVerifiedEmailAddressForAccount } from "@cocalc/server/accounts/verified-email-address";
 import isAdmin from "@cocalc/server/accounts/is-admin";
 import {
   ensureAccountSecurityStateReady,
@@ -1828,6 +1829,35 @@ async function assertCourseStudentInviteRecipientIsNotManager({
   }
 }
 
+async function assertInviteEmailMatchesAccount({
+  account_id,
+  invite,
+}: {
+  account_id: string;
+  invite: Awaited<ReturnType<typeof getPendingEmailCollabInviteForToken>>;
+}): Promise<void> {
+  if (invite.context?.require_invite_email_match !== true) {
+    return;
+  }
+  if (!invite.target_email) {
+    throw new Error("invitation is missing its invited email address");
+  }
+  const verifiedEmail = await getVerifiedEmailAddressForAccount({ account_id });
+  if (!verifiedEmail) {
+    throw new Error(
+      "This invitation requires a verified email address. Verify the email address that received the invitation, or sign in to the CoCalc account that uses it.",
+    );
+  }
+  if (
+    lower_email_address(verifiedEmail) !==
+    lower_email_address(invite.target_email)
+  ) {
+    throw new Error(
+      "The signed-in account does not use the verified email address that received this invitation. Sign in with the invited account, or add and verify that email address before accepting.",
+    );
+  }
+}
+
 async function assertInviteSenderCanStillGrantAccess({
   pool,
   invite,
@@ -3455,6 +3485,7 @@ async function createEmailProjectInvite({
   invite_role,
   invite_base_url,
   read_policy,
+  require_email_match,
 }: {
   account_id: string;
   context?: Record<string, unknown>;
@@ -3466,6 +3497,7 @@ async function createEmailProjectInvite({
   invite_role?: Exclude<ProjectUserRole, "owner">;
   invite_base_url?: string;
   read_policy?: ProjectViewerReadPolicy | null;
+  require_email_match?: boolean;
 }): Promise<{
   created: boolean;
   invite: ProjectCollabInviteRow;
@@ -3493,6 +3525,10 @@ async function createEmailProjectInvite({
   }
   const policy = normalizeInviteReadPolicy({ invite_role: role, read_policy });
 
+  const normalizedContext: Record<string, unknown> = {
+    ...(context ?? {}),
+    require_invite_email_match: require_email_match === true,
+  };
   const existingInviteParams =
     scope === COURSE_EMAIL_INVITE_SCOPE
       ? [
@@ -3501,8 +3537,8 @@ async function createEmailProjectInvite({
           EMAIL_INVITE_SOURCE,
           scope,
           role,
-          `${context?.student_id ?? ""}`,
-          `${context?.student_project_id ?? project_id}`,
+          `${normalizedContext.student_id ?? ""}`,
+          `${normalizedContext.student_project_id ?? project_id}`,
         ]
       : [project_id, account_id, email_hash, EMAIL_INVITE_SOURCE, scope, role];
   const existingInviteQuery =
@@ -3539,6 +3575,15 @@ async function createEmailProjectInvite({
   }>(existingInviteQuery, existingInviteParams);
   const existing = existingRows[0];
   if (existing) {
+    if (context != null || require_email_match != null) {
+      await pool.query(
+        `UPDATE project_collab_invites
+            SET context=COALESCE(context, '{}'::jsonb) || $2::jsonb,
+                updated=NOW()
+          WHERE invite_id=$1`,
+        [existing.invite_id, JSON.stringify(normalizedContext)],
+      );
+    }
     const token = await decryptInviteValue(
       EMAIL_INVITE_TOKEN_AAD,
       existing.token_ciphertext,
@@ -3617,7 +3662,7 @@ async function createEmailProjectInvite({
       JSON.stringify(policy),
       normalizedMessage || null,
       scope,
-      JSON.stringify(context ?? {}),
+      JSON.stringify(normalizedContext),
     ],
   );
   const invite = await fetchInviteById(invite_id, false);
@@ -3797,6 +3842,7 @@ export async function redeemEmailProjectInvite({
       "You created this project invitation. Sign out and open the link using the CoCalc account you want to add.",
     );
   }
+  await assertInviteEmailMatchesAccount({ account_id, invite });
   await assertCourseStudentInviteRecipientIsNotManager({
     account_id,
     invite,
@@ -3876,6 +3922,7 @@ export async function redeemEmailProjectInvite({
 }
 
 export async function previewEmailProjectInvite({
+  account_id,
   invite_id,
   token,
   project_id,
@@ -3885,7 +3932,14 @@ export async function previewEmailProjectInvite({
   token: string;
   project_id?: string;
 }): Promise<ProjectCollabInviteRow> {
-  await getPendingEmailCollabInviteForToken({ invite_id, project_id, token });
+  const invite = await getPendingEmailCollabInviteForToken({
+    invite_id,
+    project_id,
+    token,
+  });
+  if (account_id) {
+    await assertInviteEmailMatchesAccount({ account_id, invite });
+  }
   const updated = await fetchInviteById(invite_id, false);
   if (!updated) {
     throw new Error("failed to load invite");
@@ -4122,6 +4176,7 @@ export async function inviteCollaboratorWithoutAccount({
     send_email?: boolean;
     invite_context?: Record<string, unknown>;
     invite_scope?: string;
+    require_email_match?: boolean;
     invite_role?: Exclude<ProjectUserRole, "owner">;
     invite_base_url?: string;
     read_policy?: ProjectViewerReadPolicy | null;
@@ -4197,6 +4252,7 @@ export async function inviteCollaboratorWithoutAccount({
       email_address,
       message: opts.message,
       scope: opts.invite_scope,
+      require_email_match: opts.require_email_match,
       invite_role: opts.invite_role,
       invite_base_url: opts.invite_base_url ?? opts.link2proj,
       read_policy: opts.read_policy,

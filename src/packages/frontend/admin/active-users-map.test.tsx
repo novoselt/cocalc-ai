@@ -1,6 +1,65 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
+import {
+  ActiveUsersMapAdmin,
+  activeUsersMapDrawerTitle,
+  activeUsersMapHistoryFallbackCountries,
+} from "./active-users-map";
 import { ActiveUsersMapSummary } from "./active-users-map-summary";
+
+const mockGetActiveUserMap = jest.fn();
+const mockGetHistorySeries = jest.fn();
+
+jest.mock("@cocalc/frontend/webapp-client", () => ({
+  webapp_client: {
+    conat_client: {
+      hub: {
+        system: {
+          getActiveUserMap: (...args: unknown[]) =>
+            mockGetActiveUserMap(...args),
+          getActiveUserMapHistorySeries: (...args: unknown[]) =>
+            mockGetHistorySeries(...args),
+          getActiveUserMapHistorySnapshot: jest.fn(async () => null),
+        },
+      },
+    },
+  },
+}));
+jest.mock("./active-users-map-plot", () => ({
+  activeUsersMapLocationName: () => "Location",
+  ActiveUsersMapPlot: () => <div>Map</div>,
+}));
+jest.mock("./active-users-map-history-plot", () => ({
+  ActiveUsersMapHistoryPlot: () => <div>History plot</div>,
+}));
+jest.mock("./users/user", () => ({ UserResult: () => null }));
+jest.mock("@cocalc/frontend/frame-editors/generic/client", () => ({
+  user_search: jest.fn(async () => []),
+}));
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockGetActiveUserMap.mockResolvedValue({
+    enabled: true,
+    checked_at: "2026-08-27T00:00:00.000Z",
+    bay_id: "bay-1",
+    current_bay_id: "bay-1",
+    active_minutes: 15,
+    total_active: 0,
+    mapped_active: 0,
+    unknown_location: 0,
+    countries: [],
+    unknown_users: [],
+    bays: [{ bay_id: "bay-1", ok: true, enabled: true, total_active: 0 }],
+  });
+  mockGetHistorySeries.mockResolvedValue({
+    active_minutes: 60,
+    days: 365,
+    country_code: null,
+    country_codes: [],
+    points: [],
+  });
+});
 
 describe("ActiveUsersMapSummary", () => {
   it("shows compact counts and opens unavailable locations", () => {
@@ -41,5 +100,86 @@ describe("ActiveUsersMapSummary", () => {
       screen.queryByRole("button", { name: /Location unavailable/ }),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Location unavailable:")).toHaveTextContent("0");
+  });
+});
+
+describe("ActiveUsersMapAdmin", () => {
+  it("requests optional city groups from the last live-mode control", async () => {
+    render(<ActiveUsersMapAdmin />);
+
+    const checkbox = screen.getByRole("checkbox", { name: "Group by city" });
+    await waitFor(() =>
+      expect(mockGetActiveUserMap).toHaveBeenCalledWith({
+        active_minutes: 15,
+        group_by: "country",
+      }),
+    );
+
+    fireEvent.click(checkbox);
+    await waitFor(() =>
+      expect(mockGetActiveUserMap).toHaveBeenLastCalledWith({
+        active_minutes: 15,
+        group_by: "city",
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "History" }));
+    expect(
+      screen.queryByRole("checkbox", { name: "Group by city" }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("activeUsersMapDrawerTitle", () => {
+  it("describes named and unavailable locations with user counts", () => {
+    expect(activeUsersMapDrawerTitle("Canada", 34)).toBe(
+      "Canada: 34 active users",
+    );
+    expect(activeUsersMapDrawerTitle("Location unavailable", 1)).toBe(
+      "Location unavailable: 1 active user",
+    );
+  });
+});
+
+describe("activeUsersMapHistoryFallbackCountries", () => {
+  it("combines live city groups into country-only history groups", () => {
+    const countries = activeUsersMapHistoryFallbackCountries([
+      {
+        group_id: "city:ca:ab:calgary",
+        granularity: "city",
+        country_code: "CA",
+        region_code: "AB",
+        region: "Alberta",
+        city: "Calgary",
+        latitude: 51.0447,
+        longitude: -114.0719,
+        count: 2,
+        users: [],
+      },
+      {
+        group_id: "city:ca:on:toronto",
+        granularity: "city",
+        country_code: "CA",
+        region_code: "ON",
+        region: "Ontario",
+        city: "Toronto",
+        latitude: 43.6532,
+        longitude: -79.3832,
+        count: 3,
+        users: [],
+      },
+    ]);
+
+    expect(countries).toEqual([
+      expect.objectContaining({
+        group_id: "CA",
+        granularity: "country",
+        country_code: "CA",
+        region_code: null,
+        region: null,
+        city: null,
+        count: 5,
+      }),
+    ]);
   });
 });
