@@ -1390,6 +1390,7 @@ export function PublicSignInForm({
     !challengeId && isCocalcAiPublicSite(publicConfig);
   const hasTotp = factorMethods.includes("totp");
   const hasRecoveryCode = factorMethods.includes("recovery_code");
+  const factorMethodsKnown = factorMethods.length > 0;
   const recoveryCodeOnly = hasRecoveryCode && !hasTotp;
   const codeFactorMethod =
     factorMethod === "recovery_code"
@@ -1755,7 +1756,7 @@ export function PublicSignInForm({
               <div style={{ color: "#666", marginBottom: "8px" }}>
                 {factorMethod === "recovery_code"
                   ? "Enter one of the recovery codes saved when your passkey was set up."
-                  : hasRecoveryCode
+                  : !factorMethodsKnown || hasRecoveryCode
                     ? "Enter either the 6-digit authenticator code or one of your recovery codes."
                     : "Enter the 6-digit code from your authenticator app."}
               </div>

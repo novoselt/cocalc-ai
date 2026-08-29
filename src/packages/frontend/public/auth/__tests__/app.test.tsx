@@ -1473,6 +1473,11 @@ describe("PublicAuthApp", () => {
         "Single sign-on succeeded. Enter your CoCalc second factor to finish signing in.",
       ),
     ).not.toBeNull();
+    expect(
+      screen.getByText(
+        "Enter either the 6-digit authenticator code or one of your recovery codes.",
+      ),
+    ).not.toBeNull();
     fireEvent.change(screen.getByPlaceholderText("123456"), {
       target: { value: "123456" },
     });
@@ -1488,6 +1493,43 @@ describe("PublicAuthApp", () => {
           challenge_id: "challenge-3",
           method: "totp",
           code: "123456",
+        },
+      }),
+    );
+    consoleError.mockRestore();
+  });
+
+  it("accepts a recovery code when SSO factor methods are unknown", async () => {
+    mockedPostAuthApi.mockResolvedValueOnce({
+      account_id: "account-1",
+      home_bay_url: "https://bay.example.test",
+    } as any);
+
+    render(
+      <PublicAuthApp
+        config={config()}
+        initialRoute={{
+          challengeId: "challenge-4",
+          kind: "auth-second-factor",
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("123456"), {
+      target: { value: "ABCD-EFGH-IJKL" },
+    });
+    const consoleError = jest.spyOn(console, "error").mockImplementation(() => {
+      // jsdom does not implement full-page reloads.
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+
+    await waitFor(() =>
+      expect(mockedPostAuthApi).toHaveBeenCalledWith({
+        endpoint: "auth/verify-second-factor",
+        body: {
+          challenge_id: "challenge-4",
+          method: "recovery_code",
+          code: "ABCD-EFGH-IJKL",
         },
       }),
     );
