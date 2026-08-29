@@ -54,7 +54,7 @@ function formatMembershipGrantDescription(
 ): string {
   const tier = share.site_license_membership_tier_id || "site-license";
   const days = share.site_license_duration_days ?? 30;
-  return `Copying this share attempts to grant a temporary ${tier} membership for ${days} ${days === 1 ? "day" : "days"}. If no seats are available, the copy still works on the free tier.`;
+  return `When you copy this publication, CoCalc adds ${tier} access for ${days} ${days === 1 ? "day" : "days"} when a seat is available. If the publication's license pool is full, you can still copy it and use the access already available to your account.`;
 }
 
 function shareTitle(share: ResolvedPublicDirectoryShare): string {
@@ -85,7 +85,10 @@ function sharePublisherLine(share: ResolvedPublicDirectoryShare): string {
   if (projectTitle) {
     parts.push(`Published from ${projectTitle}`);
   }
-  const publisher = share.created_by?.trim() || share.updated_by?.trim();
+  const publisher =
+    share.publisher_account_id?.trim() ||
+    share.created_by?.trim() ||
+    share.updated_by?.trim();
   if (publisher) {
     parts.push(`Publisher ${publisher}`);
   }
@@ -137,6 +140,27 @@ function ShareDescription({ value }: { value: string }) {
         margin: "4px 0 0",
       }}
     />
+  );
+}
+
+function ReaderInstructions({ value }: { value: string }) {
+  return (
+    <div
+      style={{
+        background: COLORS.WHITE,
+        border: `1px solid ${COLORS.GRAY_LL}`,
+        borderLeft: `4px solid ${COLORS.ANTD_LINK_BLUE}`,
+        borderRadius: 4,
+        marginTop: 8,
+        padding: "8px 12px",
+      }}
+    >
+      <Text strong>How to copy and use this publication</Text>
+      <StaticMarkdown
+        value={normalizeShareDescriptionMarkdown(value)}
+        style={{ margin: "4px 0 0" }}
+      />
+    </div>
   );
 }
 
@@ -233,6 +257,9 @@ export function PublicDirectoryShareBanner({
   const publisher = sharePublisherLine(share);
   const image = shareImageUrl(share);
   const description = share.description?.trim();
+  const readerInstructions = (
+    share.reader_instructions ?? share.publisher_reader_instructions
+  )?.trim();
   const license = share.license?.trim();
   const themeColor = share.theme?.color?.trim() || COLORS.ANTD_LINK_BLUE;
   const themeAccent = share.theme?.accent_color?.trim();
@@ -518,10 +545,13 @@ export function PublicDirectoryShareBanner({
                   <Text>{shareScopeDescription(share)}</Text>
                   <Tag>{share.slug}</Tag>
                   {share.site_license_grant_on_copy ? (
-                    <Tag color="blue">temporary membership on copy</Tag>
+                    <Tag color="blue">additional access on copy</Tag>
                   ) : null}
                 </Space>
                 {description ? <ShareDescription value={description} /> : null}
+                {readerInstructions ? (
+                  <ReaderInstructions value={readerInstructions} />
+                ) : null}
                 {license ? (
                   <div>
                     <Text type="secondary">License: {license}</Text>
@@ -593,6 +623,9 @@ export function PublicDirectoryShareBanner({
       >
         <Space vertical style={{ width: "100%" }}>
           {description ? <ShareDescription value={description} /> : null}
+          {readerInstructions ? (
+            <ReaderInstructions value={readerInstructions} />
+          ) : null}
           {copyMode === "new" ? (
             <Text>
               Copy this published{" "}
@@ -604,7 +637,7 @@ export function PublicDirectoryShareBanner({
             <Alert
               type="success"
               showIcon
-              title="Temporary membership offered"
+              title="Additional access included when available"
               description={formatMembershipGrantDescription(share)}
             />
           ) : null}

@@ -35,6 +35,7 @@ export interface PublicDirectoryShareSummary {
   availability_message?: string | null;
   title?: string | null;
   description?: string | null;
+  reader_instructions?: string | null;
   license?: string | null;
   image?: string | null;
   theme?: PublicDirectoryShareTheme | null;
@@ -48,6 +49,7 @@ export interface PublicDirectoryShareSummary {
   site_license_grant_on_copy: boolean;
   site_license_copy_requires_grant: boolean;
   disabled: boolean;
+  publisher_account_id?: string | null;
   created_by?: string | null;
   updated_by?: string | null;
   last_edited?: Date | string | null;
@@ -71,6 +73,21 @@ export interface ResolvedPublicDirectoryShare extends PublicDirectoryShareSummar
   host_id?: string | null;
   host_connection?: HostConnectionInfo | null;
   owning_bay_id?: string | null;
+  publisher_reader_instructions?: string | null;
+}
+
+export interface PublicSharePublisherProfile {
+  reader_instructions_markdown?: string | null;
+  updated_at?: Date | string | null;
+}
+
+export interface GetPublicSharePublisherProfileOptions {
+  account_id?: string;
+}
+
+export interface UpdatePublicSharePublisherProfileOptions {
+  account_id?: string;
+  reader_instructions_markdown?: string | null;
 }
 
 export interface ResolvePublicDirectoryShareOptions {
@@ -150,6 +167,7 @@ export interface UpsertPublicDirectoryShareOptions {
   availability_message?: string | null;
   title?: string | null;
   description?: string | null;
+  reader_instructions?: string | null;
   license?: string | null;
   image?: string | null;
   theme?: PublicDirectoryShareTheme | null;
@@ -174,6 +192,7 @@ export interface CreatePublicDirectoryShareOptions {
   slug: string;
   title?: string | null;
   description?: string | null;
+  reader_instructions?: string | null;
   license?: string | null;
   image?: string | null;
   theme?: PublicDirectoryShareTheme | null;
@@ -190,6 +209,7 @@ export interface UpdatePublicDirectoryShareOptions {
   slug?: string;
   title?: string | null;
   description?: string | null;
+  reader_instructions?: string | null;
   license?: string | null;
   image?: string | null;
   theme?: PublicDirectoryShareTheme | null;
@@ -250,6 +270,9 @@ export interface GrantTemporaryViewerAccessResponse {
   project_title?: string | null;
   share_title?: string | null;
   share_description?: string | null;
+  reader_instructions?: string | null;
+  publisher_reader_instructions?: string | null;
+  publisher_account_id?: string | null;
   license?: string | null;
   image?: string | null;
   theme?: PublicDirectoryShareTheme | null;
@@ -348,6 +371,12 @@ export function isCopyPublicDirectoryShareToNewProjectConflict(
 }
 
 export interface PublicDirectoryShares {
+  getPublisherProfile: (
+    opts?: GetPublicSharePublisherProfileOptions,
+  ) => Promise<PublicSharePublisherProfile>;
+  updatePublisherProfile: (
+    opts: UpdatePublicSharePublisherProfileOptions,
+  ) => Promise<PublicSharePublisherProfile>;
   resolve: (
     opts: ResolvePublicDirectoryShareOptions,
   ) => Promise<ResolvedPublicDirectoryShare>;
@@ -393,6 +422,8 @@ export interface PublicDirectoryShares {
 }
 
 export const publicDirectoryShares = {
+  getPublisherProfile: authFirstRequireAccount,
+  updatePublisherProfile: authFirstRequireAccount,
   resolve: authFirstRequireAccount,
   list: authFirstRequireAccount,
   listMine: authFirstRequireAccount,

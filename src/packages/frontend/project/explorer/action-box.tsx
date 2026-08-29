@@ -63,6 +63,7 @@ import {
   MAX_PUBLIC_DIRECTORY_SHARE_LICENSE_LENGTH,
   MAX_PUBLIC_DIRECTORY_SHARE_SLUG_LENGTH,
   MAX_PUBLIC_DIRECTORY_SHARE_TITLE_LENGTH,
+  MAX_PUBLIC_SHARE_READER_INSTRUCTIONS_LENGTH,
 } from "@cocalc/util/public-directory-share-labels";
 import {
   themeDraftFromTheme,
@@ -267,6 +268,8 @@ export function ActionBox({
     useState<boolean>(false);
   const [publishTitle, setPublishTitle] = useState<string>("");
   const [publishDescription, setPublishDescription] = useState<string>("");
+  const [publishReaderInstructions, setPublishReaderInstructions] =
+    useState<string>("");
   const [publishLicense, setPublishLicense] = useState<string>("");
   const [publishSlug, setPublishSlug] = useState<string>("");
   const [publishThemeOpen, setPublishThemeOpen] = useState<boolean>(false);
@@ -353,6 +356,7 @@ export function ActionBox({
           setPublishTheme(theme);
           setPublishTitle(theme.title);
           setPublishDescription(theme.description);
+          setPublishReaderInstructions(share.reader_instructions ?? "");
           setPublishLicense(share.license ?? "");
           setPublishSlug(share.slug);
           setPublishUrl(publicShareUrl(share.slug));
@@ -422,6 +426,7 @@ export function ActionBox({
     setDeleteFromSnapshots(false);
     setPublishTitle("");
     setPublishDescription("");
+    setPublishReaderInstructions("");
     setPublishLicense("");
     setPublishSlug("");
     setPublishTheme(defaultPublishTheme(""));
@@ -1066,6 +1071,7 @@ export function ActionBox({
             slug: publishSlug,
             title: publishTheme.title || publishTitle,
             description: publishTheme.description || publishDescription,
+            reader_instructions: publishReaderInstructions,
             license: publishLicense,
             image: publishTheme.image_blob,
             theme: publishTheme,
@@ -1087,6 +1093,7 @@ export function ActionBox({
             slug: publishSlug,
             title: publishTheme.title || publishTitle,
             description: publishTheme.description || publishDescription,
+            reader_instructions: publishReaderInstructions,
             license: publishLicense,
             image: publishTheme.image_blob,
             theme: publishTheme,
@@ -1193,7 +1200,10 @@ export function ActionBox({
         : publishTheme.description.length >
             MAX_PUBLIC_DIRECTORY_SHARE_DESCRIPTION_LENGTH
           ? `Description must be at most ${MAX_PUBLIC_DIRECTORY_SHARE_DESCRIPTION_LENGTH} characters`
-          : undefined;
+          : publishReaderInstructions.length >
+              MAX_PUBLIC_SHARE_READER_INSTRUCTIONS_LENGTH
+            ? `Reader instructions must be at most ${MAX_PUBLIC_SHARE_READER_INSTRUCTIONS_LENGTH} characters`
+            : undefined;
     const canPublish =
       publishSlug.trim().length > 0 &&
       publishThemeError == null &&
@@ -1314,6 +1324,24 @@ export function ActionBox({
             defaultIcon="folder-open"
             error={publishThemeError}
           />
+        </div>
+        <div>
+          <Typography.Text strong>Reader instructions override</Typography.Text>
+          <AntdInput.TextArea
+            aria-label="Reader instructions override"
+            value={publishReaderInstructions}
+            onChange={(event) =>
+              setPublishReaderInstructions(event.target.value)
+            }
+            maxLength={MAX_PUBLIC_SHARE_READER_INSTRUCTIONS_LENGTH}
+            autoSize={{ minRows: 3, maxRows: 10 }}
+            placeholder="Optional Markdown instructions for this publication only"
+            showCount
+          />
+          <Typography.Text type="secondary">
+            Leave blank to use the account-wide reader instructions configured
+            in Public shares settings.
+          </Typography.Text>
         </div>
         <div>
           <Typography.Text strong>License</Typography.Text>

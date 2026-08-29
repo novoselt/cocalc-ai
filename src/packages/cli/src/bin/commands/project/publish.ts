@@ -13,6 +13,7 @@ type PublishOptions = {
   slug: string;
   title?: string;
   description?: string;
+  readerInstructions?: string;
   license?: string;
   siteLicenseId?: string;
   siteLicensePool?: string;
@@ -56,6 +57,10 @@ export function registerProjectPublishCommands(
     )
     .option("--title <title>", "share title")
     .option("--description <description>", "share description")
+    .option(
+      "--reader-instructions <markdown>",
+      "instructions that override the publisher profile for this share",
+    )
     .option("--license <license>", "share license")
     .option("--site-license-id <id>", "site license id for copy grants")
     .option("--site-license-pool <id>", "site license pool id for copy grants")
@@ -86,6 +91,7 @@ export function registerProjectPublishCommands(
               slug: opts.slug,
               title: opts.title,
               description: opts.description,
+              reader_instructions: opts.readerInstructions,
               license: opts.license,
               site_license_grant_on_copy: grantOnCopy,
               site_license_copy_requires_grant:
