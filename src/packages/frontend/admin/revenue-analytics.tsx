@@ -20,8 +20,8 @@ import { RevenueAnalyticsDashboard } from "./revenue-analytics-dashboard";
 const { Text } = Typography;
 
 export const ALL_COMPUTE_PRODUCTS: ComputeRevenueProduct[] = [
-  "dedicated-host",
   "virtual-machine",
+  "dedicated-host",
 ];
 export const DEFAULT_COMPUTE_PRODUCTS = [...ALL_COMPUTE_PRODUCTS];
 
@@ -29,8 +29,8 @@ const COMPUTE_PRODUCT_OPTIONS: Array<{
   value: ComputeRevenueProduct;
   label: string;
 }> = [
-  { value: "dedicated-host", label: "Dedicated hosts" },
   { value: "virtual-machine", label: "Virtual machines" },
+  { value: "dedicated-host", label: "Dedicated hosts" },
 ];
 
 export function MembershipChannelSelector({
@@ -128,11 +128,11 @@ export function RevenueAnalyticsAdmin() {
 
   return (
     <Space vertical size="middle" style={{ width: "100%" }}>
-      <MembershipChannelSelector value={channels} onChange={setChannels} />
       <ComputeProductSelector
         value={computeProducts}
         onChange={setComputeProducts}
       />
+      <MembershipChannelSelector value={channels} onChange={setChannels} />
       <RevenueAnalyticsDashboard
         channels={channels}
         computeProducts={computeProducts}
