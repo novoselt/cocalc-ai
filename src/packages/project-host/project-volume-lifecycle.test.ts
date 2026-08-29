@@ -8,6 +8,7 @@ import {
   currentProjectVolumeLifecycleGeneration,
   invalidateProjectVolumeLifecycle,
   resetProjectVolumeLifecycleForTesting,
+  withCurrentProjectVolumeLifecycleLock,
   withProjectVolumeLifecycleLock,
 } from "./project-volume-lifecycle";
 
@@ -65,5 +66,31 @@ describe("project volume lifecycle coordination", () => {
     await expect(stalePreparation).rejects.toThrow(
       "project volume lifecycle changed",
     );
+  });
+
+  it("skips queued work when volume deletion invalidates its generation", async () => {
+    const project_id = "project-1";
+    const expectedGeneration =
+      currentProjectVolumeLifecycleGeneration(project_id);
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const first = withProjectVolumeLifecycleLock(project_id, async () => {
+      await firstBlocked;
+    });
+    const run = jest.fn(async () => "ran");
+    const staleMaintenance = withCurrentProjectVolumeLifecycleLock(
+      project_id,
+      expectedGeneration,
+      run,
+    );
+
+    invalidateProjectVolumeLifecycle(project_id);
+    releaseFirst();
+    await first;
+
+    await expect(staleMaintenance).resolves.toBeUndefined();
+    expect(run).not.toHaveBeenCalled();
   });
 });

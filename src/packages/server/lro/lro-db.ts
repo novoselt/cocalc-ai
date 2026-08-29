@@ -387,6 +387,29 @@ export async function updateLro({
   return rows[0] as LroSummary | undefined;
 }
 
+export async function mergeLroResult({
+  op_id,
+  result,
+  if_status,
+}: {
+  op_id: string;
+  result: Record<string, unknown>;
+  if_status: LroStatus[];
+}): Promise<LroSummary | undefined> {
+  await ensureLroSchema();
+  if (if_status.length === 0) return;
+  const { rows } = await pool().query(
+    `UPDATE long_running_operations
+        SET result = COALESCE(result, '{}'::jsonb) || $2::jsonb,
+            updated_at = NOW()
+      WHERE op_id=$1
+        AND status=ANY($3::text[])
+      RETURNING *`,
+    [op_id, JSON.stringify(result), if_status],
+  );
+  return rows[0] as LroSummary | undefined;
+}
+
 export async function dismissLro({
   op_id,
   dismissed_by,
@@ -451,6 +474,101 @@ export async function getLro(op_id: string): Promise<LroSummary | undefined> {
     [op_id],
   );
   return rows[0] as LroSummary | undefined;
+}
+
+export async function listLrosByDedupe({
+  scope_type,
+  scope_id,
+  dedupe_key,
+}: {
+  scope_type: LroScopeType;
+  scope_id: string;
+  dedupe_key: string;
+}): Promise<LroSummary[]> {
+  await ensureLroSchema();
+  const { rows } = await pool().query(
+    `SELECT *
+       FROM long_running_operations
+      WHERE scope_type=$1
+        AND scope_id=$2
+        AND dedupe_key=$3
+      ORDER BY created_at DESC`,
+    [scope_type, scope_id, dedupe_key],
+  );
+  return rows as LroSummary[];
+}
+
+export async function attestReleasedLroDedupeSuccesses({
+  scope_type,
+  scope_id,
+  dedupe_key,
+  expected_result_id,
+  expected_generation,
+}: {
+  scope_type: LroScopeType;
+  scope_id: string;
+  dedupe_key: string;
+  expected_result_id: string;
+  expected_generation: number;
+}): Promise<LroSummary[]> {
+  await ensureLroSchema();
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      `cocalc:lro-dedupe:${scope_type}:${scope_id}:${dedupe_key}`,
+    ]);
+    const { rows } = await client.query(
+      `SELECT *
+         FROM long_running_operations
+        WHERE scope_type=$1
+          AND scope_id=$2
+          AND dedupe_key=$3
+          AND kind='project-backup'
+        ORDER BY created_at DESC
+        FOR UPDATE`,
+      [scope_type, scope_id, dedupe_key],
+    );
+    const history = rows as LroSummary[];
+    const matchingSuccess = history.some(({ status, result }) => {
+      if (status !== "succeeded") return false;
+      const id = `${result?.id ?? result?.backup_id ?? ""}`.trim();
+      return (
+        id === expected_result_id &&
+        Number(result?.generation) === expected_generation
+      );
+    });
+    if (!matchingSuccess) {
+      throw new Error(
+        "released LRO attestation does not match the final backup",
+      );
+    }
+    // A checked host release is volume-wide, so no successful freeze under
+    // this lifecycle identity remains eligible for reuse.
+    await client.query(
+      `UPDATE long_running_operations
+          SET result = COALESCE(result, '{}'::jsonb) || $4::jsonb,
+              updated_at = NOW()
+        WHERE scope_type=$1
+          AND scope_id=$2
+          AND dedupe_key=$3
+          AND kind='project-backup'
+          AND status='succeeded'`,
+      [
+        scope_type,
+        scope_id,
+        dedupe_key,
+        JSON.stringify({ archive_freeze_recovery: "released" }),
+      ],
+    );
+    await client.query("COMMIT");
+    return history;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function listChildLro({

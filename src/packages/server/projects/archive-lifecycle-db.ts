@@ -30,6 +30,15 @@ export type ProjectArchiveLifecycleJob = {
   report_only: boolean;
   attempts: number;
   thresholds: Record<string, unknown>;
+  final_backup_id: string | null;
+  backup_generation: number | string | null;
+  backup_time: Date | string | null;
+};
+
+export type ProjectArchiveLifecycleFinalBackup = {
+  id: string;
+  generation: number | string;
+  time: Date | string | null;
 };
 
 function boundedError(error: unknown): string {
@@ -148,7 +157,8 @@ export async function createProjectArchiveLifecycleJob({
      )
      ON CONFLICT DO NOTHING
      RETURNING id, project_id, owning_bay_id, host_id, reason,
-               policy_version, status, report_only, attempts, thresholds`,
+               policy_version, status, report_only, attempts, thresholds,
+               final_backup_id, backup_generation, backup_time`,
     [
       id,
       project.project_id,
@@ -168,6 +178,98 @@ export async function createProjectArchiveLifecycleJob({
     ],
   );
   return rows[0];
+}
+
+export async function getProjectArchiveLifecycleFinalBackup(
+  job_id: string,
+): Promise<ProjectArchiveLifecycleFinalBackup | undefined> {
+  await ensureProjectArchiveLifecycleSchema();
+  const { rows } = await getPool().query<{
+    final_backup_id: string | null;
+    backup_generation: number | string | null;
+    backup_time: Date | string | null;
+  }>(
+    `SELECT final_backup_id, backup_generation, backup_time
+       FROM ${PROJECT_ARCHIVE_LIFECYCLE_TABLE}
+      WHERE id = $1
+      LIMIT 1`,
+    [job_id],
+  );
+  const row = rows[0];
+  if (!row?.final_backup_id || row.backup_generation == null) return;
+  return {
+    id: row.final_backup_id,
+    generation: row.backup_generation,
+    time: row.backup_time,
+  };
+}
+
+export async function recordProjectArchiveLifecycleFinalBackup({
+  job_id,
+  backup_id,
+  backup_generation,
+  backup_time,
+  expected_previous_backup_id,
+}: {
+  job_id: string;
+  backup_id: string;
+  backup_generation: number;
+  backup_time?: Date | string | null;
+  expected_previous_backup_id?: string | null;
+}): Promise<void> {
+  await ensureProjectArchiveLifecycleSchema();
+  const result = await getPool().query(
+    `UPDATE ${PROJECT_ARCHIVE_LIFECYCLE_TABLE}
+        SET final_backup_id = $2,
+            backup_generation = $3,
+            backup_time = $4,
+            updated_at = NOW()
+      WHERE id = $1
+        AND status = 'running'
+        AND final_backup_id IS NOT DISTINCT FROM $5`,
+    [
+      job_id,
+      backup_id,
+      backup_generation,
+      backup_time ?? null,
+      expected_previous_backup_id ?? null,
+    ],
+  );
+  if ((result.rowCount ?? 0) !== 1) {
+    throw new Error("archive lifecycle job no longer accepts a final backup");
+  }
+}
+
+export async function clearProjectArchiveLifecycleFinalBackup({
+  job_id,
+  backup_id,
+  backup_generation,
+}: {
+  job_id: string;
+  backup_id: string;
+  backup_generation: number;
+}): Promise<void> {
+  await ensureProjectArchiveLifecycleSchema();
+  const result = await getPool().query(
+    `UPDATE ${PROJECT_ARCHIVE_LIFECYCLE_TABLE}
+        SET final_backup_id = NULL,
+            backup_generation = NULL,
+            backup_time = NULL,
+            updated_at = NOW()
+      WHERE id = $1
+        AND status = 'running'
+        AND (
+          final_backup_id IS NULL
+          OR (
+            final_backup_id = $2
+            AND backup_generation = $3
+          )
+        )`,
+    [job_id, backup_id, backup_generation],
+  );
+  if ((result.rowCount ?? 0) !== 1) {
+    throw new Error("archive lifecycle final backup changed during rollback");
+  }
 }
 
 export async function updateProjectArchiveLifecycleJob({
@@ -251,13 +353,53 @@ export async function claimProjectArchiveLifecycleJob(
   return (result.rowCount ?? 0) === 1;
 }
 
+export async function claimRetainedProjectArchiveLifecycleJob(
+  job_id: string,
+): Promise<boolean> {
+  await ensureProjectArchiveLifecycleSchema();
+  const result = await getPool().query(
+    `UPDATE ${PROJECT_ARCHIVE_LIFECYCLE_TABLE} job
+        SET status = 'running',
+            attempts = attempts + 1,
+            claimed_at = NOW(),
+            completed_at = NULL,
+            next_attempt_at = NULL,
+            failure_category = NULL,
+            error = NULL,
+            updated_at = NOW()
+      WHERE job.id = $1
+        AND job.reason <> 'manual'
+        AND job.report_only IS FALSE
+        AND (
+          job.status IN ('queued', 'stale', 'canceled', 'completed')
+          OR (
+            job.status = 'failed'
+            AND (job.next_attempt_at IS NULL OR job.next_attempt_at <= NOW())
+          ) OR (
+            job.status = 'running'
+            AND job.updated_at <= NOW() - INTERVAL '10 minutes'
+          )
+        )
+        AND EXISTS (
+          SELECT 1
+            FROM projects project
+           WHERE project.project_id = job.project_id
+             AND project.archive_lifecycle_job_id = job.id
+             AND project.state ->> 'state' = 'archiving'
+        )`,
+    [job_id],
+  );
+  return (result.rowCount ?? 0) === 1;
+}
+
 export async function listQueuedProjectArchiveLifecycleJobs(
   limit: number,
 ): Promise<ProjectArchiveLifecycleJob[]> {
   await ensureProjectArchiveLifecycleSchema();
   const { rows } = await getPool().query<ProjectArchiveLifecycleJob>(
     `SELECT id, project_id, owning_bay_id, host_id, reason,
-            policy_version, status, report_only, attempts, thresholds
+            policy_version, status, report_only, attempts, thresholds,
+            final_backup_id, backup_generation, backup_time
        FROM ${PROJECT_ARCHIVE_LIFECYCLE_TABLE}
       WHERE reason <> 'manual'
         AND report_only IS FALSE
@@ -272,6 +414,41 @@ export async function listQueuedProjectArchiveLifecycleJobs(
         )
       ORDER BY CASE WHEN reason = 'all-collaborators-banned' THEN 0 ELSE 1 END,
                created_at ASC
+      LIMIT $1`,
+    [Math.max(1, Math.floor(limit))],
+  );
+  return rows;
+}
+
+export async function listRecoverableProjectArchiveLifecycleJobs(
+  limit: number,
+): Promise<ProjectArchiveLifecycleJob[]> {
+  await ensureProjectArchiveLifecycleSchema();
+  const { rows } = await getPool().query<ProjectArchiveLifecycleJob>(
+    `SELECT job.id, job.project_id, job.owning_bay_id, job.host_id,
+            job.reason, job.policy_version, job.status, job.report_only,
+            job.attempts, job.thresholds, job.final_backup_id,
+            job.backup_generation, job.backup_time
+       FROM ${PROJECT_ARCHIVE_LIFECYCLE_TABLE} job
+       JOIN projects project
+         ON project.project_id = job.project_id
+        AND project.archive_lifecycle_job_id = job.id
+        AND project.state ->> 'state' = 'archiving'
+      WHERE job.reason <> 'manual'
+        AND job.report_only IS FALSE
+        AND (
+          job.status IN ('queued', 'stale', 'canceled', 'completed')
+          OR
+          (
+            job.status = 'failed'
+            AND (job.next_attempt_at IS NULL OR job.next_attempt_at <= NOW())
+          ) OR (
+            job.status = 'running'
+            AND job.updated_at <= NOW() - INTERVAL '10 minutes'
+          )
+        )
+      ORDER BY CASE WHEN job.reason = 'all-collaborators-banned' THEN 0 ELSE 1 END,
+               job.created_at ASC
       LIMIT $1`,
     [Math.max(1, Math.floor(limit))],
   );

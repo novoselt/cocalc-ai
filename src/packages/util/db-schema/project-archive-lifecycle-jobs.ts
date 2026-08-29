@@ -60,6 +60,7 @@ Table({
           thresholds: null,
           evidence: null,
           backup_repo_id: null,
+          final_backup_id: null,
           backup_generation: null,
           backup_time: null,
           failure_category: null,
@@ -125,6 +126,10 @@ Table({
       desc: "Eligibility and safety evidence.",
     },
     backup_repo_id: { type: "uuid", desc: "Rustic repository used." },
+    final_backup_id: {
+      type: "string",
+      desc: "Validated final backup snapshot created before automatic host cleanup.",
+    },
     backup_generation: {
       type: "integer",
       desc: "Persisted generation covered by the backup.",

@@ -16,7 +16,12 @@ jest.mock("./archive-lifecycle-schema", () => ({
 }));
 
 import {
+  claimRetainedProjectArchiveLifecycleJob,
+  clearProjectArchiveLifecycleFinalBackup,
   createProjectArchiveLifecycleJob,
+  getProjectArchiveLifecycleFinalBackup,
+  listRecoverableProjectArchiveLifecycleJobs,
+  recordProjectArchiveLifecycleFinalBackup,
   updateProjectArchiveLifecycleJob,
 } from "./archive-lifecycle-db";
 import type { ArchiveLifecycleProjectSnapshot } from "./archive-lifecycle-types";
@@ -74,5 +79,105 @@ describe("project archive lifecycle job persistence", () => {
     expect(sql.match(/\$2::VARCHAR\(32\)/g)).toHaveLength(3);
     expect(sql).not.toMatch(/\$2(?!::VARCHAR\(32\))/);
     expect(parameters[1]).toBe("completed");
+  });
+
+  it("persists the validated final backup before host cleanup", async () => {
+    query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    await recordProjectArchiveLifecycleFinalBackup({
+      job_id: "66666666-6666-4666-8666-666666666666",
+      backup_id: "final-backup-id",
+      backup_generation: 42,
+      backup_time: "2026-08-28T04:00:00.000Z",
+      expected_previous_backup_id: null,
+    });
+
+    const [sql, parameters] = query.mock.calls[0];
+    expect(sql).toContain("final_backup_id = $2");
+    expect(sql).toContain("status = 'running'");
+    expect(sql).toContain("final_backup_id IS NOT DISTINCT FROM $5");
+    expect(parameters).toEqual([
+      "66666666-6666-4666-8666-666666666666",
+      "final-backup-id",
+      42,
+      "2026-08-28T04:00:00.000Z",
+      null,
+    ]);
+  });
+
+  it("loads a durable final backup marker for cleanup retries", async () => {
+    query.mockResolvedValueOnce({
+      rows: [
+        {
+          final_backup_id: "final-backup-id",
+          backup_generation: "42",
+          backup_time: new Date("2026-08-28T04:00:00.000Z"),
+        },
+      ],
+    });
+
+    await expect(
+      getProjectArchiveLifecycleFinalBackup(
+        "66666666-6666-4666-8666-666666666666",
+      ),
+    ).resolves.toEqual({
+      id: "final-backup-id",
+      generation: "42",
+      time: new Date("2026-08-28T04:00:00.000Z"),
+    });
+  });
+
+  it("clears a final backup marker with a generation compare-and-set", async () => {
+    query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    await clearProjectArchiveLifecycleFinalBackup({
+      job_id: "66666666-6666-4666-8666-666666666666",
+      backup_id: "final-backup-id",
+      backup_generation: 42,
+    });
+
+    const [sql, parameters] = query.mock.calls[0];
+    expect(sql).toContain("final_backup_id = NULL");
+    expect(sql).toContain("final_backup_id = $2");
+    expect(sql).toContain("backup_generation = $3");
+    expect(parameters).toEqual([
+      "66666666-6666-4666-8666-666666666666",
+      "final-backup-id",
+      42,
+    ]);
+  });
+
+  it("selects only retained archiving claims for policy-independent recovery", async () => {
+    query.mockResolvedValueOnce({ rows: [] });
+
+    await listRecoverableProjectArchiveLifecycleJobs(25);
+
+    const [sql, parameters] = query.mock.calls[0];
+    expect(sql).toContain("project.archive_lifecycle_job_id = job.id");
+    expect(sql).toContain("project.state ->> 'state' = 'archiving'");
+    expect(sql).toContain("job.status = 'failed'");
+    expect(sql).toContain("job.status = 'running'");
+    expect(sql).toContain(
+      "job.status IN ('queued', 'stale', 'canceled', 'completed')",
+    );
+    expect(parameters).toEqual([25]);
+  });
+
+  it("claims retained project state independently of the old job status", async () => {
+    query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    await expect(
+      claimRetainedProjectArchiveLifecycleJob(
+        "66666666-6666-4666-8666-666666666666",
+      ),
+    ).resolves.toBe(true);
+
+    const [sql, parameters] = query.mock.calls[0];
+    expect(sql).toContain("project.archive_lifecycle_job_id = job.id");
+    expect(sql).toContain("project.state ->> 'state' = 'archiving'");
+    expect(sql).toContain(
+      "job.status IN ('queued', 'stale', 'canceled', 'completed')",
+    );
+    expect(parameters).toEqual(["66666666-6666-4666-8666-666666666666"]);
   });
 });

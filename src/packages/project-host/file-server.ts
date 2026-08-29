@@ -19,6 +19,7 @@ import {
 } from "node:fs/promises";
 import { executeCode } from "@cocalc/backend/execute-code";
 import {
+  ARCHIVE_BACKUP_SOURCE_RELEASED_ERROR_CODE,
   server as createFileServer,
   client as createFileClient,
   type Fileserver,
@@ -155,13 +156,27 @@ import {
 } from "./sqlite/project-volumes";
 import {
   assertProjectVolumeLifecycleGeneration,
+  currentProjectVolumeLifecycleGeneration,
   invalidateProjectVolumeLifecycle,
+  withCurrentProjectVolumeLifecycleLock,
   withProjectVolumeLifecycleLock,
 } from "./project-volume-lifecycle";
 import { INTERNAL_SSH_CONFIG } from "@cocalc/conat/project/runner/constants";
 import { ensureSshpiperdKey } from "./ssh/sshpiperd-key";
 import { requireManagedSshKeyAccount } from "./ssh/managed-key-account";
 import { managedProjectEgressResidualTracker } from "./managed-egress-residual";
+import { planBackupRetention } from "./backup-retention";
+import {
+  assertFrozenVolumeMatchesBackup,
+  deleteOrphanedStagedArchiveSnapshots,
+  deleteStagedArchiveSnapshots,
+  freezeVolumeForArchiveBackup,
+  getFrozenVolumeGeneration,
+  isSubvolumeReadonly,
+  listStagedArchiveVolumeNames,
+  releaseArchiveVolumeFreeze,
+  releaseArchiveVolumeFreezeIfGenerationMatches,
+} from "./archive-volume-barrier";
 import { getLocalHostId } from "./sqlite/hosts";
 import { setContainerFileIO } from "@cocalc/lite/hub/acp/executor/container";
 import { open as nodeOpen } from "node:fs/promises";
@@ -1345,7 +1360,11 @@ export async function resetScratchVolume(
 
 export async function deleteVolume(
   project_id: string,
-  opts: { reportProvisioned?: boolean } = {},
+  opts: {
+    reportProvisioned?: boolean;
+    expected_archive_backup_id?: string;
+    expected_archive_generation?: number;
+  } = {},
 ) {
   if (fs == null) {
     throw Error("file server not initialized");
@@ -1363,6 +1382,9 @@ export async function deleteVolume(
     }) => {
       const vol = await fs!.subvolumes.get(name);
       if (!(await exists(vol.path))) {
+        if (volume_kind === "home") {
+          await deleteStagedArchiveSnapshots(vol);
+        }
         markProjectVolumeAbsent(project_id, volume_kind);
         return;
       }
@@ -1381,18 +1403,74 @@ export async function deleteVolume(
         }
       }
       await fs!.subvolumes.delete(name);
+      if (volume_kind === "home") {
+        // Automatic archive staging lives outside the project subvolume. This
+        // also covers deferred inventory cleanup after an unavailable host
+        // returns, including the idempotent parent-already-absent case above.
+        await deleteStagedArchiveSnapshots(vol);
+      }
       markProjectVolumeAbsent(project_id, volume_kind);
     };
 
-    await deleteIfExists({
-      name: volName(project_id),
-      volume_kind: "home",
-      clearSnapshots: true,
-    });
-    await deleteIfExists({
-      name: scratchVolName(project_id),
-      volume_kind: "scratch",
-    });
+    if (opts.expected_archive_generation == null) {
+      await deleteIfExists({
+        name: volName(project_id),
+        volume_kind: "home",
+        clearSnapshots: true,
+      });
+      await deleteIfExists({
+        name: scratchVolName(project_id),
+        volume_kind: "scratch",
+      });
+    } else {
+      const expectedBackupId =
+        `${opts.expected_archive_backup_id ?? ""}`.trim();
+      if (!expectedBackupId) {
+        throw new Error("an archive backup snapshot id is required");
+      }
+      const expectedGeneration = Number(opts.expected_archive_generation);
+      if (
+        !Number.isSafeInteger(expectedGeneration) ||
+        expectedGeneration <= 0
+      ) {
+        throw new Error("a valid archive backup generation is required");
+      }
+      const volume = await getVolumeForBackup(project_id);
+      try {
+        if (!(await volume.rustic.snapshotExists({ id: expectedBackupId }))) {
+          throw new Error(
+            `refusing to archive project because final backup ${expectedBackupId} no longer exists`,
+          );
+        }
+        const status = await assertFrozenVolumeMatchesBackup({
+          volume,
+          expectedGeneration,
+        });
+        // Scratch is ephemeral. Delete it before the durable home volume so a
+        // scratch cleanup failure can never reopen a project after home data
+        // was already removed. The durable backup was verified first.
+        await deleteIfExists({
+          name: scratchVolName(project_id),
+          volume_kind: "scratch",
+        });
+        if (status === "present") {
+          await fs!.subvolumes.delete(volName(project_id));
+        }
+        await deleteStagedArchiveSnapshots(volume);
+        markProjectVolumeAbsent(project_id, "home");
+      } catch (err) {
+        // If cleanup did not complete, return the retained volume to a writable
+        // state before a retry. A missing volume is the idempotent-success case
+        // and releaseArchiveVolumeFreeze is a no-op.
+        await releaseArchiveVolumeFreeze(volume).catch((releaseErr) => {
+          logger.error("unable to release failed archive deletion freeze", {
+            project_id,
+            err: `${releaseErr}`,
+          });
+        });
+        throw err;
+      }
+    }
     deleteProjectVolumeQuotas(project_id);
     deleteProjectVolumeQuotaOverrides(project_id);
     invalidateProjectFsServer(project_id);
@@ -1401,6 +1479,23 @@ export async function deleteVolume(
     queueProjectProvisioned(project_id, false);
   }
   await deleteBackupIndexCache(project_id);
+}
+
+export async function releaseProjectArchiveFreeze(
+  project_id: string,
+  expected_generation: number,
+): Promise<{ status: "absent" | "already-writable" | "released" }> {
+  if (fs == null) {
+    throw Error("file server not initialized");
+  }
+  return await withProjectVolumeLifecycleLock(project_id, async () => {
+    const volume = await fs!.subvolumes.get(volName(project_id));
+    const status = await releaseArchiveVolumeFreezeIfGenerationMatches({
+      volume,
+      expectedGeneration: expected_generation,
+    });
+    return { status };
+  });
 }
 
 async function getVolumeUnchecked(project_id: string) {
@@ -1453,12 +1548,42 @@ export async function listProvisionedProjects(): Promise<string[]> {
   return listProvisionedProjectIdsFromInventory();
 }
 
+async function cleanupOrphanedArchiveSnapshotStaging(): Promise<void> {
+  if (fs == null) {
+    throw Error("file server not initialized");
+  }
+  let cleaned = 0;
+  let errors = 0;
+  for (const name of await listStagedArchiveVolumeNames(fs.opts.mount)) {
+    const match = name.match(/^project-([0-9a-f-]{36})$/i);
+    if (!match || !isValidUUID(match[1])) continue;
+    try {
+      const volume = await fs.subvolumes.get(name);
+      const status = await deleteOrphanedStagedArchiveSnapshots(volume);
+      if (status === "deleted") cleaned += 1;
+    } catch (err) {
+      errors += 1;
+      logger.warn("orphaned archive snapshot staging cleanup failed", {
+        project_id: match[1].toLowerCase(),
+        err: `${err}`,
+      });
+    }
+  }
+  if (cleaned || errors) {
+    logger.info("orphaned archive snapshot staging cleanup complete", {
+      cleaned,
+      errors,
+    });
+  }
+}
+
 export async function bootstrapProvisionedProjectInventory(): Promise<
   string[] | undefined
 > {
   if (fs == null) {
     throw Error("file server not initialized");
   }
+  await cleanupOrphanedArchiveSnapshotStaging();
   const filesystem = currentFilesystemState();
   if (projectVolumeInventoryBootstrapped(filesystem.filesystem_uuid)) {
     return;
@@ -1506,6 +1631,7 @@ export async function verifyProvisionedProjectInventoryBatch(
   if (fs == null) {
     throw Error("file server not initialized");
   }
+  await cleanupOrphanedArchiveSnapshotStaging();
   const filesystem = currentFilesystemState();
   const counts = {
     checked: 0,
@@ -3934,31 +4060,44 @@ async function backupProjectToExternalRepository({
   }
 }
 
+function archiveBackupSourceReleasedError(err: unknown): ConatError {
+  return new ConatError(err instanceof Error ? err.message : `${err}`, {
+    code: ARCHIVE_BACKUP_SOURCE_RELEASED_ERROR_CODE,
+  });
+}
+
 async function createBackup({
   project_id,
   limit,
   tags,
   lro,
   managed_egress_override,
+  replace_oldest_at_limit,
+  freeze_source,
 }: {
   project_id: string;
   limit?: number;
   tags?: string[];
   lro?: LroRef;
   managed_egress_override?: ManagedBackupEgressOverride;
-}): Promise<{ time: Date; id: string }> {
-  if (limit != null && limit <= 0) {
-    throw new ConatError(`there is a limit of ${limit} backups`, {
-      code: 507,
-    });
-  }
+  replace_oldest_at_limit?: boolean;
+  freeze_source?: boolean;
+}): Promise<{ time: Date; id: string; generation: number | null }> {
   const progress = createLroRusticReporter(lro, "backup");
+  // The hub may reopen only when the host explicitly proves this stayed false
+  // or returned to false after restoring the source and staged snapshots.
+  let archiveFreezeMayExist = false;
   const managedBackupPolicy = await checkManagedBackupAllowedBestEffort({
     project_id,
     managed_egress_override,
+  }).catch((err) => {
+    if (freeze_source) throw archiveBackupSourceReleasedError(err);
+    throw err;
   });
   if (!managedBackupPolicy.allowed) {
-    throw new Error(managedBackupPolicy.message);
+    const err = new Error(managedBackupPolicy.message);
+    if (freeze_source) throw archiveBackupSourceReleasedError(err);
+    throw err;
   }
   const result = await withBackupParallelLimit({
     project_id,
@@ -3968,59 +4107,140 @@ async function createBackup({
         project_id,
         op: "createBackup",
         run: async () => {
-          if (limit != null) {
-            const backupCount = (
-              await getBackups({
-                project_id,
-                indexed_only: true,
-              })
-            ).length;
-            if (backupCount >= limit) {
-              throw new ConatError(`there is a limit of ${limit} backups`, {
-                code: 507,
-              });
-            }
+          const existingBackups =
+            limit == null
+              ? []
+              : await getBackups({
+                  project_id,
+                  indexed_only: true,
+                });
+          const retention = planBackupRetention({
+            backups: existingBackups,
+            limit,
+            replaceOldestAtLimit: replace_oldest_at_limit,
+          });
+          if (!retention.allowed) {
+            throw new ConatError(`there is a limit of ${limit} backups`, {
+              code: 507,
+            });
           }
           const vol = await getVolume(project_id);
           vol.fs.rusticRepo = await resolveRusticRepo(project_id);
           const parent = await getLatestKnownBackupId(project_id);
+          let archiveFreeze:
+            | Awaited<ReturnType<typeof freezeVolumeForArchiveBackup>>
+            | undefined;
+          let backupResult: Awaited<ReturnType<(typeof vol.rustic)["backup"]>>;
           try {
-            return await vol.rustic.backup({
-              tags,
-              parent,
-              progress,
-              runner: async ({ src, host, timeout, tags, progress }) =>
-                await projectRusticBackup({
-                  src,
-                  repoProfile: vol.fs.rusticRepo,
-                  host,
-                  timeoutMs: timeout,
-                  tags,
-                  parent,
-                  progress,
-                }),
-            });
-          } catch (err) {
-            if (!(err instanceof ProjectRusticUnsupportedError)) {
-              throw err;
+            archiveFreezeMayExist = freeze_source === true;
+            archiveFreeze = freeze_source
+              ? await freezeVolumeForArchiveBackup(vol)
+              : undefined;
+            try {
+              backupResult = await vol.rustic.backup({
+                tags,
+                parent,
+                progress,
+                runner: async ({ src, host, timeout, tags, progress }) =>
+                  await projectRusticBackup({
+                    src,
+                    repoProfile: vol.fs.rusticRepo,
+                    host,
+                    timeoutMs: timeout,
+                    tags,
+                    parent,
+                    progress,
+                  }),
+              });
+            } catch (err) {
+              if (!(err instanceof ProjectRusticUnsupportedError)) {
+                throw err;
+              }
+              logger.warn(
+                "project rustic wrapper unavailable; falling back to unprivileged backup path",
+                {
+                  project_id,
+                  err: `${err}`,
+                },
+              );
+              backupResult = await vol.rustic.backup({
+                tags,
+                parent,
+                progress,
+              });
             }
-            logger.warn(
-              "project rustic wrapper unavailable; falling back to unprivileged backup path",
-              {
+            const generation = archiveFreeze
+              ? await getFrozenVolumeGeneration(vol)
+              : await getGeneration(projectMountpoint(project_id)).catch(
+                  () => null,
+                );
+            if (archiveFreeze) {
+              logger.debug("archive backup source generation established", {
                 project_id,
-                err: `${err}`,
-              },
-            );
-            return await vol.rustic.backup({
-              tags,
-              parent,
-              progress,
-            });
+                backup_id: backupResult.id,
+                source_generation: generation,
+                snapshot_generation: backupResult.snapshotGeneration,
+              });
+            }
+            // The replacement is intentionally pruned only after the new
+            // snapshot exists. A pruning failure may temporarily exceed the
+            // entitlement, but must never invalidate the recovery barrier.
+            for (const backup of retention.replace) {
+              try {
+                await deleteBackupForRetention({
+                  project_id,
+                  id: backup.id,
+                  archiveFreezeOwned: freeze_source === true,
+                });
+              } catch (err) {
+                logger.warn("unable to prune replaced backup", {
+                  project_id,
+                  backup_id: backup.id,
+                  replacement_backup_id: backupResult.id,
+                  err: `${err}`,
+                });
+              }
+            }
+            return {
+              time: backupResult.time,
+              id: backupResult.id,
+              summary: backupResult.summary,
+              generation,
+            };
+          } catch (err) {
+            if (freeze_source) {
+              try {
+                const releaseStatus = await releaseArchiveVolumeFreeze(vol);
+                archiveFreezeMayExist = releaseStatus === "absent";
+              } catch (releaseErr) {
+                logger.error("unable to release failed archive backup freeze", {
+                  project_id,
+                  err: `${releaseErr}`,
+                });
+              }
+            }
+            throw err;
           }
         },
       }),
+  }).catch((err) => {
+    if (freeze_source && !archiveFreezeMayExist) {
+      throw archiveBackupSourceReleasedError(err);
+    }
+    throw err;
   });
-  await rusticBackupBrowser.markStale(await resolveRusticRepo(project_id));
+  try {
+    await rusticBackupBrowser.markStale(await resolveRusticRepo(project_id));
+  } catch (err) {
+    // Cache invalidation is not part of backup durability. In particular, an
+    // archive backup may intentionally leave the source read-only while the
+    // caller persists its generation and performs checked deletion.
+    logger.warn("unable to mark backup browser cache stale", {
+      project_id,
+      backup_id: result.id,
+      err: `${err}`,
+    });
+  }
   await recordManagedBackupEgressBestEffort({
     project_id,
     backup_id: result.id,
@@ -4031,15 +4251,13 @@ async function createBackup({
   if (managed_egress_override === LEGACY_MIGRATION_INITIAL_BACKUP_OVERRIDE) {
     legacyProjectInitialBackupEgressExempt.delete(project_id);
   }
+  const generation = result.generation;
   try {
-    const generation = await getGeneration(projectMountpoint(project_id)).catch(
-      () => null,
-    );
     await reportBackupSuccess(project_id, result.time, generation);
   } catch (err) {
     logger.warn("backup success report failed", { project_id, err });
   }
-  return result;
+  return { ...result, generation };
 }
 
 async function restoreBackup({
@@ -4232,7 +4450,7 @@ async function cleanupRestoreStaging(opts?: { root?: string }): Promise<void> {
   await cleanupRestoreStagingBtrfs({ root });
 }
 
-async function deleteBackup({
+async function forgetBackup({
   project_id,
   id,
 }: {
@@ -4273,7 +4491,50 @@ async function deleteBackup({
   });
 }
 
-async function updateBackups({
+async function deleteBackup({
+  project_id,
+  id,
+}: {
+  project_id: string;
+  id: string;
+}): Promise<void> {
+  await withProjectVolumeLifecycleLock(project_id, async () => {
+    const vol = await getVolumeForBackup(project_id);
+    if (!(await exists(vol.path))) {
+      throw new Error(
+        "cannot delete backups while project data is archived or unavailable",
+      );
+    }
+    if (await isSubvolumeReadonly(vol.path)) {
+      throw new Error(
+        "cannot delete backups while project archival is in progress",
+      );
+    }
+    await forgetBackup({ project_id, id });
+  });
+}
+
+async function deleteBackupForRetention({
+  project_id,
+  id,
+  archiveFreezeOwned,
+}: {
+  project_id: string;
+  id: string;
+  archiveFreezeOwned: boolean;
+}): Promise<void> {
+  await withProjectVolumeLifecycleLock(project_id, async () => {
+    const vol = await getVolumeForBackup(project_id);
+    if (!archiveFreezeOwned && (await isSubvolumeReadonly(vol.path))) {
+      throw new Error(
+        "cannot apply backup retention while project archival is in progress",
+      );
+    }
+    await forgetBackup({ project_id, id });
+  });
+}
+
+async function updateBackupsUnlocked({
   project_id,
   counts,
   limit,
@@ -4373,6 +4634,81 @@ async function updateBackups({
   }
 }
 
+async function updateBackupsIfVolumeCurrent({
+  project_id,
+  counts,
+  limit,
+  expectedLifecycleGeneration,
+}: {
+  project_id: string;
+  counts?: Partial<SnapshotCounts>;
+  limit?: number;
+  expectedLifecycleGeneration: number;
+}): Promise<void> {
+  const result = await withCurrentProjectVolumeLifecycleLock(
+    project_id,
+    expectedLifecycleGeneration,
+    async () => {
+      const volume = await getVolumeUnchecked(project_id);
+      if (!(await exists(volume.path))) {
+        logger.info(
+          "skipping backup maintenance because project data is unavailable",
+          { project_id },
+        );
+        return true;
+      }
+      if (await isSubvolumeReadonly(volume.path)) {
+        logger.info(
+          "skipping backup maintenance because project archival is in progress",
+          { project_id },
+        );
+        return true;
+      }
+      await updateBackupsUnlocked({
+        project_id,
+        counts,
+        limit,
+      });
+      return true;
+    },
+  );
+  if (result === undefined) {
+    logger.info(
+      "skipping stale backup maintenance after project volume lifecycle changed",
+      {
+        project_id,
+        expected_lifecycle_generation: expectedLifecycleGeneration,
+        current_lifecycle_generation:
+          currentProjectVolumeLifecycleGeneration(project_id),
+      },
+    );
+  }
+}
+
+async function updateBackups({
+  project_id,
+  counts,
+  limit,
+}: {
+  project_id: string;
+  counts?: Partial<SnapshotCounts>;
+  limit?: number;
+}): Promise<void> {
+  const expectedLifecycleGeneration =
+    currentProjectVolumeLifecycleGeneration(project_id);
+  await withBackupParallelLimit({
+    project_id,
+    op: "updateBackups",
+    run: async () =>
+      await updateBackupsIfVolumeCurrent({
+        project_id,
+        counts,
+        limit,
+        expectedLifecycleGeneration,
+      }),
+  });
+}
+
 export async function runScheduledBackupMaintenance({
   project_id,
   counts,
@@ -4382,15 +4718,18 @@ export async function runScheduledBackupMaintenance({
   counts: Partial<SnapshotCounts>;
   limit?: number;
 }): Promise<void> {
+  const expectedLifecycleGeneration =
+    currentProjectVolumeLifecycleGeneration(project_id);
   await withBackupParallelLimit({
     project_id,
     op: "runScheduledBackupMaintenance",
     queue_if_busy: false,
     run: async () =>
-      await updateBackups({
+      await updateBackupsIfVolumeCurrent({
         project_id,
         counts,
         limit,
+        expectedLifecycleGeneration,
       }),
   });
 }

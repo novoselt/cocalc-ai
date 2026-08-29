@@ -51,6 +51,22 @@ export async function withProjectVolumeLifecycleLock<T>(
   }
 }
 
+export async function withCurrentProjectVolumeLifecycleLock<T>(
+  project_id: string,
+  expected_generation: number,
+  fn: () => Promise<T>,
+): Promise<T | undefined> {
+  return await withProjectVolumeLifecycleLock(project_id, async () => {
+    if (
+      currentProjectVolumeLifecycleGeneration(project_id) !==
+      expected_generation
+    ) {
+      return undefined;
+    }
+    return await fn();
+  });
+}
+
 export function resetProjectVolumeLifecycleForTesting(): void {
   lifecycleGenerations.clear();
   lifecycleTails.clear();
