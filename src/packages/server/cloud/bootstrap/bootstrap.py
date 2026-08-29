@@ -2460,6 +2460,10 @@ def configure_daily_root_cleanup(
     status_dir: Path = Path("/var/lib/cocalc/root-cleanup"),
 ) -> None:
     log_line(cfg, "bootstrap: configuring daily safe root cleanup")
+    if status_dir.is_symlink():
+        raise RuntimeError(
+            f"root cleanup status directory is a symlink: {status_dir}"
+        )
     status_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(status_dir, 0o755)
     helper = f"""#!/usr/bin/env bash
@@ -2468,8 +2472,15 @@ umask 022
 
 STATUS_DIR={shlex.quote(str(status_dir))}
 STATUS_FILE="$STATUS_DIR/status.json"
-LOCK_FILE=/run/lock/cocalc-root-cleanup.lock
+LOCK_FILE="$STATUS_DIR/cleanup.lock"
 MIN_FREE_BYTES=$((5 * 1024 * 1024 * 1024))
+DRY_RUN=0
+
+case "${{1:-}}" in
+  "") ;;
+  --dry-run) DRY_RUN=1 ;;
+  *) echo "usage: $0 [--dry-run]" >&2; exit 2 ;;
+esac
 
 mkdir -p "$STATUS_DIR"
 exec 9>"$LOCK_FILE"
@@ -2507,22 +2518,24 @@ RUSTIC_BEFORE="$(dir_bytes /root/.cache/rustic)"
 
 # Every path below is an explicit cache or bounded log location. Do not add
 # release directories or project data without a separate retention design.
-if [ -d /var/lib/snapd/cache ] && [ ! -L /var/lib/snapd/cache ]; then
-  find /var/lib/snapd/cache -xdev -type f -delete 2>/dev/null || true
-fi
-if command -v apt-get >/dev/null 2>&1; then
-  flock -n /run/lock/cocalc-security-updates.lock \
-    timeout 10m apt-get clean >/dev/null 2>&1 || true
-fi
-if command -v journalctl >/dev/null 2>&1; then
-  journalctl --vacuum-size=200M >/dev/null 2>&1 || true
-fi
-if [ -d /root/.cache/rustic ] && [ ! -L /root/.cache/rustic ]; then
-  flock -n /run/lock/cocalc-privileged-rustic-cache.lock \
-    bash -c 'if ! pgrep -x rustic >/dev/null 2>&1; then
-      find /root/.cache/rustic -mindepth 1 -maxdepth 1 \
-        ! -name CACHEDIR.TAG -exec rm -rf --one-file-system -- {{}} +
-    fi' >/dev/null 2>&1 || true
+if [ "$DRY_RUN" -eq 0 ]; then
+  if [ -d /var/lib/snapd/cache ] && [ ! -L /var/lib/snapd/cache ]; then
+    find /var/lib/snapd/cache -xdev -type f -delete 2>/dev/null || true
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    flock -n /run/lock/cocalc-security-updates.lock \
+      timeout 10m apt-get clean >/dev/null 2>&1 || true
+  fi
+  if command -v journalctl >/dev/null 2>&1; then
+    journalctl --vacuum-size=200M >/dev/null 2>&1 || true
+  fi
+  if [ -d /root/.cache/rustic ] && [ ! -L /root/.cache/rustic ]; then
+    flock -n /run/lock/cocalc-privileged-rustic-cache.lock \
+      bash -c 'if ! pgrep -x rustic >/dev/null 2>&1; then
+        find /root/.cache/rustic -mindepth 1 -maxdepth 1 \
+          ! -name CACHEDIR.TAG -exec rm -rf --one-file-system -- {{}} +
+      fi' >/dev/null 2>&1 || true
+  fi
 fi
 
 SNAP_AFTER="$(dir_bytes /var/lib/snapd/cache)"
@@ -2531,7 +2544,9 @@ JOURNAL_AFTER="$(dir_bytes /var/log/journal /run/log/journal)"
 RUSTIC_AFTER="$(dir_bytes /root/.cache/rustic)"
 ROOT_FREE_AFTER="$(df --output=avail -B1 / | tail -n 1 | tr -d ' ')"
 RESULT=ok
-if ! echo "$ROOT_FREE_AFTER" | grep -Eq '^[0-9]+$' || \
+if [ "$DRY_RUN" -eq 1 ]; then
+  RESULT=dry-run
+elif ! echo "$ROOT_FREE_AFTER" | grep -Eq '^[0-9]+$' || \
    [ "$ROOT_FREE_AFTER" -lt "$MIN_FREE_BYTES" ]; then
   RESULT=insufficient
 fi

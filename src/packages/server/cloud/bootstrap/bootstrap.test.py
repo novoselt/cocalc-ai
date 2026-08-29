@@ -5002,6 +5002,7 @@ class BootstrapModesTest(unittest.TestCase):
             for name in (
                 "ensure_runtime_user",
                 "ensure_bootstrap_paths",
+                "configure_rsyslog_limits",
                 "configure_daily_root_cleanup",
                 "install_privileged_wrappers",
                 "install_privileged_tool_binaries",
@@ -5054,6 +5055,7 @@ class BootstrapModesTest(unittest.TestCase):
                     "start:reconcile",
                     "ensure_runtime_user",
                     "ensure_bootstrap_paths",
+                    "configure_rsyslog_limits",
                     "configure_daily_root_cleanup",
                     "install_privileged_wrappers",
                     "install_privileged_tool_binaries",
@@ -5232,6 +5234,10 @@ class BootstrapModesTest(unittest.TestCase):
                 originals[name] = getattr(bootstrap, name)
                 setattr(bootstrap, name, replacement)
 
+            patch(
+                "BOOTSTRAP_LIFECYCLE_EXPORT_DIR",
+                Path(tmpdir) / "bootstrap-lifecycle",
+            )
             patch("ensure_runtime_user", lambda _cfg: None)
             patch("ensure_bootstrap_paths", lambda _cfg: None)
             patch("ensure_automatic_security_updates", lambda _cfg: None)
@@ -5244,6 +5250,7 @@ class BootstrapModesTest(unittest.TestCase):
             patch("configure_rsyslog_limits", lambda _cfg: None)
             patch("install_btrfs_helper", lambda _cfg: None)
             patch("install_privileged_wrappers", lambda _cfg: None)
+            patch("reconcile_storage_and_containment", lambda _cfg: None)
             patch("reconcile_project_network_limits", lambda _cfg: None)
             patch("reconcile_project_io_policy", lambda _cfg: None)
             patch("reconcile_host_service_cgroup", lambda _cfg: None)
@@ -5265,6 +5272,7 @@ class BootstrapModesTest(unittest.TestCase):
             )
             patch("install_privileged_tool_binaries", lambda _cfg, _bundle: None)
             patch("install_node", lambda _cfg: None)
+            patch("configure_node_bind_service_capability", lambda _cfg: None)
             patch("write_wrapper", lambda _cfg: None)
             patch("write_helpers", lambda _cfg: None)
             patch("configure_runtime_sudoers", lambda _cfg: None)
@@ -5538,6 +5546,11 @@ class AptBootstrapTest(unittest.TestCase):
 
             script = helper_path.read_text(encoding="utf-8")
             subprocess.run(["bash", "-n", str(helper_path)], check=True)
+            subprocess.run([str(helper_path), "--dry-run"], check=True)
+            status = json.loads(
+                (status_dir / "status.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(status["result"], "dry-run")
             self.assertIn("/var/lib/snapd/cache", script)
             self.assertIn("apt-get clean", script)
             self.assertIn("journalctl --vacuum-size=200M", script)
@@ -5545,6 +5558,8 @@ class AptBootstrapTest(unittest.TestCase):
                 "/run/lock/cocalc-privileged-rustic-cache.lock", script
             )
             self.assertIn("/root/.cache/rustic", script)
+            self.assertIn("--dry-run", script)
+            self.assertIn('LOCK_FILE="$STATUS_DIR/cleanup.lock"', script)
             self.assertNotIn("/opt/cocalc/tools/releases", script)
             self.assertNotIn("/mnt/cocalc", script)
             self.assertIn(f"ExecStart={helper_path}", service_path.read_text())
