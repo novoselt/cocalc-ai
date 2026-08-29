@@ -144,6 +144,7 @@ describe("SiteLicenseClaimBanner", () => {
         package_id: "package-1",
       }),
     );
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     expect(getClaimableMembershipPackages).toHaveBeenCalledWith({
       include_claimed_site_license_pools: true,
       site_only: true,
@@ -172,6 +173,28 @@ describe("SiteLicenseClaimBanner", () => {
         package_id: "instructor-package",
       }),
     );
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
+  it("does not offer another pool after a seat from that site license is claimed", async () => {
+    getClaimableMembershipPackages.mockResolvedValue([
+      opportunity({
+        assignment_id: "assignment-1",
+        seat_status: "claimed",
+      }),
+      opportunity({
+        package_id: "instructor-package",
+        pool_name: "Instructor membership",
+        requires_approval: true,
+      }),
+    ]);
+
+    render(<Harness />);
+
+    await waitFor(() =>
+      expect(getClaimableMembershipPackages).toHaveBeenCalled(),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("emphasizes the likely choice and opens the shared manager for alternatives", async () => {

@@ -41,7 +41,7 @@ export function PostSurfaceBanners({
       ) : undefined}
       {!fullscreen &&
       !siteLicenseBanner.loading &&
-      !siteLicenseBanner.hasOpportunity ? (
+      !siteLicenseBanner.suppressTrial ? (
         <MembershipTrialBanner />
       ) : undefined}
       {!fullscreen ? <LegacyMigrationCtaBanner /> : undefined}

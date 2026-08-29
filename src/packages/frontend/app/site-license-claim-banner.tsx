@@ -177,14 +177,14 @@ function primaryActionLabel(
 }
 
 export interface SiteLicenseClaimBannerState {
-  allRows: ClaimableMembershipPackage[];
   dismissPermanently: () => void;
   dismissTemporarily: () => void;
-  hasOpportunity: boolean;
   loading: boolean;
+  markCompleted: (opportunities: ClaimableMembershipPackage[]) => void;
   opportunities: ClaimableMembershipPackage[];
   refresh: () => Promise<void>;
   roleHint: CourseRoleHint;
+  suppressTrial: boolean;
   visible: boolean;
 }
 
@@ -210,6 +210,7 @@ export function useSiteLicenseClaimBannerState({
     rows: ClaimableMembershipPackage[];
   }>();
   const [localDismissedKeys, setLocalDismissedKeys] = useState<string[]>([]);
+  const [localCompletedKeys, setLocalCompletedKeys] = useState<string[]>([]);
   const [dismissedFingerprint, setDismissedFingerprint] = useState<string>();
   const [recentInstructorAt, setRecentInstructorAt] = useState<number>();
 
@@ -223,6 +224,7 @@ export function useSiteLicenseClaimBannerState({
 
   useEffect(() => {
     setLocalDismissedKeys([]);
+    setLocalCompletedKeys([]);
     setDismissedFingerprint(undefined);
     if (!accountId) {
       setRecentInstructorAt(undefined);
@@ -295,15 +297,26 @@ export function useSiteLicenseClaimBannerState({
   }, [accountId, accountReady, enabled, impersonation, isLoggedIn]);
 
   const allRows = data?.accountId === accountId ? data.rows : [];
-  const actionableRows = allRows.filter(
+  const completedKeys = new Set([
+    ...localCompletedKeys,
+    ...allRows
+      .filter(
+        (row) =>
+          row.kind === "site" &&
+          (seatStatus(row) === "claimed" || seatStatus(row) === "pending"),
+      )
+      .map(siteLicenseReminderKey),
+  ]);
+  const availableRows = allRows.filter(
     (row) =>
       row.kind === "site" &&
       seatStatus(row) === "claimable" &&
-      !dismissedKeys.has(siteLicenseReminderKey(row)),
+      !completedKeys.has(siteLicenseReminderKey(row)),
   );
-  const hasOpportunity = allRows.some(
-    (row) => row.kind === "site" && seatStatus(row) === "claimable",
+  const actionableRows = availableRows.filter(
+    (row) => !dismissedKeys.has(siteLicenseReminderKey(row)),
   );
+  const suppressTrial = allRows.some((row) => row.kind === "site");
   const instructorRecent =
     typeof recentInstructorAt === "number" &&
     Date.now() < recentInstructorAt + INSTRUCTOR_ACTIVITY_MS;
@@ -322,8 +335,7 @@ export function useSiteLicenseClaimBannerState({
   const visible = opportunities.length > 0 && !temporaryDismissal;
 
   return {
-    allRows,
-    hasOpportunity,
+    suppressTrial,
     loading:
       enabled &&
       !!accountReady &&
@@ -335,6 +347,12 @@ export function useSiteLicenseClaimBannerState({
     roleHint,
     visible,
     refresh,
+    markCompleted: (completedOpportunities) => {
+      const keys = completedOpportunities.map(siteLicenseReminderKey);
+      setLocalCompletedKeys((current) =>
+        Array.from(new Set([...current, ...keys])),
+      );
+    },
     dismissTemporarily: () => {
       if (!accountId || !fingerprint) return;
       LS.set([REMIND_LATER_KEY, accountId, fingerprint], Date.now());
@@ -367,12 +385,7 @@ export function SiteLicenseClaimBanner({
 
   if (!state.visible) return null;
   const primary = state.opportunities[0];
-  const sameSiteClaimed = state.allRows.some(
-    (row) =>
-      seatStatus(row) === "claimed" &&
-      siteLicenseReminderKey(row) === siteLicenseReminderKey(primary),
-  );
-  const canActDirectly = !primary.requires_terms_acceptance && !sameSiteClaimed;
+  const canActDirectly = !primary.requires_terms_acceptance;
   const institution = siteLicenseDisplayName(state.opportunities);
 
   async function actDirectly() {
@@ -387,8 +400,9 @@ export function SiteLicenseClaimBanner({
       } else {
         await claimMembershipPackageSeat({ package_id: primary.package_id });
       }
-      await state.refresh();
+      state.markCompleted([primary]);
       window.dispatchEvent(new Event("cocalc:membership-changed"));
+      await state.refresh();
     } catch (err) {
       setError(`${err}`);
     } finally {
@@ -460,8 +474,9 @@ export function SiteLicenseClaimBanner({
             siteOnly
             onChanged={() => {
               setManageOpen(false);
-              void state.refresh();
+              state.markCompleted(state.opportunities);
               window.dispatchEvent(new Event("cocalc:membership-changed"));
+              void state.refresh();
             }}
           />
         </Suspense>
