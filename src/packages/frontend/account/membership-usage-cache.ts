@@ -22,14 +22,21 @@ type CacheEntry<T> = {
   time: number;
 };
 
-let membershipDetailsCache: CacheEntry<MembershipDetails> | undefined;
-let membershipDetailsInflight: Promise<MembershipDetails | null> | undefined;
-let accountUsageOverviewCache: CacheEntry<AccountUsageOverview> | undefined;
-let accountUsageOverviewInflight:
-  | Promise<AccountUsageOverview | null>
-  | undefined;
-let aiUsageCache: CacheEntry<AIUsageStatus> | undefined;
-let aiUsageInflight: Promise<AIUsageStatus | null> | undefined;
+const membershipDetailsCache = new Map<string, CacheEntry<MembershipDetails>>();
+const membershipDetailsInflight = new Map<
+  string,
+  Promise<MembershipDetails | null>
+>();
+const accountUsageOverviewCache = new Map<
+  string,
+  CacheEntry<AccountUsageOverview>
+>();
+const accountUsageOverviewInflight = new Map<
+  string,
+  Promise<AccountUsageOverview | null>
+>();
+const aiUsageCache = new Map<string, CacheEntry<AIUsageStatus>>();
+const aiUsageInflight = new Map<string, Promise<AIUsageStatus | null>>();
 
 function isFresh<T>(entry: CacheEntry<T> | undefined, now: number): boolean {
   return entry != null && now - entry.time < WARNING_CACHE_MS;
@@ -45,75 +52,102 @@ export function warningPollInterval(baseMs: number): number {
   return baseMs + Math.floor(Math.random() * WARNING_JITTER_MS);
 }
 
-export async function getWarningMembershipDetails(): Promise<MembershipDetails | null> {
+export async function getWarningMembershipDetails(
+  account_id: string,
+): Promise<MembershipDetails | null> {
   const now = Date.now();
-  if (isFresh(membershipDetailsCache, now)) {
-    return membershipDetailsCache!.value;
+  const cached = membershipDetailsCache.get(account_id);
+  if (isFresh(cached, now)) {
+    return cached!.value;
   }
-  if (membershipDetailsInflight != null) {
-    return await membershipDetailsInflight;
+  const inflight = membershipDetailsInflight.get(account_id);
+  if (inflight != null) {
+    return await inflight;
   }
-  membershipDetailsInflight = webapp_client.conat_client.hub.purchases
+  const request = webapp_client.conat_client.hub.purchases
     .getMembershipDetails({
       refresh_usage_status: true,
     })
     .then((details) => {
       const next = (details as MembershipDetails) ?? null;
       if (next != null) {
-        membershipDetailsCache = { value: next, time: Date.now() };
-        dispatchMembershipDetailsRefreshed(next);
+        membershipDetailsCache.set(account_id, {
+          value: next,
+          time: Date.now(),
+        });
+        dispatchMembershipDetailsRefreshed(next, account_id);
       }
       return next;
     })
     .finally(() => {
-      membershipDetailsInflight = undefined;
+      if (membershipDetailsInflight.get(account_id) === request) {
+        membershipDetailsInflight.delete(account_id);
+      }
     });
-  return await membershipDetailsInflight;
+  membershipDetailsInflight.set(account_id, request);
+  return await request;
 }
 
-export async function getWarningAccountUsageOverview(): Promise<AccountUsageOverview | null> {
+export async function getWarningAccountUsageOverview(
+  account_id: string,
+): Promise<AccountUsageOverview | null> {
   const now = Date.now();
-  if (isFresh(accountUsageOverviewCache, now)) {
-    return accountUsageOverviewCache!.value;
+  const cached = accountUsageOverviewCache.get(account_id);
+  if (isFresh(cached, now)) {
+    return cached!.value;
   }
-  if (accountUsageOverviewInflight != null) {
-    return await accountUsageOverviewInflight;
+  const inflight = accountUsageOverviewInflight.get(account_id);
+  if (inflight != null) {
+    return await inflight;
   }
-  accountUsageOverviewInflight = webapp_client.conat_client.hub.purchases
+  const request = webapp_client.conat_client.hub.purchases
     .getAccountUsageOverview()
     .then((overview) => {
       const next = (overview as AccountUsageOverview) ?? null;
       if (next != null) {
-        accountUsageOverviewCache = { value: next, time: Date.now() };
-        dispatchAccountUsageOverviewRefreshed(next);
+        accountUsageOverviewCache.set(account_id, {
+          value: next,
+          time: Date.now(),
+        });
+        dispatchAccountUsageOverviewRefreshed(next, account_id);
       }
       return next;
     })
     .finally(() => {
-      accountUsageOverviewInflight = undefined;
+      if (accountUsageOverviewInflight.get(account_id) === request) {
+        accountUsageOverviewInflight.delete(account_id);
+      }
     });
-  return await accountUsageOverviewInflight;
+  accountUsageOverviewInflight.set(account_id, request);
+  return await request;
 }
 
-export async function getWarningAIUsage(): Promise<AIUsageStatus | null> {
+export async function getWarningAIUsage(
+  account_id: string,
+): Promise<AIUsageStatus | null> {
   const now = Date.now();
-  if (isFresh(aiUsageCache, now)) {
-    return aiUsageCache!.value;
+  const cached = aiUsageCache.get(account_id);
+  if (isFresh(cached, now)) {
+    return cached!.value;
   }
-  if (aiUsageInflight != null) {
-    return await aiUsageInflight;
+  const inflight = aiUsageInflight.get(account_id);
+  if (inflight != null) {
+    return await inflight;
   }
-  aiUsageInflight = webapp_client.conat_client.hub.purchases
+  const request = webapp_client.conat_client.hub.purchases
     .getAIUsage({})
     .then((status) => {
       const next = (status as AIUsageStatus) ?? null;
       if (next != null) {
-        aiUsageCache = { value: next, time: Date.now() };
+        aiUsageCache.set(account_id, { value: next, time: Date.now() });
       }
       return next;
     })
     .finally(() => {
-      aiUsageInflight = undefined;
+      if (aiUsageInflight.get(account_id) === request) {
+        aiUsageInflight.delete(account_id);
+      }
     });
-  return await aiUsageInflight;
+  aiUsageInflight.set(account_id, request);
+  return await request;
 }

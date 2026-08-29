@@ -31,7 +31,7 @@ export function TeamLicenseWarningBanner() {
       if (canceled || inFlight || !shouldPollUsageWarnings()) return;
       inFlight = true;
       try {
-        const details = await getWarningMembershipDetails();
+        const details = await getWarningMembershipDetails(account_id);
         if (!canceled) {
           setWarning(details?.selected.team_license_warning ?? null);
         }
