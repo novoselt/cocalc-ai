@@ -168,6 +168,7 @@ export interface CourseReconfigureSettings {
   student_membership_required_at?: string;
   student_membership_grace_days?: number;
   course_ends_at?: string;
+  require_invite_email_match?: boolean;
   student_project_functionality?: CourseInfo["student_project_functionality"];
   envvars?: CourseInfo["envvars"];
   inherited_env?: ProjectEnv;
@@ -1911,6 +1912,7 @@ export interface Projects {
       send_email?: boolean;
       invite_context?: Record<string, unknown>;
       invite_scope?: string;
+      require_email_match?: boolean;
       invite_role?: Exclude<ProjectUserRole, "owner">;
       invite_base_url?: string;
       read_policy?: ProjectViewerReadPolicy | null;

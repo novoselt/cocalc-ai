@@ -7,8 +7,12 @@ import { ConfigurationActions } from "./actions";
 
 function createConfigurationActions() {
   const set = jest.fn();
-  const actions = new ConfigurationActions({ set } as any);
-  return { actions, set };
+  const configureAllProjects = jest.fn(async () => undefined);
+  const actions = new ConfigurationActions({
+    set,
+    student_projects: { configure_all_projects: configureAllProjects },
+  } as any);
+  return { actions, configureAllProjects, set };
 }
 
 describe("course configuration payment actions", () => {
@@ -90,6 +94,27 @@ describe("course configuration payment actions", () => {
         table: "settings",
       },
       true,
+    );
+  });
+});
+
+describe("course invitation identity policy", () => {
+  it("publishes the setting before reconfiguring managed projects", async () => {
+    const { actions, configureAllProjects, set } = createConfigurationActions();
+
+    await actions.set_require_invite_email_match(true);
+
+    expect(set).toHaveBeenCalledWith(
+      {
+        require_invite_email_match: true,
+        table: "settings",
+      },
+      true,
+      true,
+    );
+    expect(configureAllProjects).toHaveBeenCalledTimes(1);
+    expect(set.mock.invocationCallOrder[0]).toBeLessThan(
+      configureAllProjects.mock.invocationCallOrder[0],
     );
   });
 });

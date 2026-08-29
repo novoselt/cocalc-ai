@@ -2237,6 +2237,7 @@ export interface ProjectCollabInviteWithoutAccountRequest {
     send_email?: boolean;
     invite_context?: Record<string, unknown>;
     invite_scope?: string;
+    require_email_match?: boolean;
     invite_role?: Exclude<ProjectUserRole, "owner">;
     invite_base_url?: string;
     read_policy?: ProjectViewerReadPolicy | null;
