@@ -177,7 +177,7 @@
     "test:e2e": "playwright test",
     "test:e2e:chat": "playwright test -c playwright.chat.config.ts",
     "generate:active-users-map": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON ./admin/scripts/generate-active-users-map.mjs",
-    "depcheck": "pnpm -w exec depcheck \"$PWD\" --ignores cspell,@cspell/dict-typescript,events,@formatjs/cli,react-test-renderer,jest-environment-jsdom,typescript",
+    "depcheck": "pnpm -w exec depcheck \"$PWD\" --ignores cspell,@cspell/dict-typescript,events,@formatjs/cli,react-test-renderer,jest-environment-jsdom,slate-dom,typescript",
     "prepublishOnly": "pnpm test",
     "update-color-scheme": "node ./update-color-scheme.js",
     "clean": "rm -rf dist node_modules i18n/trans/*.compiled.json tsconfig.tsbuildinfo",
