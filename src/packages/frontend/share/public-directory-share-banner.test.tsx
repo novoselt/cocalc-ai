@@ -232,6 +232,46 @@ describe("PublicDirectoryShareBanner", () => {
     ).toBe("https://example.com/banner.png");
   });
 
+  it("shows account-wide reader instructions beside Copy and in the dialog", () => {
+    const publicShare = {
+      ...share(),
+      publisher_reader_instructions:
+        "Select **Copy**, then open the `figures` directory.",
+    } as ResolvedPublicDirectoryShare;
+    render(<PublicDirectoryShareBanner share={publicShare} />);
+
+    expect(
+      screen.getByText("How to copy and use this publication"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Select **Copy**, then open the `figures` directory."),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Copy"));
+    expect(
+      within(screen.getByRole("dialog")).getByText(
+        "How to copy and use this publication",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("prefers a per-share reader instruction override", () => {
+    render(
+      <PublicDirectoryShareBanner
+        share={{
+          ...share(),
+          reader_instructions: "Use the publication-specific workflow.",
+          publisher_reader_instructions: "Use the account workflow.",
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText("Use the publication-specific workflow."),
+    ).toBeTruthy();
+    expect(screen.queryByText("Use the account workflow.")).toBeNull();
+  });
+
   it("renders uploaded theme image blobs and rejects unsafe image schemes", () => {
     const blobShare = {
       ...share(),

@@ -11,6 +11,7 @@ import type {
   CopyPublicDirectoryShareToProjectOptions,
   CreatePublicDirectoryShareOptions,
   GetTemporaryViewerReadPolicyOptions,
+  GetPublicSharePublisherProfileOptions,
   GrantTemporaryViewerAccessOptions,
   ListMyPublicDirectorySharesOptions,
   ListPublicDirectoryShareDirectoryOptions,
@@ -21,6 +22,7 @@ import type {
   ResolveLegacyPublicDirectorySharePathResponse,
   ResolvePublicDirectoryShareOptions,
   ResolvedPublicDirectoryShare,
+  UpdatePublicSharePublisherProfileOptions,
   UpdatePublicDirectoryShareOptions,
   UpsertPublicDirectoryShareOptions,
 } from "@cocalc/conat/hub/api/public-directory-shares";
@@ -30,6 +32,10 @@ import { listClusterBayRegistry } from "@cocalc/server/bay-registry";
 import { getConfiguredClusterSeedBayId } from "@cocalc/server/cluster-config";
 import { resolveProjectBayAcrossCluster } from "@cocalc/server/inter-bay/directory";
 import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
+import {
+  getClusterPublicSharePublisherProfile,
+  updateClusterPublicSharePublisherProfile,
+} from "@cocalc/server/inter-bay/accounts";
 import * as publicDirectoryShares from "@cocalc/server/public-directory-shares";
 
 const log = getLogger("server:conat-api:public-directory-shares");
@@ -161,6 +167,23 @@ async function projectPublicDirectoryShareBay(
 
 export async function resolve(opts: ResolvePublicDirectoryShareOptions) {
   return (await resolvePublicDirectoryShareWithBay(opts)).share;
+}
+
+export async function getPublisherProfile(
+  opts: GetPublicSharePublisherProfileOptions = {},
+) {
+  if (!opts.account_id) throw Error("user must be signed in");
+  return await getClusterPublicSharePublisherProfile(opts.account_id);
+}
+
+export async function updatePublisherProfile(
+  opts: UpdatePublicSharePublisherProfileOptions,
+) {
+  if (!opts.account_id) throw Error("user must be signed in");
+  return await updateClusterPublicSharePublisherProfile({
+    account_id: opts.account_id,
+    reader_instructions_markdown: opts.reader_instructions_markdown,
+  });
 }
 
 export async function authorizeRead(

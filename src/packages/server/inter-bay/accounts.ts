@@ -5,6 +5,7 @@
 
 import { v4 as uuid } from "uuid";
 import getLogger from "@cocalc/backend/logger";
+import type { PublicSharePublisherProfile } from "@cocalc/conat/hub/api/public-directory-shares";
 import {
   type AccountApiKeyDirectoryEntry,
   createInterBayAccountDirectoryClient,
@@ -36,6 +37,10 @@ import {
 import getPool from "@cocalc/database/pool";
 import adminVerifyEmailAddressLocal from "@cocalc/server/accounts/admin-verify-email-address";
 import sendEmailVerificationLocal from "@cocalc/server/accounts/send-email-verification";
+import {
+  getPublicSharePublisherProfileLocal,
+  updatePublicSharePublisherProfileLocal,
+} from "@cocalc/server/accounts/public-share-publisher-profile";
 import {
   grantAdminRole as grantAdminRoleLocal,
   revokeAdminRole as revokeAdminRoleLocal,
@@ -125,6 +130,48 @@ export async function getClusterAccountsByIds(
   return await createInterBayAccountDirectoryClient({
     client: getInterBayFabricClient(),
   }).getMany({ account_ids });
+}
+
+async function publicSharePublisherProfileBay(account_id: string) {
+  const account = await getClusterAccountById(account_id);
+  if (!account) throw Error("account not found");
+  return account.home_bay_id || currentBayId();
+}
+
+export async function getClusterPublicSharePublisherProfile(
+  account_id: string,
+): Promise<PublicSharePublisherProfile> {
+  const bay_id = await publicSharePublisherProfileBay(account_id);
+  if (bay_id === currentBayId()) {
+    return await getPublicSharePublisherProfileLocal({ account_id });
+  }
+  return await createInterBayAccountLocalClient({
+    client: getInterBayFabricClient(),
+    dest_bay: bay_id,
+  }).getPublicSharePublisherProfile({ account_id });
+}
+
+export async function updateClusterPublicSharePublisherProfile({
+  account_id,
+  reader_instructions_markdown,
+}: {
+  account_id: string;
+  reader_instructions_markdown?: string | null;
+}): Promise<PublicSharePublisherProfile> {
+  const bay_id = await publicSharePublisherProfileBay(account_id);
+  if (bay_id === currentBayId()) {
+    return await updatePublicSharePublisherProfileLocal({
+      account_id,
+      reader_instructions_markdown,
+    });
+  }
+  return await createInterBayAccountLocalClient({
+    client: getInterBayFabricClient(),
+    dest_bay: bay_id,
+  }).updatePublicSharePublisherProfile({
+    account_id,
+    reader_instructions_markdown,
+  });
 }
 
 export async function searchClusterAccounts({

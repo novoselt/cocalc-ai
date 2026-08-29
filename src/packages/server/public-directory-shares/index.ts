@@ -27,7 +27,11 @@ import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
 import { createLro } from "@cocalc/server/lro/lro-db";
 import { publishLroEvent, publishLroSummary } from "@cocalc/server/lro/stream";
-import { getClusterAccountsByIds } from "@cocalc/server/inter-bay/accounts";
+import {
+  getClusterAccountsByIds,
+  getClusterPublicSharePublisherProfile,
+} from "@cocalc/server/inter-bay/accounts";
+import { normalizePublicShareReaderInstructions } from "@cocalc/server/accounts/public-share-publisher-profile";
 import {
   assignSiteLicensePoolSeat as assignSiteLicensePoolSeatDirect,
   revokeSiteLicensePoolSeat as revokeSiteLicensePoolSeatDirect,
@@ -815,6 +819,7 @@ function rowToSummary(
     availability_message: row.availability_message ?? null,
     title: row.title ?? null,
     description: row.description ?? null,
+    reader_instructions: row.reader_instructions ?? null,
     license: row.license ?? null,
     image: row.image ?? null,
     theme: {
@@ -837,6 +842,7 @@ function rowToSummary(
     site_license_copy_requires_grant:
       row.site_license_copy_requires_grant === true,
     disabled: row.disabled === true,
+    publisher_account_id: row.publisher_account_id ?? null,
     created_by: row.created_by ?? null,
     updated_by: row.updated_by ?? null,
     last_edited: row.last_edited ?? null,
@@ -907,6 +913,7 @@ export async function ensurePublicDirectorySharesSchema(): Promise<void> {
         availability_message TEXT,
         title TEXT,
         description TEXT,
+        reader_instructions TEXT,
         license TEXT,
         image TEXT,
         redirect TEXT,
@@ -921,6 +928,7 @@ export async function ensurePublicDirectorySharesSchema(): Promise<void> {
         legacy_url TEXT,
         created_by UUID,
         updated_by UUID,
+        publisher_account_id UUID,
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
         last_edited TIMESTAMP,
@@ -930,6 +938,16 @@ export async function ensurePublicDirectorySharesSchema(): Promise<void> {
     await pool.query(`
       ALTER TABLE public_project_paths
         ADD COLUMN IF NOT EXISTS path_type VARCHAR(16) NOT NULL DEFAULT 'directory'
+    `);
+    await pool.query(`
+      ALTER TABLE public_project_paths
+        ADD COLUMN IF NOT EXISTS reader_instructions TEXT,
+        ADD COLUMN IF NOT EXISTS publisher_account_id UUID
+    `);
+    await pool.query(`
+      UPDATE public_project_paths
+         SET publisher_account_id=COALESCE(created_by, updated_by)
+       WHERE publisher_account_id IS NULL
     `);
     await pool.query(`
       DO $$ BEGIN
@@ -957,6 +975,11 @@ export async function ensurePublicDirectorySharesSchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS public_project_paths_created_by_active_idx
         ON public_project_paths(created_by)
         WHERE disabled IS FALSE AND visibility <> 'disabled'
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS public_project_paths_publisher_account_id_idx
+        ON public_project_paths(publisher_account_id)
+        WHERE publisher_account_id IS NOT NULL
     `);
     await pool.query(`
       CREATE INDEX IF NOT EXISTS public_project_paths_availability_status_idx
@@ -1520,6 +1543,24 @@ async function resolveRow({
     owning_bay_id: owningBayId,
     project_title: projectTitle,
   };
+  let publisherReaderInstructions: string | null = null;
+  if (!summary.reader_instructions && summary.publisher_account_id) {
+    try {
+      const profile = await getClusterPublicSharePublisherProfile(
+        summary.publisher_account_id,
+      );
+      publisherReaderInstructions =
+        profile.reader_instructions_markdown?.trim() || null;
+    } catch (err) {
+      // A publisher profile is supplemental. A temporary account-home-bay
+      // failure must not make the underlying public share unavailable.
+      log.warn("failed to resolve public share publisher profile", {
+        share_id: summary.id,
+        publisher_account_id: summary.publisher_account_id,
+        err: `${(err as Error | undefined)?.message ?? err}`,
+      });
+    }
+  }
   return {
     row,
     share: {
@@ -1541,6 +1582,7 @@ async function resolveRow({
             })
           : null,
       owning_bay_id: owningBayId,
+      publisher_reader_instructions: publisherReaderInstructions,
     },
   };
 }
@@ -1639,6 +1681,9 @@ export async function grantTemporaryViewerAccess({
     project_title: share.project_title,
     share_title: share.title,
     share_description: share.description,
+    reader_instructions: share.reader_instructions,
+    publisher_reader_instructions: share.publisher_reader_instructions,
+    publisher_account_id: share.publisher_account_id,
     license: share.license,
     image: share.image,
     theme: share.theme,
@@ -2170,14 +2215,21 @@ async function savePublicDirectoryShare(
   const availabilityStatus = normalizeAvailability(opts.availability_status);
   const disabled = opts.disabled === true || visibility === "disabled";
   const id = opts.id && isValidUUID(opts.id) ? opts.id : undefined;
-  let existingPathType: PublicDirectorySharePathType | undefined;
-  if (id && opts.path_type == null) {
-    const existing = await getPool().query<{
-      path_type: PublicDirectorySharePathType;
-    }>(`SELECT path_type FROM public_project_paths WHERE id=$1 LIMIT 1`, [id]);
-    existingPathType = existing.rows[0]?.path_type;
-  }
-  const pathType = normalizePathType(opts.path_type ?? existingPathType);
+  const existing = id
+    ? await getPool().query<{
+        path_type: PublicDirectorySharePathType;
+        publisher_account_id?: string | null;
+        reader_instructions?: string | null;
+      }>(
+        `SELECT path_type, publisher_account_id, reader_instructions
+           FROM public_project_paths
+          WHERE id=$1
+          LIMIT 1`,
+        [id],
+      )
+    : undefined;
+  const existingRow = existing?.rows[0];
+  const pathType = normalizePathType(opts.path_type ?? existingRow?.path_type);
   assertPublicDirectorySharePathAllowed(path, pathType);
   const title = normalizeOptionalPublicShareText({
     field: "title",
@@ -2185,6 +2237,16 @@ async function savePublicDirectoryShare(
     value: opts.title,
   });
   const description = normalizePublicShareDescription(opts.description);
+  const readerInstructions = normalizePublicShareReaderInstructions(
+    opts.reader_instructions === undefined
+      ? existingRow?.reader_instructions
+      : opts.reader_instructions,
+  );
+  const publisherAccountId =
+    existingRow?.publisher_account_id ?? opts.account_id ?? null;
+  if (publisherAccountId && !isValidUUID(publisherAccountId)) {
+    throw Error("invalid publisher_account_id");
+  }
   const license = normalizePublicShareLicense(opts.license);
   const image =
     normalizePublicShareThemeString({
@@ -2237,6 +2299,8 @@ async function savePublicDirectoryShare(
     opts.last_edited ?? null,
     disabled,
     pathType,
+    publisherAccountId,
+    readerInstructions,
   ];
   let rows: PublicDirectoryShareRow[];
   try {
@@ -2249,12 +2313,12 @@ async function savePublicDirectoryShare(
         site_license_membership_tier_id, site_license_duration_days,
         site_license_grant_on_copy, site_license_copy_requires_grant, metadata,
         legacy_public_path_id, legacy_url, created_by, updated_by, last_edited,
-        disabled, path_type
+        disabled, path_type, publisher_account_id, reader_instructions
       )
       VALUES (
         COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9,
         $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb, $21,
-        $22, $23, $23, $24, $25, $26
+        $22, $23, $23, $24, $25, $26, $27, $28
       )
       ON CONFLICT (id) DO UPDATE SET
         project_id=EXCLUDED.project_id,
@@ -2282,7 +2346,9 @@ async function savePublicDirectoryShare(
         updated_by=EXCLUDED.updated_by,
         updated_at=NOW(),
         last_edited=EXCLUDED.last_edited,
-        disabled=EXCLUDED.disabled
+        disabled=EXCLUDED.disabled,
+        publisher_account_id=EXCLUDED.publisher_account_id,
+        reader_instructions=EXCLUDED.reader_instructions
       RETURNING *
     `,
       params,
@@ -2470,6 +2536,10 @@ export async function update(
     availability_message: current.availability_message ?? null,
     title: opts.title ?? current.title ?? null,
     description: opts.description ?? current.description ?? null,
+    reader_instructions:
+      opts.reader_instructions === undefined
+        ? (current.reader_instructions ?? null)
+        : opts.reader_instructions,
     license: opts.license ?? current.license ?? null,
     image: opts.image ?? opts.theme?.image_blob ?? current.image ?? null,
     redirect: current.redirect ?? null,
@@ -2553,6 +2623,9 @@ export async function create(
       value: opts.title,
     }),
     description: normalizePublicShareDescription(opts.description),
+    reader_instructions: normalizePublicShareReaderInstructions(
+      opts.reader_instructions,
+    ),
     license: normalizePublicShareLicense(opts.license),
     image: opts.image ?? opts.theme?.image_blob ?? null,
     theme: opts.theme,

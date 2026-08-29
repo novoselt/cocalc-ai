@@ -92,6 +92,10 @@ import { getArchiveLifecycleAccountStatusesLocal } from "@cocalc/server/accounts
 import adminVerifyEmailAddressLocal from "@cocalc/server/accounts/admin-verify-email-address";
 import sendEmailVerificationLocal from "@cocalc/server/accounts/send-email-verification";
 import {
+  getPublicSharePublisherProfileLocal,
+  updatePublicSharePublisherProfileLocal,
+} from "@cocalc/server/accounts/public-share-publisher-profile";
+import {
   grantAdminRole as grantAdminRoleLocal,
   revokeAdminRole as revokeAdminRoleLocal,
 } from "@cocalc/server/accounts/admin-role";
@@ -1160,6 +1164,10 @@ async function startAccountLocalService(): Promise<void> {
     getVerifiedEmailAddresses: async ({ account_id }) => ({
       email_addresses: await getVerifiedEmailAddressesForAccount(account_id),
     }),
+    getPublicSharePublisherProfile: async (opts) =>
+      await getPublicSharePublisherProfileLocal(opts),
+    updatePublicSharePublisherProfile: async (opts) =>
+      await updatePublicSharePublisherProfileLocal(opts),
     createLegacyMigrationProject: async ({
       account_id,
       legacy_project_id,

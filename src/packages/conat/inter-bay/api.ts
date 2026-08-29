@@ -90,6 +90,7 @@ import type {
   ListMyPublicDirectorySharesOptions,
   ListProjectPublicDirectorySharesOptions,
   ListPublicDirectorySharesResponse,
+  PublicSharePublisherProfile,
   PublicDirectoryShareSummary,
   ResolveLegacyPublicDirectorySharePathOptions,
   ResolveLegacyPublicDirectorySharePathResponse,
@@ -993,6 +994,15 @@ export interface AccountLocalGetVerifiedEmailAddressesRequest {
 
 export interface AccountLocalGetVerifiedEmailAddressesResult {
   email_addresses: string[];
+}
+
+export interface AccountLocalGetPublicSharePublisherProfileRequest {
+  account_id: string;
+}
+
+export interface AccountLocalUpdatePublicSharePublisherProfileRequest {
+  account_id: string;
+  reader_instructions_markdown?: string | null;
 }
 
 export interface AccountLocalCreateLegacyMigrationProjectRequest {
@@ -2667,6 +2677,8 @@ export type AccountLocalMethod =
   | "get-account-usage-overview"
   | "record-site-funded-codex-usage"
   | "get-verified-email-addresses"
+  | "get-public-share-publisher-profile"
+  | "update-public-share-publisher-profile"
   | "create-legacy-migration-project"
   | "get-admin-assigned-membership"
   | "set-admin-assigned-membership"
@@ -4134,6 +4146,12 @@ export interface InterBayAccountLocalApi {
   getVerifiedEmailAddresses: (
     opts: AccountLocalGetVerifiedEmailAddressesRequest,
   ) => Promise<AccountLocalGetVerifiedEmailAddressesResult>;
+  getPublicSharePublisherProfile: (
+    opts: AccountLocalGetPublicSharePublisherProfileRequest,
+  ) => Promise<PublicSharePublisherProfile>;
+  updatePublicSharePublisherProfile: (
+    opts: AccountLocalUpdatePublicSharePublisherProfileRequest,
+  ) => Promise<PublicSharePublisherProfile>;
   createLegacyMigrationProject: (
     opts: AccountLocalCreateLegacyMigrationProjectRequest,
   ) => Promise<AccountLocalCreateLegacyMigrationProjectResult>;
@@ -6790,6 +6808,24 @@ export function createInterBayAccountLocalClient({
       method: "get-verified-email-addresses",
     }),
   });
+  const getPublicSharePublisherProfileClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "getPublicSharePublisherProfile">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "get-public-share-publisher-profile",
+    }),
+  });
+  const updatePublicSharePublisherProfileClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "updatePublicSharePublisherProfile">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "update-public-share-publisher-profile",
+    }),
+  });
   const createLegacyMigrationProjectClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "createLegacyMigrationProject">
   >({
@@ -7714,6 +7750,14 @@ export function createInterBayAccountLocalClient({
       await recordSiteFundedCodexUsageClient.recordSiteFundedCodexUsage(opts),
     getVerifiedEmailAddresses: async (opts) =>
       await getVerifiedEmailAddressesClient.getVerifiedEmailAddresses(opts),
+    getPublicSharePublisherProfile: async (opts) =>
+      await getPublicSharePublisherProfileClient.getPublicSharePublisherProfile(
+        opts,
+      ),
+    updatePublicSharePublisherProfile: async (opts) =>
+      await updatePublicSharePublisherProfileClient.updatePublicSharePublisherProfile(
+        opts,
+      ),
     createLegacyMigrationProject: async (opts) =>
       await createLegacyMigrationProjectClient.createLegacyMigrationProject(
         opts,
@@ -8554,6 +8598,34 @@ export function createInterBayAccountLocalHandler({
       impl: {
         getVerifiedEmailAddresses: async (opts) =>
           await impl.getVerifiedEmailAddresses(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "getPublicSharePublisherProfile">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "get-public-share-publisher-profile",
+      }),
+      impl: {
+        getPublicSharePublisherProfile: async (opts) =>
+          await impl.getPublicSharePublisherProfile(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "updatePublicSharePublisherProfile">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "update-public-share-publisher-profile",
+      }),
+      impl: {
+        updatePublicSharePublisherProfile: async (opts) =>
+          await impl.updatePublicSharePublisherProfile(opts),
       },
     }),
     createServiceHandler<
