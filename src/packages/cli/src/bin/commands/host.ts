@@ -687,8 +687,13 @@ function hostOverridesUpgradeArtifact({
   host: HostRow;
   artifacts: string[];
 }): boolean {
+  const summary = host.runtime_exception_summary;
   const overrideTargets = new Set<string>(
-    host.runtime_exception_summary?.host_override_targets ?? [],
+    summary?.host_overrides != null
+      ? summary.host_overrides
+          .filter(({ target_type }) => target_type === "artifact")
+          .map(({ target }) => target)
+      : (summary?.host_override_targets ?? []),
   );
   return artifacts.some((artifact) =>
     overrideTargets.has(runtimeArtifactTargetForUpgradeArtifact(artifact)),

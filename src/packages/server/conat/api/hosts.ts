@@ -518,8 +518,12 @@ async function loadHostRuntimeExceptionSummaries(
     return new Map();
   }
   await ensureProjectHostRuntimeDeploymentsSchema();
-  const { rows } = await pool().query<{ host_id: string; target: string }>(
-    `SELECT host_id::text AS host_id, target
+  const { rows } = await pool().query<{
+    host_id: string;
+    target_type: "component" | "artifact";
+    target: string;
+  }>(
+    `SELECT host_id::text AS host_id, target_type, target
      FROM project_host_runtime_deployments
      WHERE scope_type='host'
        AND host_id::text = ANY($1::text[])
@@ -530,23 +534,39 @@ async function loadHostRuntimeExceptionSummaries(
   for (const row of rows) {
     const host_id = `${row?.host_id ?? ""}`.trim();
     const target = `${row?.target ?? ""}`.trim() as HostRuntimeDeploymentTarget;
-    if (!host_id || !target) continue;
-    const current = summaries.get(host_id);
-    if (!current) {
-      summaries.set(host_id, {
-        host_override_count: 1,
-        host_override_targets: [target],
-      });
+    const target_type = row?.target_type;
+    if (
+      !host_id ||
+      !target ||
+      (target_type !== "component" && target_type !== "artifact")
+    ) {
       continue;
     }
-    if (current.host_override_targets.includes(target)) {
-      continue;
+    const current = summaries.get(host_id) ?? {
+      host_override_count: 0,
+      host_override_targets: [],
+      host_overrides: [],
+    };
+    if (
+      !current.host_overrides?.some(
+        (entry) => entry.target_type === target_type && entry.target === target,
+      )
+    ) {
+      current.host_overrides?.push({ target_type, target });
+      current.host_overrides?.sort((left, right) =>
+        `${left.target_type}:${left.target}`.localeCompare(
+          `${right.target_type}:${right.target}`,
+        ),
+      );
+      current.host_override_count = current.host_overrides?.length ?? 0;
     }
-    current.host_override_targets.push(target);
-    current.host_override_targets.sort((left, right) =>
-      left.localeCompare(right),
-    );
-    current.host_override_count = current.host_override_targets.length;
+    if (!current.host_override_targets.includes(target)) {
+      current.host_override_targets.push(target);
+      current.host_override_targets.sort((left, right) =>
+        left.localeCompare(right),
+      );
+    }
+    summaries.set(host_id, current);
   }
   return summaries;
 }

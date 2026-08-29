@@ -1308,6 +1308,64 @@ test("host upgrade preserves matching host exceptions during fleet installs", as
   ]);
 });
 
+test("host upgrade distinguishes component and artifact overrides with the same name", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const now = new Date().toISOString();
+  const deps = makeDeps(capture, {
+    listHosts: async () => [
+      {
+        id: "component-override-host",
+        name: "component-override-host",
+        status: "running",
+        last_seen: now,
+        runtime_exception_summary: {
+          host_override_count: 1,
+          host_override_targets: ["project-host"],
+          host_overrides: [
+            { target_type: "component", target: "project-host" },
+          ],
+        },
+      },
+      {
+        id: "artifact-override-host",
+        name: "artifact-override-host",
+        status: "running",
+        last_seen: now,
+        runtime_exception_summary: {
+          host_override_count: 1,
+          host_override_targets: ["project-host"],
+          host_overrides: [{ target_type: "artifact", target: "project-host" }],
+        },
+      },
+    ],
+  });
+  const program = new Command();
+  registerHostCommand(program, deps);
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "host",
+    "upgrade",
+    "--all-online",
+    "--artifact",
+    "project-host",
+    "--preserve-desired-state",
+  ]);
+
+  assert.deepEqual(capture.upgrades, ["component-override-host"]);
+  assert.deepEqual(capture.data.excluded_override_hosts, [
+    { host_id: "artifact-override-host", name: "artifact-override-host" },
+  ]);
+});
+
 test("host deploy rollout-fleet queues one canary-first durable campaign", async () => {
   const capture: Capture = {
     upgrades: [],
