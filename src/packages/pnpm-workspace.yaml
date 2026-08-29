@@ -103,8 +103,10 @@ allowBuilds:
 patchedDependencies:
   "@rc-component/portal@2.2.0": patches/@rc-component__portal@2.2.0.patch
   "@rc-component/tabs@1.7.0": patches/@rc-component__tabs@1.7.0.patch
+  codemirror@5.65.20: patches/codemirror@5.65.20.patch
   dropzone@5.9.3: patches/dropzone@5.9.3.patch
   fs-ext@2.1.1: patches/fs-ext@2.1.1.patch
+  slate-dom@0.123.0: patches/slate-dom@0.123.0.patch
   slate-react@0.124.0: patches/slate-react@0.124.0.patch
 
 minimumReleaseAge: 4320

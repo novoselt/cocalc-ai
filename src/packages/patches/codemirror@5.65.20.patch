@@ -1,0 +1,28 @@
+diff --git a/lib/codemirror.js b/lib/codemirror.js
+index 73cbd36c0d33729f87841344ea19192f76252a4d..0091676b02edc3e836aa7919dc64603a7b1407d0 100644
+--- a/lib/codemirror.js
++++ b/lib/codemirror.js
+@@ -5273,5 +5273,9 @@
+   // Ensure a given position is not inside an atomic range.
+   function skipAtomic(doc, pos, oldPos, bias, mayClear) {
++    // A mouse position can outlive the line it points at when a collaborative
++    // change shortens the document between mousedown and mouseup.
++    pos = clipPos(doc, pos);
++    if (oldPos) { oldPos = clipPos(doc, oldPos); }
+     var dir = bias || 1;
+     var found = skipAtomicInner(doc, pos, oldPos, dir, mayClear) ||
+         (!mayClear && skipAtomicInner(doc, pos, oldPos, dir, true)) ||
+diff --git a/src/model/selection_updates.js b/src/model/selection_updates.js
+index 8213949fd3a645d64231b4bbc3f7747c0a31fc6d..f1627995f4fe95640230cf317b5a05dd267b2182 100644
+--- a/src/model/selection_updates.js
++++ b/src/model/selection_updates.js
+@@ -188,5 +188,9 @@ function skipAtomicInner(doc, pos, oldPos, dir, mayClear) {
+ // Ensure a given position is not inside an atomic range.
+ export function skipAtomic(doc, pos, oldPos, bias, mayClear) {
++  // A mouse position can outlive the line it points at when a collaborative
++  // change shortens the document between mousedown and mouseup.
++  pos = clipPos(doc, pos)
++  if (oldPos) oldPos = clipPos(doc, oldPos)
+   let dir = bias || 1
+   let found = skipAtomicInner(doc, pos, oldPos, dir, mayClear) ||
+       (!mayClear && skipAtomicInner(doc, pos, oldPos, dir, true)) ||

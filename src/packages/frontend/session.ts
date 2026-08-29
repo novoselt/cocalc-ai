@@ -19,6 +19,7 @@ import target from "@cocalc/frontend/client/handle-target";
 import { load_target } from "./history";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import signInAction from "@cocalc/frontend/app/sign-in-action";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 import { lite } from "@cocalc/frontend/lite";
 
 const log = (..._args) => {
@@ -63,6 +64,29 @@ export function getOpenFilesForSessionClose(
     return;
   }
   return redux.getProjectStore(project_id).get("open_files_order")?.toJS?.();
+}
+
+export async function restoreProjectFiles(
+  redux: AppRedux,
+  project_id: string,
+  paths: string[],
+): Promise<void> {
+  if (paths.length === 0) return;
+  await ensureProjectReduxRuntime();
+  const project = redux.getProjectActions(project_id);
+  for (const path of paths) {
+    try {
+      await project.open_file({
+        path,
+        foreground: false,
+        foreground_project: false,
+        wait_for_ready: false,
+        change_history: false,
+      });
+    } catch (err) {
+      console.warn("Unable to restore an open file", path, err);
+    }
+  }
 }
 
 class SessionManager {
@@ -195,10 +219,17 @@ class SessionManager {
 
   async restore(project_id?: string): Promise<void> {
     log("restore", project_id);
-    if (project_id != null) {
-      await this._restore_project(project_id);
-    } else {
-      await this._restore_all();
+    try {
+      if (project_id != null) {
+        await this._restore_project(project_id);
+      } else {
+        await this._restore_all();
+      }
+    } catch (err) {
+      // Session restoration is best effort and is frequently invoked without
+      // awaiting its promise. Never turn a lazy-load or close race into a
+      // global unhandled rejection.
+      console.warn("Unable to restore session", err);
     }
   }
 
@@ -212,16 +243,7 @@ class SessionManager {
     const open_files = this._state_closed[project_id];
     delete this._state_closed[project_id];
     if (open_files != null && !this._ignore) {
-      const project = this.redux.getProjectActions(project_id);
-      for (const path of open_files) {
-        await project.open_file({
-          path,
-          foreground: false,
-          foreground_project: false,
-          wait_for_ready: false,
-          change_history: false,
-        });
-      }
+      await restoreProjectFiles(this.redux, project_id, open_files);
     }
   }
 
@@ -317,22 +339,7 @@ export async function restoreSessionState(
         continue;
       }
       if (paths.length > 0) {
-        const project = redux.getProjectActions(project_id);
-        for (const path of paths) {
-          try {
-            await project.open_file({
-              path,
-              foreground: false,
-              foreground_project: false,
-              wait_for_ready: false,
-              change_history: false,
-            });
-          } catch (err) {
-            // no clue if this could happen or not now, but maybe someday, and also shouldn't be fatal.
-            console.warn("Unable to open a file", path);
-            continue;
-          }
-        }
+        await restoreProjectFiles(redux, project_id, paths);
       }
     }
   }

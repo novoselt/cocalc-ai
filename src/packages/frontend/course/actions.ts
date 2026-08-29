@@ -317,8 +317,14 @@ export class CourseActions extends Actions<CourseState> {
   // appended to the existing one.
   set_error = (error: string): void => {
     if (error != "") {
-      const store = this.get_store();
-      if (store == null) return;
+      // Async SyncDB and project operations may report an error after the
+      // editor has closed and its store has been removed. Error reporting is
+      // best effort during teardown and must not call the throwing get_store.
+      const store = this.redux.getStore<CourseState, CourseStore>(this.name);
+      if (store == null) {
+        this.state = "closed";
+        return;
+      }
       if (store.get("error")) {
         error = `${store.get("error")} \n${error}`;
       }
