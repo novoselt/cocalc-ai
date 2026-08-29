@@ -178,6 +178,30 @@ describe("archive volume barrier", () => {
     });
   });
 
+  it("does not ask the storage wrapper to remove missing staging", async () => {
+    const vol = volume(jest.fn(async () => []));
+
+    await expect(deleteStagedArchiveSnapshots(vol)).resolves.toBeUndefined();
+
+    expect(sudoMock).not.toHaveBeenCalled();
+  });
+
+  it("removes an existing empty staging directory", async () => {
+    const vol = volume(jest.fn(async () => []));
+    existsMock.mockImplementation(
+      async (path: string) =>
+        path === "/mnt/project-1" ||
+        path === "/mnt/.archive-snapshot-staging/project-1",
+    );
+
+    await deleteStagedArchiveSnapshots(vol);
+
+    expect(sudoMock).toHaveBeenCalledWith({
+      command: "rm",
+      args: ["-rf", "/mnt/.archive-snapshot-staging/project-1"],
+    });
+  });
+
   it("deletes orphan staging only while the project parent is absent", async () => {
     const vol = volume(jest.fn(async () => []));
     await expect(deleteOrphanedStagedArchiveSnapshots(vol)).resolves.toBe(
@@ -243,6 +267,7 @@ describe("archive volume barrier", () => {
         args: ["property", "set", "-ts", "/mnt/project-1", "ro", "false"],
       }),
     );
+    expect(sudoMock).not.toHaveBeenCalled();
   });
 
   it("only releases a persisted archive freeze at its recorded generation", async () => {
