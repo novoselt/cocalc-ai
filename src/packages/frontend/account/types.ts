@@ -63,6 +63,7 @@ export interface AccountState {
     newsletter?: boolean;
     marketing_email_consent_record?: MarketingEmailConsentRecord;
     membership_trial_banner_dismissed?: boolean;
+    site_license_reminder_dismissals?: Record<string, number>;
     first_run_onboarding_intent_v1?: ProjectOnboardingIntent;
     use_balance_toward_subscriptions?: boolean;
     use_balance_toward_team_licenses?: boolean;

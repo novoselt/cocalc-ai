@@ -580,6 +580,7 @@ export async function searchSiteLicensePoolAccounts(opts: {
 
 export async function getClaimableMembershipPackages(opts?: {
   include_claimed_site_license_pools?: boolean;
+  site_only?: boolean;
 }): Promise<ClaimableMembershipPackage[]> {
   return await (
     await getPurchasesHubRpc()

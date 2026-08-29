@@ -2646,6 +2646,21 @@ describe("purchases membership packages", () => {
     expect(result).toHaveLength(1);
   });
 
+  it("forwards site-only claimable package lookup options", async () => {
+    const { getClaimableMembershipPackages } = await import("./purchases");
+    await getClaimableMembershipPackages({
+      account_id: "account-1",
+      include_claimed_site_license_pools: true,
+      site_only: true,
+    });
+
+    expect(listClaimableMembershipPackagesForAccountMock).toHaveBeenCalledWith({
+      account_id: "account-1",
+      include_claimed_site_license_pools: true,
+      site_only: true,
+    });
+  });
+
   it("routes claimable package lookup to the signed-in account's home bay", async () => {
     resolveAccountHomeBayMock.mockResolvedValue({
       account_id: "account-1",

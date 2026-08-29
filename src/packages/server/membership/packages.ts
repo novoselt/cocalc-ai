@@ -2543,10 +2543,12 @@ export async function revokeMembershipPackageSeat(
 export async function listClaimableMembershipPackagesForAccount({
   account_id,
   include_claimed_site_license_pools = false,
+  site_only = false,
   client,
 }: {
   account_id: string;
   include_claimed_site_license_pools?: boolean;
+  site_only?: boolean;
   client?: PoolClient;
 }): Promise<ClaimableMembershipPackage[]> {
   const verifiedEmailAddress = await getVerifiedEmailAddressForAccount({
@@ -2561,6 +2563,7 @@ export async function listClaimableMembershipPackagesForAccount({
   const claimables = await listClaimableMembershipPackagesAcrossCluster({
     account_id,
     include_claimed_site_license_pools,
+    site_only,
     verified_email_addresses: verifiedEmailAddresses,
     client,
   });
@@ -2815,11 +2818,13 @@ export async function listLocalClaimableMembershipPackagesForVerifiedEmails({
 async function listClaimableMembershipPackagesAcrossCluster({
   account_id,
   include_claimed_site_license_pools = false,
+  site_only = false,
   verified_email_addresses,
   client,
 }: {
   account_id: string;
   include_claimed_site_license_pools?: boolean;
+  site_only?: boolean;
   verified_email_addresses: string[];
   client?: PoolClient;
 }): Promise<ClaimableMembershipPackageWithBay[]> {
@@ -2837,16 +2842,19 @@ async function listClaimableMembershipPackagesAcrossCluster({
     }
   };
   const seedBayId = getSeedBayId();
-  addClaimables(
-    await listLocalClaimableMembershipPackagesForVerifiedEmails({
-      account_id,
-      include_claimed_site_license_pools,
-      verified_email_addresses,
-      client,
-    }),
-    getConfiguredBayId(),
-    (row) => row.kind !== "site" || isSeedBay(),
-  );
+  if (!site_only || isSeedBay()) {
+    addClaimables(
+      await listLocalClaimableMembershipPackagesForVerifiedEmails({
+        account_id,
+        include_claimed_site_license_pools,
+        verified_email_addresses,
+        client,
+      }),
+      getConfiguredBayId(),
+      (row) =>
+        site_only ? row.kind === "site" : row.kind !== "site" || isSeedBay(),
+    );
+  }
   if (!isSeedBay()) {
     const seedRows = await createInterBayAccountLocalClient({
       client: getInterBayFabricClient(),
@@ -2854,9 +2862,13 @@ async function listClaimableMembershipPackagesAcrossCluster({
     }).getClaimableMembershipPackages({
       account_id,
       include_claimed_site_license_pools,
+      site_only,
       verified_email_addresses,
     });
     addClaimables(seedRows, seedBayId, (row) => row.kind === "site");
+  }
+  if (site_only) {
+    return sortClaimableMembershipPackages(Array.from(claimables.values()));
   }
   for (const bay_id of getConfiguredClusterBayIdsForStaticEnumerationOnly()) {
     if (bay_id === getConfiguredBayId() || bay_id === seedBayId) continue;

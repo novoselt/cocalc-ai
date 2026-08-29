@@ -2212,9 +2212,11 @@ export async function searchSiteLicensePoolAccounts({
 export async function getClaimableMembershipPackages({
   account_id,
   include_claimed_site_license_pools,
+  site_only,
 }: {
   account_id?: string;
   include_claimed_site_license_pools?: boolean;
+  site_only?: boolean;
 }) {
   const actorId = requireAccount(account_id);
   const home_bay_id = await resolveTargetAccountHomeBay({
@@ -2230,6 +2232,7 @@ export async function getClaimableMembershipPackages({
       ...(include_claimed_site_license_pools
         ? { include_claimed_site_license_pools }
         : {}),
+      ...(site_only ? { site_only } : {}),
     });
   }
   return await listClaimableMembershipPackagesForAccount({
@@ -2237,6 +2240,7 @@ export async function getClaimableMembershipPackages({
     ...(include_claimed_site_license_pools
       ? { include_claimed_site_license_pools }
       : {}),
+    ...(site_only ? { site_only } : {}),
   });
 }
 

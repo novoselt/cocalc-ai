@@ -1667,12 +1667,14 @@ export interface AccountLocalRemoveSiteLicenseManagerRequest {
 export interface AccountLocalGetClaimableMembershipPackagesRequest {
   account_id: string;
   include_claimed_site_license_pools?: boolean;
+  site_only?: boolean;
   verified_email_addresses: string[];
 }
 
 export interface AccountLocalGetClaimableMembershipPackagesForAccountRequest {
   account_id: string;
   include_claimed_site_license_pools?: boolean;
+  site_only?: boolean;
 }
 
 export interface AccountLocalClaimMembershipPackageSeatRequest {

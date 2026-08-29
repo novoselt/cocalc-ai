@@ -1543,7 +1543,7 @@ describe("membership packages", () => {
   });
 
   it("discovers seed claimable site packages across the cluster", async () => {
-    process.env.COCALC_CLUSTER_BAY_IDS = "bay-0,bay-1";
+    process.env.COCALC_CLUSTER_BAY_IDS = "bay-0,bay-1,bay-2";
     process.env.COCALC_CLUSTER_SEED_BAY_ID = "bay-1";
     const claimant_account_id = uuid();
     const remote_package_id = uuid();
@@ -1563,13 +1563,16 @@ describe("membership packages", () => {
         getClaimableMembershipPackages: jest.fn(
           async ({
             account_id,
+            site_only,
             verified_email_addresses,
           }: {
             account_id: string;
+            site_only?: boolean;
             verified_email_addresses: string[];
           }) => {
             expect(dest_bay).toBe("bay-1");
             expect(account_id).toBe(claimant_account_id);
+            expect(site_only).toBe(true);
             expect(verified_email_addresses).toEqual([verifiedEmail]);
             return [
               {
@@ -1595,6 +1598,7 @@ describe("membership packages", () => {
 
     const claimables = await listClaimableMembershipPackagesForAccount({
       account_id: claimant_account_id,
+      site_only: true,
     });
     expect(claimables).toEqual(
       expect.arrayContaining([
