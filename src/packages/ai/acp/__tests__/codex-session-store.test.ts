@@ -1,23 +1,23 @@
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as zlib from "node:zlib";
 
 import {
+  findSessionFile,
   readPortableSessionHistory,
-  truncateSessionHistory,
-  truncateSessionHistoryById,
+  readSessionMeta,
 } from "../codex-session-store";
+
+type ZstdZlib = typeof zlib & {
+  zstdCompressSync: (input: string | Uint8Array) => Buffer;
+};
 
 async function makeSessionFile(lines: string[]): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), "codex-session-store-"));
   const filePath = path.join(dir, "rollout-test.jsonl");
   await writeFile(filePath, `${lines.join("\n")}\n`, "utf8");
   return filePath;
-}
-
-async function readLines(filePath: string): Promise<string[]> {
-  const text = await readFile(filePath, "utf8");
-  return text.trimEnd().split("\n");
 }
 
 function compactedLine(label: string): string {
@@ -34,57 +34,8 @@ function eventLine(label: string): string {
   });
 }
 
-describe("truncateSessionHistory", () => {
-  it("keeps only the most recent compaction checkpoints once stale ones accumulate", async () => {
-    const filePath = await makeSessionFile([
-      JSON.stringify({ type: "session_meta", payload: { id: "sess-1" } }),
-      compactedLine("old-1"),
-      eventLine("after-old-1"),
-      compactedLine("old-2"),
-      eventLine("after-old-2"),
-      compactedLine("keep-1"),
-      eventLine("after-keep-1"),
-      compactedLine("keep-2"),
-      eventLine("after-keep-2"),
-    ]);
-
-    await expect(
-      truncateSessionHistory(filePath, {
-        maxBytes: 1,
-        keepCompactions: 2,
-      }),
-    ).resolves.toBe(true);
-
-    await expect(readLines(filePath)).resolves.toEqual([
-      JSON.stringify({ type: "session_meta", payload: { id: "sess-1" } }),
-      compactedLine("keep-1"),
-      eventLine("after-keep-1"),
-      compactedLine("keep-2"),
-      eventLine("after-keep-2"),
-    ]);
-  });
-
-  it("does not rewrite files that only contain the retained number of compactions", async () => {
-    const filePath = await makeSessionFile([
-      JSON.stringify({ type: "session_meta", payload: { id: "sess-1" } }),
-      compactedLine("keep-1"),
-      eventLine("after-keep-1"),
-      compactedLine("keep-2"),
-      eventLine("after-keep-2"),
-    ]);
-    const before = await readFile(filePath, "utf8");
-
-    await expect(
-      truncateSessionHistory(filePath, {
-        maxBytes: 1,
-        keepCompactions: 2,
-      }),
-    ).resolves.toBe(false);
-
-    await expect(readFile(filePath, "utf8")).resolves.toBe(before);
-  });
-
-  it("can export a trimmed portable copy without mutating the source file", async () => {
+describe("portable Codex session history", () => {
+  it("exports a trimmed copy without mutating the source file", async () => {
     const filePath = await makeSessionFile([
       JSON.stringify({ type: "session_meta", payload: { id: "sess-1" } }),
       compactedLine("old-1"),
@@ -114,42 +65,61 @@ describe("truncateSessionHistory", () => {
     await expect(readFile(filePath, "utf8")).resolves.toBe(before);
   });
 
-  it("can truncate a session by id from the sessions root", async () => {
+  it("finds and reads Codex-native zstd-compressed rollouts", async () => {
     const sessionsRoot = await mkdtemp(
       path.join(os.tmpdir(), "codex-session-root-"),
     );
-    const sessionId = "sess-lookup";
-    const sessionDir = path.join(sessionsRoot, "2026", "04", "09");
+    const sessionId = "sess-compressed";
+    const sessionDir = path.join(sessionsRoot, "2026", "08", "30");
     await mkdir(sessionDir, { recursive: true });
-    const filePath = path.join(sessionDir, `rollout-${sessionId}.jsonl`);
-    await writeFile(
-      filePath,
+    const filePath = path.join(sessionDir, `rollout-${sessionId}.jsonl.zst`);
+    const content =
       [
-        JSON.stringify({ type: "session_meta", payload: { id: sessionId } }),
+        JSON.stringify({
+          type: "session_meta",
+          payload: { id: sessionId, model: "gpt-5.4" },
+        }),
         compactedLine("old-1"),
         eventLine("after-old-1"),
         compactedLine("keep-1"),
         eventLine("after-keep-1"),
         compactedLine("keep-2"),
         eventLine("after-keep-2"),
-      ].join("\n") + "\n",
-      "utf8",
+      ].join("\n") + "\n";
+    const compressed = (zlib as ZstdZlib).zstdCompressSync(content);
+    await writeFile(filePath, compressed);
+
+    await expect(findSessionFile(sessionId, sessionsRoot)).resolves.toBe(
+      filePath,
     );
+    await expect(readSessionMeta(filePath)).resolves.toMatchObject({
+      payload: { id: sessionId, model: "gpt-5.4" },
+    });
 
-    await expect(
-      truncateSessionHistoryById(sessionId, {
-        sessionsRoot,
-        force: true,
-        keepCompactions: 2,
-      }),
-    ).resolves.toBe(true);
+    const portable = await readPortableSessionHistory(filePath, {
+      force: true,
+      keepCompactions: 2,
+    });
+    const exported = new TextDecoder().decode(portable.content);
+    expect(portable.originalBytes).toBe(Buffer.byteLength(content));
+    expect(portable.trimmed).toBe(true);
+    expect(exported).toContain('"label":"keep-1"');
+    expect(exported).not.toContain('"label":"old-1"');
+  });
 
-    await expect(readLines(filePath)).resolves.toEqual([
-      JSON.stringify({ type: "session_meta", payload: { id: sessionId } }),
-      compactedLine("keep-1"),
-      eventLine("after-keep-1"),
-      compactedLine("keep-2"),
-      eventLine("after-keep-2"),
-    ]);
+  it("prefers an active plain rollout over a stale compressed copy", async () => {
+    const sessionsRoot = await mkdtemp(
+      path.join(os.tmpdir(), "codex-session-root-"),
+    );
+    const sessionId = "sess-active";
+    const compressed = path.join(
+      sessionsRoot,
+      `rollout-${sessionId}.jsonl.zst`,
+    );
+    const plain = path.join(sessionsRoot, `rollout-${sessionId}.jsonl`);
+    await writeFile(compressed, "compressed-placeholder");
+    await writeFile(plain, "plain-placeholder");
+
+    await expect(findSessionFile(sessionId, sessionsRoot)).resolves.toBe(plain);
   });
 });

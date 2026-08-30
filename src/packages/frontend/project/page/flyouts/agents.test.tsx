@@ -29,7 +29,6 @@ const mockOpenImportModal = jest.fn();
 const mockOpenForkModal = jest.fn();
 const mockConfirmDeleteThread = jest.fn();
 const mockUpsertThreadAutomation = jest.fn();
-const mockTruncateAcpSession = jest.fn();
 const mockAntdMessageInfo = jest.fn();
 const mockAntdMessageError = jest.fn();
 
@@ -250,7 +249,6 @@ jest.mock("@cocalc/frontend/chat/use-codex-payment-source", () => ({
 jest.mock("@cocalc/frontend/chat/acp-api", () => ({
   upsertThreadAutomation: (...args: any[]) =>
     mockUpsertThreadAutomation(...args),
-  truncateAcpSession: (...args: any[]) => mockTruncateAcpSession(...args),
 }));
 
 jest.mock("@cocalc/frontend/chat/automation-form", () => {
@@ -416,7 +414,6 @@ describe("AgentsPanel session cards", () => {
     mockOpenForkModal.mockClear();
     mockConfirmDeleteThread.mockClear();
     mockUpsertThreadAutomation.mockClear();
-    mockTruncateAcpSession.mockClear();
     mockWatchAgentSessionsForProject.mockReset();
     mockWatchAgentSessionsForProject.mockImplementation(
       async (_args: any, cb: (records: any[]) => void) => {

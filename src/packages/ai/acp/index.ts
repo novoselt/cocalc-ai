@@ -30,9 +30,6 @@ export {
   getSessionsRoot,
   readPortableSessionHistory,
   readSessionMeta,
-  rewriteSessionMeta,
-  truncateSessionHistory,
-  truncateSessionHistoryById,
 } from "./codex-session-store";
 export {
   getCodexProjectSpawner,

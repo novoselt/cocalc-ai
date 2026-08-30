@@ -4019,7 +4019,7 @@ describe("CodexAppServerAgent", () => {
     });
   });
 
-  it("rewrites resumed session metadata before thread/resume", async () => {
+  it("passes resume overrides without rewriting the rollout", async () => {
     const originalCodexHome = process.env.COCALC_CODEX_HOME;
     const codexHome = mkdtempSync(path.join(tmpdir(), "codex-home-"));
     const sessionId = "019d0000-0000-7000-8000-000000000001";
@@ -4050,14 +4050,16 @@ describe("CodexAppServerAgent", () => {
     );
     process.env.COCALC_CODEX_HOME = codexHome;
 
-    let rewrittenMeta: any;
+    let persistedMeta: any;
+    let resumeParams: any;
     const proc = new FakeCodexAppServerProc((fake, message) => {
       switch (message.method) {
         case "initialize":
           fake.sendResponse(message.id, { ok: true });
           break;
         case "thread/resume":
-          rewrittenMeta = JSON.parse(
+          resumeParams = message.params;
+          persistedMeta = JSON.parse(
             readFileSync(sessionFile, "utf8").split("\n")[0],
           );
           fake.sendResponse(message.id, {
@@ -4118,14 +4120,17 @@ describe("CodexAppServerAgent", () => {
       rmSync(codexHome, { recursive: true, force: true });
     }
 
-    expect(rewrittenMeta?.payload?.cwd).toBe("/tmp/project");
-    expect(rewrittenMeta?.payload?.approval_policy).toBe("never");
-    expect(rewrittenMeta?.payload?.sandbox_policy).toEqual({
-      type: "danger-full-access",
+    expect(persistedMeta?.payload?.cwd).toBe("/tmp/old-project");
+    expect(resumeParams).toMatchObject({
+      threadId: sessionId,
+      cwd: "/tmp/project",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      excludeTurns: true,
     });
   });
 
-  it("rewrites resumed session metadata in the project codex home for container-backed sessions", async () => {
+  it("passes container resume overrides without rewriting the rollout", async () => {
     const rootHostPath = mkdtempSync(path.join(tmpdir(), "codex-home-"));
     const sessionId = "019d0000-0000-7000-8000-000000000002";
     const sessionDir = path.join(
@@ -4161,14 +4166,16 @@ describe("CodexAppServerAgent", () => {
       "utf8",
     );
 
-    let rewrittenMeta: any;
+    let persistedMeta: any;
+    let resumeParams: any;
     const proc = new FakeCodexAppServerProc((fake, message) => {
       switch (message.method) {
         case "initialize":
           fake.sendResponse(message.id, { ok: true });
           break;
         case "thread/resume":
-          rewrittenMeta = JSON.parse(
+          resumeParams = message.params;
+          persistedMeta = JSON.parse(
             readFileSync(sessionFile, "utf8").split("\n")[0],
           );
           fake.sendResponse(message.id, {
@@ -4227,14 +4234,17 @@ describe("CodexAppServerAgent", () => {
       rmSync(rootHostPath, { recursive: true, force: true });
     }
 
-    expect(rewrittenMeta?.payload?.cwd).toBe("/home/user/cocalc-ai");
-    expect(rewrittenMeta?.payload?.approval_policy).toBe("never");
-    expect(rewrittenMeta?.payload?.sandbox_policy).toEqual({
-      type: "danger-full-access",
+    expect(persistedMeta?.payload?.cwd).toBe("/tmp/old-project");
+    expect(resumeParams).toMatchObject({
+      threadId: sessionId,
+      cwd: "/home/user/cocalc-ai",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      excludeTurns: true,
     });
   });
 
-  it("rewrites container-backed resumed sessions to full-access by default", async () => {
+  it("resumes container-backed sessions with full access by default", async () => {
     const rootHostPath = mkdtempSync(path.join(tmpdir(), "codex-home-"));
     const sessionId = "019d0000-0000-7000-8000-000000000003";
     const sessionDir = path.join(
@@ -4270,14 +4280,16 @@ describe("CodexAppServerAgent", () => {
       "utf8",
     );
 
-    let rewrittenMeta: any;
+    let persistedMeta: any;
+    let resumeParams: any;
     const proc = new FakeCodexAppServerProc((fake, message) => {
       switch (message.method) {
         case "initialize":
           fake.sendResponse(message.id, { ok: true });
           break;
         case "thread/resume":
-          rewrittenMeta = JSON.parse(
+          resumeParams = message.params;
+          persistedMeta = JSON.parse(
             readFileSync(sessionFile, "utf8").split("\n")[0],
           );
           fake.sendResponse(message.id, {
@@ -4335,10 +4347,13 @@ describe("CodexAppServerAgent", () => {
       rmSync(rootHostPath, { recursive: true, force: true });
     }
 
-    expect(rewrittenMeta?.payload?.cwd).toBe("/home/user/cocalc-ai");
-    expect(rewrittenMeta?.payload?.approval_policy).toBe("never");
-    expect(rewrittenMeta?.payload?.sandbox_policy).toEqual({
-      type: "danger-full-access",
+    expect(persistedMeta?.payload?.cwd).toBe("/tmp/old-project");
+    expect(resumeParams).toMatchObject({
+      threadId: sessionId,
+      cwd: "/home/user/cocalc-ai",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      excludeTurns: true,
     });
   });
 

@@ -91,8 +91,6 @@ import {
   type AgentPanelRevealDetail,
   type OpenedAgentSessionSelection,
 } from "@cocalc/frontend/project/page/agent-panel-state";
-import { truncateAcpSession } from "@cocalc/frontend/chat/acp-api";
-import { resolvePersistedOrLiveAcpSessionIdForThread } from "@cocalc/frontend/chat/thread-session";
 import getAnchorTagComponent from "@cocalc/frontend/project/page/anchor-tag-component";
 import getUrlTransform from "@cocalc/frontend/project/page/url-transform";
 import type { ProjectActions } from "@cocalc/frontend/project_actions";
@@ -108,10 +106,7 @@ import {
 import { path_split, tab_to_path } from "@cocalc/util/misc";
 import { joinAbsolutePath } from "@cocalc/util/path-model";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
-import {
-  isCodexModelName,
-  normalizeCodexSessionId,
-} from "@cocalc/util/ai/codex";
+import { isCodexModelName } from "@cocalc/util/ai/codex";
 
 const STATUS_COLORS: Record<AgentSessionStatus, string> = {
   active: "success",
@@ -1561,26 +1556,9 @@ export function AgentsPanel({ project_id, layout = "page" }: AgentsPanelProps) {
         antdMessage.error("Deleting chats is not available.");
         return;
       }
-      const metadata = actionsForThread.getThreadMetadata?.(threadKey, {
-        threadId: threadKey,
-      });
-      const maybeSessionId = resolvePersistedOrLiveAcpSessionIdForThread({
-        actions: actionsForThread,
-        threadId: threadKey,
-        persistedSessionId: normalizeCodexSessionId(
-          metadata?.acp_config?.sessionId,
-        ),
-      });
       const deleted = actionsForThread.deleteThread(threadKey);
       if (deleted === 0) {
         antdMessage.info("This chat has no messages to delete.");
-      }
-      if (maybeSessionId) {
-        void truncateAcpSession({
-          actions: actionsForThread,
-          sessionId: maybeSessionId,
-          force: true,
-        }).catch(() => {});
       }
       await deleteAgentSessionRecord({
         project_id: record.project_id || project_id,

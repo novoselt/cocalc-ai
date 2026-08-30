@@ -14,7 +14,6 @@ import {
   type AcpAgent,
   type AcpEvaluateRequest,
   forkCodexAppServerSession,
-  truncateSessionHistoryById,
 } from "@cocalc/ai/acp";
 import { AgentTimeTravelRecorder } from "@cocalc/ai/sync";
 import { init as initConatAcp } from "@cocalc/conat/ai/acp/server";
@@ -40,7 +39,6 @@ import type {
   AcpForkSessionRequest,
   AcpInterruptRequest,
   AcpInterruptResponse,
-  AcpTruncateSessionRequest,
 } from "@cocalc/conat/ai/acp/types";
 import {
   normalizeCodexSessionId,
@@ -10191,7 +10189,10 @@ export async function init(
       interrupt: handleInterruptRequest,
       steer: handleAcpSteerRequest,
       forkSession: handleForkSessionRequest,
-      truncateSession: handleTruncateSessionRequest,
+      // Older static clients may still request this after deleting a chat.
+      // Codex now exclusively owns rollout maintenance, so acknowledge the
+      // obsolete request without mutating a possibly live session file.
+      truncateSession: async () => ({ ok: true, truncated: false }),
       control: handleAcpControlRequest,
       automation: handleAcpAutomationRequest,
     },
@@ -10603,22 +10604,6 @@ async function handleForkSessionRequest(
     sessionId,
     binaryPath: process.env.COCALC_CODEX_BIN,
   });
-}
-
-async function handleTruncateSessionRequest(
-  request: AcpTruncateSessionRequest,
-): Promise<{ ok: boolean; truncated: boolean }> {
-  const sessionId = `${request.sessionId ?? ""}`.trim();
-  if (!sessionId) {
-    throw Error("sessionId must be a non-empty string");
-  }
-  const truncated = await truncateSessionHistoryById(sessionId, {
-    force: request.force === true,
-  });
-  return {
-    ok: true,
-    truncated,
-  };
 }
 
 async function interruptCodexSession(
