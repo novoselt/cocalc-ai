@@ -333,7 +333,7 @@ describe("commercial Stripe invoices", () => {
         auto_advance: false,
         collection_method: "send_invoice",
         customer: "cus_1",
-        due_date: DUE_DATE,
+        days_until_due: 30,
         payment_settings: {
           payment_method_types: ["card", "us_bank_account"],
         },
@@ -349,6 +349,9 @@ describe("commercial Stripe invoices", () => {
           ":commercial-invoice:ci_1:v1:invoice",
         ),
       }),
+    );
+    expect(stripe.invoices.create.mock.calls[0][0]).not.toHaveProperty(
+      "due_date",
     );
     expect(stripe.invoiceItems.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -556,6 +559,44 @@ describe("commercial Stripe invoices", () => {
       }),
     );
     expect(mockUpdateCommercialInvoiceProvider).toHaveBeenCalled();
+  });
+
+  it("does not reuse a stale timestamp when retrying a zero-day invoice", async () => {
+    jest.useFakeTimers({ now: new Date("2026-10-01T12:00:00.000Z") });
+    const creating = invoiceFixture({
+      idempotency_key: "invoice-draft:key",
+      provider_customer_id: null,
+      provider_invoice_id: null,
+      due_at: "2026-09-30T12:00:00.000Z",
+    });
+    const order = orderFixture({
+      payment_terms_days: 0,
+      collection_state: "draft_invoice",
+      invoices: [creating],
+    });
+    mockGetCommercialOrder.mockResolvedValue(order);
+    stripe.invoices.search.mockResolvedValue({ data: [] });
+    stripe.invoices.listLineItems.mockResolvedValueOnce({ data: [] });
+
+    await createStripeCommercialInvoiceDraft({
+      id: "co_1",
+      account_id: "admin-1",
+      expected_version: 4,
+      reason: "Retry due-on-receipt invoice after provider rejection",
+    });
+
+    expect(mockCreateCommercialInvoiceIntent).not.toHaveBeenCalled();
+    expect(stripe.invoices.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customer: "cus_1",
+        collection_method: "send_invoice",
+        days_until_due: 0,
+      }),
+      expect.anything(),
+    );
+    expect(stripe.invoices.create.mock.calls[0][0]).not.toHaveProperty(
+      "due_date",
+    );
   });
 
   it("returns the prior result when a completed draft command is replayed", async () => {
