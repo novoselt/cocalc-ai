@@ -516,6 +516,8 @@ secret_access_key = "secret"
             self.assertEqual(sum("repoinfo" in call for call in calls), 3)
             self.assertEqual(sum("init" in call for call in calls), 1)
             self.assertEqual(sum("backup" in call for call in calls), 1)
+            init_call = next(call for call in calls if "init" in call)
+            self.assertNotIn("--no-progress", init_call)
             sleep.assert_called_once_with(0.25)
 
 

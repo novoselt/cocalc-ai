@@ -4106,7 +4106,7 @@ def run_rustic(
         def ensure_rootfs_repository():
             if invoke(["repoinfo"], quiet=True) == 0:
                 return
-            init_status = invoke(["--no-progress", "init"], quiet=True)
+            init_status = invoke(["init"], quiet=True)
             # Another host may win initialization after our first probe. Object
             # storage visibility can lag that successful create briefly, so wait
             # for the shared repository rather than failing the publication.
@@ -4137,7 +4137,7 @@ def run_rustic(
             else:
                 status = invoke(flags)
                 if status != 0 and invoke(["repoinfo"], quiet=True) != 0:
-                    if invoke(["--no-progress", "init"], quiet=True) == 0 or invoke(
+                    if invoke(["init"], quiet=True) == 0 or invoke(
                         ["repoinfo"], quiet=True
                     ) == 0:
                         status = invoke(flags)
