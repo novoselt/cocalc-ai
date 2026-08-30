@@ -30,7 +30,7 @@
     "cocalc-lite": "./bin/start.js"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.15.0"
   },
   "author": "SageMath, Inc.",
   "license": "SEE LICENSE.md",

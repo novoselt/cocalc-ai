@@ -78,7 +78,15 @@ export function CodexLogPanel({
   // Prefer the authoritative full log once it loads; use the supplied events
   // only to avoid an empty panel while that lazy drawer load is pending.
   const resolvedEvents = codexLog.events ?? events;
-  const resolvedDeleteLog = deleteLog ?? codexLog.deleteLog;
+  const resolvedDeleteLog = useMemo(() => {
+    if (!deleteLog) return codexLog.deleteLog;
+    return async () => {
+      // The inline preview and drawer use separate hook instances. Clear both
+      // so deleted activity cannot remain visible in either local state cache.
+      await codexLog.deleteLog();
+      await deleteLog();
+    };
+  }, [codexLog.deleteLog, deleteLog]);
 
   const activityEvents: AcpStreamMessage[] =
     (resolvedEvents ?? []).length > 0
@@ -117,8 +125,9 @@ export function CodexLogPanel({
     if (!activityContext) return undefined;
     return async () => {
       await deleteAllActivityLogs(activityContext);
+      await resolvedDeleteLog();
     };
-  }, [onDeleteAllEvents, activityContext]);
+  }, [onDeleteAllEvents, activityContext, resolvedDeleteLog]);
 
   return (
     <CodexActivity

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "CoCalc: Collaborative Calculation",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.15.0"
   },
   "scripts": {
     "build": "./workspaces.py install && ./workspaces.py build && pnpm python-api",

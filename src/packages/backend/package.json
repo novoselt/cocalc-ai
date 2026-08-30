@@ -3,7 +3,7 @@
   "version": "1.22.2",
   "description": "CoCalc backend functionality: functionality used by either the hub, the next.js server or the project.",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.15.0"
   },
   "exports": {
     "./*": "./dist/*.js",
