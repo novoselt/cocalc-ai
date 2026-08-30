@@ -8,11 +8,19 @@ documented, or referenced from code.
 
 ## Top-Level Entry Points
 
-- `build-local-codex-binaries.sh`: build patched local Codex binaries.
-- `publish-local-codex-binaries.sh`: publish patched Codex binary assets.
+- `build-local-codex-binaries.sh`: build upstream Codex binaries locally or
+  for one native Linux architecture.
+- `publish-local-codex-binaries.sh`: publish Codex binary assets.
 - `check_doc_urls.py` and `check_doc_urls.skip`: documentation/link checker.
 - `export-api-doc.ts`: export API documentation JSON.
 - `run-ci.sh`: local full clean/build/test helper.
+
+`build-local-codex-binaries.sh` builds both Linux architectures by default.
+Set `CODEX_BUILD_PLATFORM=linux-x64` or `linux-arm64` to build only that
+architecture natively. The current release intentionally uses unmodified
+upstream Codex: remote compaction v2 uses the normal Responses stream and the
+legacy compact endpoint also has an upstream request timeout, so the former
+CoCalc TCP timeout patch is no longer applied.
 
 ## Active Product And Release Workflows
 
