@@ -4,7 +4,10 @@
  */
 
 import { exists } from "@cocalc/backend/misc/async-utils-node";
-import type { Subvolume } from "@cocalc/file-server/btrfs/subvolume";
+import {
+  getSubvolumeField,
+  type Subvolume,
+} from "@cocalc/file-server/btrfs/subvolume";
 import { getGeneration } from "@cocalc/file-server/btrfs/subvolume-snapshots";
 import { btrfs, sudo } from "@cocalc/file-server/btrfs/util";
 import { withBtrfsMutationLock } from "@cocalc/file-server/btrfs/operation-cache";
@@ -97,6 +100,96 @@ export async function setSubvolumeReadonly(
   });
 }
 
+function normalizedUuid(value: string): string | undefined {
+  const uuid = `${value}`.trim().toLowerCase();
+  if (!uuid || uuid === "-" || uuid === "none") return;
+  return uuid;
+}
+
+async function isReadonlySnapshotOf(
+  child: string,
+  parent: string,
+): Promise<boolean> {
+  if (!(await isSubvolumeReadonly(child))) return false;
+  const [childParentUuid, parentUuid] = await Promise.all([
+    getSubvolumeField(child, "Parent UUID", { cache: false }),
+    getSubvolumeField(parent, "UUID", { cache: false }),
+  ]);
+  const expected = normalizedUuid(parentUuid);
+  return expected != null && normalizedUuid(childParentUuid) === expected;
+}
+
+async function cloneReadonlySnapshot(
+  source: string,
+  destination: string,
+): Promise<void> {
+  await btrfs({
+    args: ["subvolume", "snapshot", "-r", source, destination],
+    err_on_exit: true,
+    verbose: false,
+  });
+}
+
+async function deleteSnapshot(path: string): Promise<void> {
+  await btrfs({
+    args: ["subvolume", "delete", path],
+    err_on_exit: true,
+    verbose: false,
+  });
+}
+
+async function finishStagingSnapshot({
+  source,
+  destination,
+  name,
+}: {
+  source: string;
+  destination: string;
+  name: string;
+}): Promise<void> {
+  if (await exists(destination)) {
+    if (await isReadonlySnapshotOf(destination, source)) {
+      // A prior staging attempt created the clone but did not delete source.
+      await deleteSnapshot(source);
+      return;
+    }
+    if (await isReadonlySnapshotOf(source, destination)) {
+      // Rollback recreated source but did not delete staging. Complete that
+      // rollback before starting a fresh staging operation.
+      await deleteSnapshot(destination);
+    } else {
+      throw new Error(`archive snapshot staging collision: ${name}`);
+    }
+  }
+  await cloneReadonlySnapshot(source, destination);
+  await deleteSnapshot(source);
+}
+
+async function finishRestoringSnapshot({
+  source,
+  destination,
+  name,
+}: {
+  source: string;
+  destination: string;
+  name: string;
+}): Promise<void> {
+  if (await exists(destination)) {
+    if (
+      (await isReadonlySnapshotOf(source, destination)) ||
+      (await isReadonlySnapshotOf(destination, source))
+    ) {
+      // Either rollback created destination, or staging created source. In
+      // both interrupted states destination is the copy we must retain.
+      await deleteSnapshot(source);
+      return;
+    }
+    throw new Error(`archive snapshot restore collision: ${name}`);
+  }
+  await cloneReadonlySnapshot(source, destination);
+  await deleteSnapshot(source);
+}
+
 async function stageLocalSnapshotsUnlocked(volume: Subvolume): Promise<void> {
   const names = await volume.snapshots.readdir();
   if (!names.length) return;
@@ -106,10 +199,7 @@ async function stageLocalSnapshotsUnlocked(volume: Subvolume): Promise<void> {
     const safeName = assertValidSnapshotName(name);
     const source = join(volume.path, SNAPSHOTS, safeName);
     const destination = join(root, safeName);
-    if (await exists(destination)) {
-      throw new Error(`archive snapshot staging collision: ${safeName}`);
-    }
-    await sudo({ command: "mv", args: [source, destination] });
+    await finishStagingSnapshot({ source, destination, name: safeName });
   }
 }
 
@@ -119,12 +209,11 @@ async function restoreLocalSnapshotsUnlocked(volume: Subvolume): Promise<void> {
     const snapshotsRoot = join(volume.path, SNAPSHOTS);
     await sudo({ command: "mkdir", args: ["-p", snapshotsRoot] });
     for (const name of names) {
-      const source = join(snapshotStagingRoot(volume), name);
-      const destination = join(snapshotsRoot, name);
-      if (await exists(destination)) {
-        throw new Error(`archive snapshot restore collision: ${name}`);
-      }
-      await sudo({ command: "mv", args: [source, destination] });
+      await finishRestoringSnapshot({
+        source: join(snapshotStagingRoot(volume), name),
+        destination: join(snapshotsRoot, name),
+        name,
+      });
     }
   }
   await removeSnapshotStagingRoot(volume, names.length > 0);
@@ -135,11 +224,7 @@ async function deleteStagedArchiveSnapshotsUnlocked(
 ): Promise<void> {
   const names = await stagedSnapshotNames(volume);
   for (const name of names) {
-    await btrfs({
-      args: ["subvolume", "delete", join(snapshotStagingRoot(volume), name)],
-      err_on_exit: true,
-      verbose: false,
-    });
+    await deleteSnapshot(join(snapshotStagingRoot(volume), name));
   }
   await removeSnapshotStagingRoot(volume, names.length > 0);
 }
@@ -173,10 +258,12 @@ export interface ArchiveVolumeFreeze {
 }
 
 /**
- * Move local recovery snapshots out of the project subvolume, then freeze the
- * live source in the same Btrfs mutation critical section. The move is cheap
- * and reversible; Rustic excludes these snapshots, but every abort path moves
- * them back before making the project usable again.
+ * Clone local recovery snapshots outside the project subvolume, delete their
+ * originals, then freeze the live source in the same Btrfs mutation critical
+ * section. Btrfs cannot move a read-only subvolume to a different directory
+ * level, so clone/delete is the crash-recoverable equivalent. Rustic excludes
+ * these snapshots, and every abort path recreates them before making the
+ * project usable again.
  */
 export async function freezeVolumeForArchiveBackup(
   volume: Subvolume,

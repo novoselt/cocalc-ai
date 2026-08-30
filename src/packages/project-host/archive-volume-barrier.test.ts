@@ -1,6 +1,7 @@
 let btrfsMock: jest.Mock;
 let sudoMock: jest.Mock;
 let getGenerationMock: jest.Mock;
+let getSubvolumeFieldMock: jest.Mock;
 let existsMock: jest.Mock;
 let fsReaddirMock: jest.Mock;
 
@@ -11,6 +12,10 @@ jest.mock("@cocalc/file-server/btrfs/util", () => ({
 
 jest.mock("@cocalc/file-server/btrfs/subvolume-snapshots", () => ({
   getGeneration: (...args: any[]) => getGenerationMock(...args),
+}));
+
+jest.mock("@cocalc/file-server/btrfs/subvolume", () => ({
+  getSubvolumeField: (...args: any[]) => getSubvolumeFieldMock(...args),
 }));
 
 jest.mock("@cocalc/file-server/btrfs/operation-cache", () => ({
@@ -48,13 +53,18 @@ function volume(readdir: jest.Mock, del = jest.fn(async () => undefined)) {
 describe("archive volume barrier", () => {
   beforeEach(() => {
     btrfsMock = jest.fn(async ({ args }) => {
-      if (args?.slice(0, 4).join(" ") === "property get -ts /mnt/project-1") {
-        return { stdout: "ro=false\n" };
+      if (args?.[0] === "property" && args?.[1] === "get") {
+        return {
+          stdout: args?.[3] === "/mnt/project-1" ? "ro=false\n" : "ro=true\n",
+        };
       }
       return { stdout: "" };
     });
     sudoMock = jest.fn(async () => ({ stdout: "" }));
     getGenerationMock = jest.fn(async () => 42);
+    getSubvolumeFieldMock = jest.fn(async () => {
+      throw new Error("unexpected subvolume lineage lookup");
+    });
     existsMock = jest.fn(async (path: string) => path === "/mnt/project-1");
     fsReaddirMock = jest.fn(async () => {
       throw Object.assign(new Error("not found"), { code: "ENOENT" });
@@ -85,24 +95,137 @@ describe("archive volume barrier", () => {
       alreadyReadonly: false,
     });
     expect(del).not.toHaveBeenCalled();
-    expect(sudoMock).toHaveBeenCalledWith({
-      command: "mv",
-      args: [
-        "/mnt/project-1/.snapshots/daily-1",
-        "/mnt/.archive-snapshot-staging/project-1/daily-1",
-      ],
-    });
+    expect(btrfsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: [
+          "subvolume",
+          "snapshot",
+          "-r",
+          "/mnt/project-1/.snapshots/daily-1",
+          "/mnt/.archive-snapshot-staging/project-1/daily-1",
+        ],
+      }),
+    );
+    expect(btrfsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ["subvolume", "delete", "/mnt/project-1/.snapshots/daily-1"],
+      }),
+    );
     expect(btrfsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         args: ["property", "set", "-ts", "/mnt/project-1", "ro", "true"],
       }),
     );
-    const moveOrder = sudoMock.mock.invocationCallOrder.at(-1)!;
-    const freezeOrder = btrfsMock.mock.invocationCallOrder.at(-1)!;
-    expect(moveOrder).toBeLessThan(freezeOrder);
+    const snapshotOrder = btrfsMock.mock.invocationCallOrder.find(
+      (_, index) => btrfsMock.mock.calls[index][0].args?.[1] === "snapshot",
+    )!;
+    const deleteOrder = btrfsMock.mock.invocationCallOrder.find(
+      (_, index) =>
+        btrfsMock.mock.calls[index][0].args?.[0] === "subvolume" &&
+        btrfsMock.mock.calls[index][0].args?.[1] === "delete",
+    )!;
+    const freezeOrder = btrfsMock.mock.invocationCallOrder.find(
+      (_, index) =>
+        btrfsMock.mock.calls[index][0].args?.[0] === "property" &&
+        btrfsMock.mock.calls[index][0].args?.[1] === "set",
+    )!;
+    expect(snapshotOrder).toBeLessThan(deleteOrder);
+    expect(deleteOrder).toBeLessThan(freezeOrder);
   });
 
-  it("resumes an already frozen backup without moving snapshots again", async () => {
+  it("finishes an interrupted read-only snapshot staging clone", async () => {
+    const source = "/mnt/project-1/.snapshots/daily-1";
+    const destination = "/mnt/.archive-snapshot-staging/project-1/daily-1";
+    existsMock.mockImplementation(
+      async (path: string) => path === "/mnt/project-1" || path === destination,
+    );
+    getSubvolumeFieldMock.mockImplementation(
+      async (path: string, field: string) => {
+        if (path === destination && field === "Parent UUID") {
+          return "SOURCE-UUID";
+        }
+        if (path === source && field === "UUID") return "source-uuid";
+        throw new Error(`unexpected lineage lookup ${path} ${field}`);
+      },
+    );
+
+    await freezeVolumeForArchiveBackup(
+      volume(jest.fn(async () => ["daily-1"])),
+    );
+
+    expect(btrfsMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ args: expect.arrayContaining(["snapshot"]) }),
+    );
+    expect(btrfsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ["subvolume", "delete", source],
+      }),
+    );
+  });
+
+  it("finishes interrupted rollback before staging again", async () => {
+    const source = "/mnt/project-1/.snapshots/daily-1";
+    const destination = "/mnt/.archive-snapshot-staging/project-1/daily-1";
+    existsMock.mockImplementation(
+      async (path: string) => path === "/mnt/project-1" || path === destination,
+    );
+    getSubvolumeFieldMock.mockImplementation(
+      async (path: string, field: string) => {
+        if (path === destination && field === "Parent UUID") {
+          return "unrelated-uuid";
+        }
+        if (path === source && field === "UUID") return "source-uuid";
+        if (path === source && field === "Parent UUID") return "staged-uuid";
+        if (path === destination && field === "UUID") return "STAGED-UUID";
+        throw new Error(`unexpected lineage lookup ${path} ${field}`);
+      },
+    );
+
+    await freezeVolumeForArchiveBackup(
+      volume(jest.fn(async () => ["daily-1"])),
+    );
+
+    const deleteCalls = btrfsMock.mock.calls
+      .map(([{ args }]) => args)
+      .filter((args) => args?.[0] === "subvolume" && args?.[1] === "delete");
+    expect(deleteCalls).toEqual([
+      ["subvolume", "delete", destination],
+      ["subvolume", "delete", source],
+    ]);
+    expect(btrfsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ["subvolume", "snapshot", "-r", source, destination],
+      }),
+    );
+  });
+
+  it("rejects unrelated data in the snapshot staging path", async () => {
+    const source = "/mnt/project-1/.snapshots/daily-1";
+    const destination = "/mnt/.archive-snapshot-staging/project-1/daily-1";
+    existsMock.mockImplementation(
+      async (path: string) => path === "/mnt/project-1" || path === destination,
+    );
+    getSubvolumeFieldMock.mockImplementation(
+      async (path: string, field: string) => {
+        if (field === "Parent UUID") return "unrelated-parent";
+        if (path === source && field === "UUID") return "source-uuid";
+        if (path === destination && field === "UUID") return "staged-uuid";
+        throw new Error(`unexpected lineage lookup ${path} ${field}`);
+      },
+    );
+
+    await expect(
+      freezeVolumeForArchiveBackup(volume(jest.fn(async () => ["daily-1"]))),
+    ).rejects.toThrow("archive snapshot staging collision: daily-1");
+
+    expect(
+      btrfsMock.mock.calls.some(
+        ([{ args }]) => args?.[0] === "subvolume" && args?.[1] === "delete",
+      ),
+    ).toBe(false);
+  });
+
+  it("resumes an already frozen backup without staging snapshots again", async () => {
     btrfsMock.mockImplementation(async ({ args }) => {
       if (args?.[0] === "property" && args?.[1] === "get") {
         return { stdout: "ro=true\n" };
@@ -123,6 +246,11 @@ describe("archive volume barrier", () => {
     expect(sudoMock).not.toHaveBeenCalled();
     expect(
       btrfsMock.mock.calls.some(
+        ([{ args }]) => args?.[0] === "subvolume" && args?.[1] === "snapshot",
+      ),
+    ).toBe(false);
+    expect(
+      btrfsMock.mock.calls.some(
         ([{ args }]) => args?.[0] === "property" && args?.[1] === "set",
       ),
     ).toBe(false);
@@ -140,21 +268,146 @@ describe("archive volume barrier", () => {
 
     await expect(releaseArchiveVolumeFreeze(vol)).resolves.toBe("released");
 
-    expect(sudoMock).toHaveBeenCalledWith({
-      command: "mv",
-      args: [
-        "/mnt/.archive-snapshot-staging/project-1/daily-1",
-        "/mnt/project-1/.snapshots/daily-1",
-      ],
-    });
+    expect(btrfsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: [
+          "subvolume",
+          "snapshot",
+          "-r",
+          "/mnt/.archive-snapshot-staging/project-1/daily-1",
+          "/mnt/project-1/.snapshots/daily-1",
+        ],
+      }),
+    );
+    expect(btrfsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: [
+          "subvolume",
+          "delete",
+          "/mnt/.archive-snapshot-staging/project-1/daily-1",
+        ],
+      }),
+    );
     expect(btrfsMock).toHaveBeenCalledWith(
       expect.objectContaining({ args: expect.arrayContaining(["false"]) }),
     );
-    const unfreezeOrder = btrfsMock.mock.invocationCallOrder.at(-1)!;
-    const restoreOrder = sudoMock.mock.invocationCallOrder.find(
-      (_, index) => sudoMock.mock.calls[index][0].command === "mv",
+    const unfreezeOrder = btrfsMock.mock.invocationCallOrder.find(
+      (_, index) =>
+        btrfsMock.mock.calls[index][0].args?.[0] === "property" &&
+        btrfsMock.mock.calls[index][0].args?.[1] === "set",
+    )!;
+    const restoreOrder = btrfsMock.mock.invocationCallOrder.find(
+      (_, index) => btrfsMock.mock.calls[index][0].args?.[1] === "snapshot",
     )!;
     expect(unfreezeOrder).toBeLessThan(restoreOrder);
+  });
+
+  it("completes rollback when both snapshot copies exist", async () => {
+    const staged = "/mnt/.archive-snapshot-staging/project-1/daily-1";
+    const restored = "/mnt/project-1/.snapshots/daily-1";
+    btrfsMock.mockImplementation(async ({ args }) => {
+      if (args?.[0] === "property" && args?.[1] === "get") {
+        return { stdout: "ro=true\n" };
+      }
+      return { stdout: "" };
+    });
+    existsMock.mockImplementation(
+      async (path: string) => path === "/mnt/project-1" || path === restored,
+    );
+    getSubvolumeFieldMock.mockImplementation(
+      async (path: string, field: string) => {
+        if (path === staged && field === "Parent UUID") {
+          return "original-uuid";
+        }
+        if (path === restored && field === "UUID") return "ORIGINAL-UUID";
+        throw new Error(`unexpected lineage lookup ${path} ${field}`);
+      },
+    );
+    fsReaddirMock.mockResolvedValueOnce(["daily-1"]);
+
+    await expect(
+      releaseArchiveVolumeFreeze(volume(jest.fn(async () => []))),
+    ).resolves.toBe("released");
+
+    expect(btrfsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ["subvolume", "delete", staged],
+      }),
+    );
+    expect(
+      btrfsMock.mock.calls.some(
+        ([{ args }]) => args?.[0] === "subvolume" && args?.[1] === "snapshot",
+      ),
+    ).toBe(false);
+  });
+
+  it("completes rollback after recreating the original snapshot", async () => {
+    const staged = "/mnt/.archive-snapshot-staging/project-1/daily-1";
+    const restored = "/mnt/project-1/.snapshots/daily-1";
+    btrfsMock.mockImplementation(async ({ args }) => {
+      if (args?.[0] === "property" && args?.[1] === "get") {
+        return { stdout: "ro=true\n" };
+      }
+      return { stdout: "" };
+    });
+    existsMock.mockImplementation(
+      async (path: string) => path === "/mnt/project-1" || path === restored,
+    );
+    getSubvolumeFieldMock.mockImplementation(
+      async (path: string, field: string) => {
+        if (path === staged && field === "Parent UUID") {
+          return "unrelated-parent";
+        }
+        if (path === restored && field === "UUID") return "restored-uuid";
+        if (path === restored && field === "Parent UUID") return "staged-uuid";
+        if (path === staged && field === "UUID") return "STAGED-UUID";
+        throw new Error(`unexpected lineage lookup ${path} ${field}`);
+      },
+    );
+    fsReaddirMock.mockResolvedValueOnce(["daily-1"]);
+
+    await expect(
+      releaseArchiveVolumeFreeze(volume(jest.fn(async () => []))),
+    ).resolves.toBe("released");
+
+    expect(btrfsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ["subvolume", "delete", staged],
+      }),
+    );
+  });
+
+  it("rejects unrelated data in the snapshot restore path", async () => {
+    const staged = "/mnt/.archive-snapshot-staging/project-1/daily-1";
+    const restored = "/mnt/project-1/.snapshots/daily-1";
+    btrfsMock.mockImplementation(async ({ args }) => {
+      if (args?.[0] === "property" && args?.[1] === "get") {
+        return { stdout: "ro=true\n" };
+      }
+      return { stdout: "" };
+    });
+    existsMock.mockImplementation(
+      async (path: string) => path === "/mnt/project-1" || path === restored,
+    );
+    getSubvolumeFieldMock.mockImplementation(
+      async (path: string, field: string) => {
+        if (field === "Parent UUID") return "unrelated-parent";
+        if (path === staged && field === "UUID") return "staged-uuid";
+        if (path === restored && field === "UUID") return "restored-uuid";
+        throw new Error(`unexpected lineage lookup ${path} ${field}`);
+      },
+    );
+    fsReaddirMock.mockResolvedValueOnce(["daily-1"]);
+
+    await expect(
+      releaseArchiveVolumeFreeze(volume(jest.fn(async () => []))),
+    ).rejects.toThrow("archive snapshot restore collision: daily-1");
+
+    expect(
+      btrfsMock.mock.calls.some(
+        ([{ args }]) => args?.[0] === "subvolume" && args?.[1] === "delete",
+      ),
+    ).toBe(false);
   });
 
   it("deletes staged snapshots only after project deletion commits", async () => {
