@@ -487,10 +487,38 @@ describe("NavigatorShell keyboard suppression", () => {
       ),
     ).toMatchObject({
       kind: "upgrade-required",
-      title: "Restart this project to use the selected Codex model.",
+      title: "This project must be restarted to upgrade Codex.",
       description:
-        "Restart this project from Project Settings to load the newer Codex version, then retry.",
+        "Click settings on the left rail, restart the project, then try again.",
       actionLabel: "Open Project Settings",
+    });
+  });
+
+  it("classifies old Codex feature flags as an upgrade requirement", () => {
+    expect(
+      classifyNavigatorCodexError(
+        "codex app-server exited unexpectedly: 1; stderr: Error: Unknown feature flag: background_paginated_rollout_migration",
+      ),
+    ).toMatchObject({
+      kind: "upgrade-required",
+      title: "This project must be restarted to upgrade Codex.",
+      description:
+        "Click settings on the left rail, restart the project, then try again.",
+      actionLabel: "Open Project Settings",
+    });
+  });
+
+  it("directs Lite users to upgrade Codex without project settings", () => {
+    expect(
+      classifyNavigatorCodexError(
+        "Error: Unknown feature flag: background_paginated_rollout_migration",
+        true,
+      ),
+    ).toMatchObject({
+      kind: "upgrade-required",
+      title: "Codex must be upgraded.",
+      description: "Upgrade Codex, then try again.",
+      actionLabel: undefined,
     });
   });
 

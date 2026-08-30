@@ -1,6 +1,8 @@
 import {
   formatCodexErrorForDisplay,
   formatCodexErrorMarkdown,
+  CODEX_LITE_UPGRADE_HINT,
+  CODEX_LITE_UPGRADE_TITLE,
   CODEX_PROJECT_RESTART_HINT,
   CODEX_PROJECT_RESTART_TITLE,
 } from "../codex-error-presentation";
@@ -25,6 +27,27 @@ describe("Codex error presentation", () => {
   it("formats the project restart solution for assistant Markdown", () => {
     expect(formatCodexErrorMarkdown(error)).toBe(
       `**${CODEX_PROJECT_RESTART_TITLE}**\n\n${CODEX_PROJECT_RESTART_HINT}`,
+    );
+  });
+
+  it("turns unknown feature flags from an old Codex into restart guidance", () => {
+    const featureError =
+      "codex app-server exited unexpectedly: 1; stderr: Error: Unknown feature flag: background_paginated_rollout_migration";
+
+    expect(formatCodexErrorMarkdown(featureError)).toBe(
+      `**${CODEX_PROJECT_RESTART_TITLE}**\n\n${CODEX_PROJECT_RESTART_HINT}`,
+    );
+  });
+
+  it("tells Lite users to upgrade Codex instead of restarting", () => {
+    const featureError =
+      "Error: Unknown feature flag: background_paginated_rollout_migration";
+
+    expect(formatCodexErrorForDisplay(featureError, true)).toBe(
+      `${CODEX_LITE_UPGRADE_TITLE} ${CODEX_LITE_UPGRADE_HINT}`,
+    );
+    expect(formatCodexErrorMarkdown(featureError, true)).toBe(
+      `**${CODEX_LITE_UPGRADE_TITLE}**\n\n${CODEX_LITE_UPGRADE_HINT}`,
     );
   });
 

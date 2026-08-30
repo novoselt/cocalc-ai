@@ -39,6 +39,7 @@ import { useEffectiveEditorThemeForPath } from "@cocalc/frontend/project/workspa
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { labels } from "@cocalc/frontend/i18n";
 import { CancelText } from "@cocalc/frontend/i18n/components";
+import { lite } from "@cocalc/frontend/lite";
 import Fragment from "@cocalc/frontend/misc/fragment-id";
 import { User } from "@cocalc/frontend/users";
 import { isLanguageModelService } from "@cocalc/util/db-schema/ai-models";
@@ -976,7 +977,10 @@ export default function Message({
     () =>
       is_viewers_message
         ? renderedMessageValue
-        : formatCodexErrorMarkdown(linkifyCommitHashes(renderedMessageValue)),
+        : formatCodexErrorMarkdown(
+            linkifyCommitHashes(renderedMessageValue),
+            lite,
+          ),
     [is_viewers_message, renderedMessageValue],
   );
   const acpResubmitParentMessage = (() => {

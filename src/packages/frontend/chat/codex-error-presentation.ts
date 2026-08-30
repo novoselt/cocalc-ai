@@ -4,29 +4,52 @@
  */
 
 export const CODEX_PROJECT_RESTART_HINT =
-  "Restart this project from Project Settings to load the newer Codex version, then retry.";
+  "Click settings on the left rail, restart the project, then try again.";
 
 export const CODEX_PROJECT_RESTART_TITLE =
-  "Restart this project to update Codex.";
+  "This project must be restarted to upgrade Codex.";
+
+export const CODEX_LITE_UPGRADE_HINT = "Upgrade Codex, then try again.";
+
+export const CODEX_LITE_UPGRADE_TITLE = "Codex must be upgraded.";
 
 export function isCodexUpgradeRequiredError(error: string): boolean {
-  return `${error ?? ""}`
-    .toLowerCase()
-    .includes("requires a newer version of codex");
+  const normalized = `${error ?? ""}`.toLowerCase();
+  return (
+    normalized.includes("requires a newer version of codex") ||
+    normalized.includes("unknown feature flag")
+  );
 }
 
-export function formatCodexErrorForDisplay(error: string): string {
+export function getCodexUpgradeInstructions(liteMode = false): {
+  title: string;
+  hint: string;
+} {
+  return liteMode
+    ? { title: CODEX_LITE_UPGRADE_TITLE, hint: CODEX_LITE_UPGRADE_HINT }
+    : { title: CODEX_PROJECT_RESTART_TITLE, hint: CODEX_PROJECT_RESTART_HINT };
+}
+
+export function formatCodexErrorForDisplay(
+  error: string,
+  liteMode = false,
+): string {
   const detail = `${error ?? ""}`;
   if (!isCodexUpgradeRequiredError(detail)) {
     return detail;
   }
-  return `${CODEX_PROJECT_RESTART_TITLE} ${CODEX_PROJECT_RESTART_HINT}`;
+  const { title, hint } = getCodexUpgradeInstructions(liteMode);
+  return `${title} ${hint}`;
 }
 
-export function formatCodexErrorMarkdown(error: string): string {
+export function formatCodexErrorMarkdown(
+  error: string,
+  liteMode = false,
+): string {
   const detail = `${error ?? ""}`;
   if (!isCodexUpgradeRequiredError(detail)) {
     return detail;
   }
-  return `**${CODEX_PROJECT_RESTART_TITLE}**\n\n${CODEX_PROJECT_RESTART_HINT}`;
+  const { title, hint } = getCodexUpgradeInstructions(liteMode);
+  return `**${title}**\n\n${hint}`;
 }

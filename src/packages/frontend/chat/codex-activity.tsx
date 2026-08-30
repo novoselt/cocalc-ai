@@ -30,6 +30,7 @@ import { isAbsolutePath, normalizeAbsolutePath } from "@cocalc/util/path-model";
 import { COLORS } from "@cocalc/util/theme";
 import type { AttachedSteerMessage } from "./agent-message-status";
 import { formatCodexErrorForDisplay } from "./codex-error-presentation";
+import { lite } from "@cocalc/frontend/lite";
 import {
   buildPrismLineMetasFromPlain,
   highlightPrismLines,
@@ -1335,7 +1336,7 @@ function formatErrorDetail(error: unknown): string {
       detail = String(error);
     }
   }
-  return formatCodexErrorForDisplay(detail);
+  return formatCodexErrorForDisplay(detail, lite);
 }
 
 function eventHasText(

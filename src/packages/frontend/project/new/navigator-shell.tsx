@@ -61,7 +61,7 @@ import {
 } from "./navigator-state";
 import { getDefaultCodexNewChatDefaults } from "@cocalc/frontend/chat/codex-defaults";
 import {
-  CODEX_PROJECT_RESTART_HINT,
+  getCodexUpgradeInstructions,
   isCodexUpgradeRequiredError,
 } from "@cocalc/frontend/chat/codex-error-presentation";
 
@@ -300,6 +300,7 @@ export function resolveSelectedSessionStatus({
 
 export function classifyNavigatorCodexError(
   error: string,
+  liteMode = lite,
 ): NavigatorCodexErrorPresentation {
   const raw = `${error ?? ""}`;
   const normalized = raw.toLowerCase();
@@ -347,11 +348,12 @@ export function classifyNavigatorCodexError(
     };
   }
   if (isCodexUpgradeRequiredError(raw)) {
+    const { title, hint } = getCodexUpgradeInstructions(liteMode);
     return {
       kind: "upgrade-required",
-      title: "Restart this project to use the selected Codex model.",
-      description: CODEX_PROJECT_RESTART_HINT,
-      actionLabel: "Open Project Settings",
+      title,
+      description: hint,
+      actionLabel: liteMode ? undefined : "Open Project Settings",
     };
   }
   return {
