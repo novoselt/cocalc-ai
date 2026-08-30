@@ -43,6 +43,7 @@ import type {
 import { plural } from "@cocalc/util/misc";
 import {
   rootfsAdminSaveBody,
+  runRootfsAdminSaveAction,
   type RootfsAdminCatalogPatch,
 } from "./rootfs-save";
 import { RootfsLineageModal } from "./rootfs-lineage-modal";
@@ -563,20 +564,22 @@ export function RootfsAdmin() {
     action: RootfsAdminAction,
   ): Promise<boolean> {
     try {
-      await runFreshAuthAction(async () => {
-        setActiveAction({ image_id: entry.id, action });
-        try {
-          await hub.system.saveRootfsCatalogEntry({
-            ...rootfsAdminSaveBody(entry, patch),
-            browser_id: webapp_client.browser_id,
-          });
-          message.success(success);
-          await load();
-        } finally {
-          setActiveAction(undefined);
-        }
+      return await runRootfsAdminSaveAction({
+        runFreshAuthAction,
+        save: async () => {
+          setActiveAction({ image_id: entry.id, action });
+          try {
+            await hub.system.saveRootfsCatalogEntry({
+              ...rootfsAdminSaveBody(entry, patch),
+              browser_id: webapp_client.browser_id,
+            });
+            message.success(success);
+            await load();
+          } finally {
+            setActiveAction(undefined);
+          }
+        },
       });
-      return true;
     } catch (err) {
       message.error(`Failed to update RootFS image: ${err}`);
       await load();

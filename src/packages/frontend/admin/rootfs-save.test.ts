@@ -5,7 +5,32 @@
 
 import type { RootfsAdminCatalogEntry } from "@cocalc/util/rootfs-images";
 
-import { rootfsAdminSaveBody } from "./rootfs-save";
+import { rootfsAdminSaveBody, runRootfsAdminSaveAction } from "./rootfs-save";
+
+describe("runRootfsAdminSaveAction", () => {
+  it("preserves a pending edit when fresh authentication is canceled", async () => {
+    const save = jest.fn(async () => undefined);
+    const runFreshAuthAction = jest.fn(async () => false);
+
+    await expect(
+      runRootfsAdminSaveAction({ runFreshAuthAction, save }),
+    ).resolves.toBe(false);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("reports a completed authenticated save", async () => {
+    const save = jest.fn(async () => undefined);
+    const runFreshAuthAction = jest.fn(async (action: () => Promise<void>) => {
+      await action();
+      return true;
+    });
+
+    await expect(
+      runRootfsAdminSaveAction({ runFreshAuthAction, save }),
+    ).resolves.toBe(true);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("rootfsAdminSaveBody", () => {
   it("clears lineage while preserving catalog metadata", () => {

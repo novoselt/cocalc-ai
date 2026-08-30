@@ -14,6 +14,16 @@ export type RootfsAdminCatalogPatch = Partial<
   supersedes_image_id?: string | null;
 };
 
+export async function runRootfsAdminSaveAction({
+  runFreshAuthAction,
+  save,
+}: {
+  runFreshAuthAction: (action: () => Promise<void>) => Promise<boolean>;
+  save: () => Promise<void>;
+}): Promise<boolean> {
+  return await runFreshAuthAction(save);
+}
+
 export function rootfsAdminSaveBody(
   entry: RootfsAdminCatalogEntry,
   patch: RootfsAdminCatalogPatch,
