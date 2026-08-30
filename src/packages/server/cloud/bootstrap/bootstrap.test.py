@@ -452,6 +452,72 @@ secret_access_key = "secret"
                     profile_run_dir_uid=os.getuid(),
                 )
 
+    def test_rootfs_rustic_reconciles_concurrent_initialization(self) -> None:
+        namespace = self.helper_namespace()
+        run_rustic = namespace["run_rustic"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "source").mkdir()
+            (root / "profile.toml").write_text(
+                """[repository]
+repository = "opendal:s3"
+password = "audit-password"
+[repository.options]
+access_key_id = "access"
+bucket = "bucket"
+endpoint = "https://object.invalid"
+region = "auto"
+root = "rootfs-test"
+secret_access_key = "secret"
+""",
+                encoding="utf-8",
+            )
+            fake_rustic = root / "rustic"
+            fake_rustic.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_rustic.chmod(0o755)
+            calls: list[list[str]] = []
+            repoinfo_results = iter((1, 1, 0))
+
+            def rustic_run(args, **_kwargs):
+                calls.append(args)
+                if "repoinfo" in args:
+                    return subprocess.CompletedProcess(
+                        args, next(repoinfo_results), "", ""
+                    )
+                if "init" in args:
+                    # Another publisher initialized the repository first.
+                    return subprocess.CompletedProcess(args, 1, "", "")
+                return subprocess.CompletedProcess(args, 0, "", "")
+
+            with (
+                mock.patch.object(namespace["subprocess"], "run", rustic_run),
+                mock.patch.object(namespace["time"], "sleep") as sleep,
+            ):
+                run_rustic(
+                    [
+                        "rustic-rootfs-backup",
+                        "--root",
+                        str(root),
+                        "--path",
+                        "source",
+                        "--profile-root",
+                        str(root),
+                        "--profile-path",
+                        "profile.toml",
+                        "--host",
+                        "rootfs-test",
+                    ],
+                    allowed_roots={str(root)},
+                    rustic_candidates=[str(fake_rustic)],
+                    profile_run_dir=str(root / "run"),
+                    profile_run_dir_uid=os.getuid(),
+                )
+
+            self.assertEqual(sum("repoinfo" in call for call in calls), 3)
+            self.assertEqual(sum("init" in call for call in calls), 1)
+            self.assertEqual(sum("backup" in call for call in calls), 1)
+            sleep.assert_called_once_with(0.25)
+
 
 class ProjectHostStartTest(unittest.TestCase):
     def make_project_host_cfg(self, tmpdir: str) -> bootstrap.BootstrapConfig:

@@ -3700,6 +3700,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 import urllib.parse
 
@@ -4102,6 +4103,20 @@ def run_rustic(
             )
             return result.returncode
 
+        def ensure_rootfs_repository():
+            if invoke(["repoinfo"], quiet=True) == 0:
+                return
+            init_status = invoke(["--no-progress", "init"], quiet=True)
+            # Another host may win initialization after our first probe. Object
+            # storage visibility can lag that successful create briefly, so wait
+            # for the shared repository rather than failing the publication.
+            for delay in (0, 0.25, 0.5, 1, 2, 4, 8):
+                if delay:
+                    time.sleep(delay)
+                if invoke(["repoinfo"], quiet=True) == 0:
+                    return
+            raise subprocess.CalledProcessError(init_status or 1, base)
+
         if command.endswith("backup"):
             flags = ["backup"]
             if command == "rustic-project-backup":
@@ -4117,10 +4132,7 @@ def run_rustic(
                 )
             flags.append(".")
             if command == "rustic-rootfs-backup":
-                if invoke(["repoinfo"], quiet=True) != 0:
-                    if invoke(["--no-progress", "init"], quiet=True) != 0:
-                        if invoke(["repoinfo"], quiet=True) != 0:
-                            raise subprocess.CalledProcessError(1, base)
+                ensure_rootfs_repository()
                 status = invoke(flags)
             else:
                 status = invoke(flags)
