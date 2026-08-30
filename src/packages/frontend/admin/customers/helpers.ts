@@ -28,6 +28,17 @@ export function crmMutationContext({
   };
 }
 
+export function withActivityOccurredAt<T extends Record<string, unknown>>(
+  values: T,
+  now: () => Date = () => new Date(),
+): T & { occurred_at: string } {
+  const occurredAt =
+    typeof values.occurred_at === "string" && values.occurred_at.trim()
+      ? values.occurred_at
+      : now().toISOString();
+  return { ...values, occurred_at: occurredAt };
+}
+
 function normalizeTimelineSearch(value: unknown): string {
   return `${value ?? ""}`
     .toLowerCase()

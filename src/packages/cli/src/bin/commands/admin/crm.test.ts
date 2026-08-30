@@ -470,6 +470,153 @@ test("organization create previews with a stable idempotency key", async () => {
   });
 });
 
+test("task create previews explicitly without --commit", async () => {
+  let captured: any;
+  const response = {
+    preview: true,
+    expected_version: 0,
+    idempotency_key: "server-key",
+  };
+  const { program } = setup({
+    createTask: async (opts: any) => {
+      captured = opts;
+      return response;
+    },
+  });
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "tasks",
+    "create",
+    "example-customer",
+    "--type",
+    "review",
+    "--assignee",
+    "owner@example.edu",
+    "--due",
+    "2026-09-08T17:00:00-07:00",
+    "--subject",
+    "Review institutional renewal",
+    "--reason",
+    "reviewed customer next action",
+  ]);
+  assert.equal(captured.commit, false);
+  assert.equal(captured.expected_version, undefined);
+  assert.equal(captured.due_at, "2026-09-09T00:00:00.000Z");
+  assert.match(captured.idempotency_key, /^cli:task\.create:/);
+});
+
+test("task due dates require an RFC3339 timestamp with a timezone", async () => {
+  for (const due of [
+    "2026-09-08",
+    "2026-09-08T17:00:00",
+    "2026-02-30T17:00:00Z",
+    "2026-09-08T24:00:00Z",
+  ]) {
+    let called = false;
+    const { program } = setup({
+      createTask: async () => {
+        called = true;
+        return {};
+      },
+    });
+    await assert.rejects(
+      program.parseAsync([
+        "node",
+        "test",
+        "admin",
+        "crm",
+        "tasks",
+        "create",
+        "example-customer",
+        "--type",
+        "review",
+        "--assignee",
+        "owner@example.edu",
+        "--due",
+        due,
+        "--subject",
+        "Review institutional renewal",
+        "--reason",
+        "reviewed customer next action",
+      ]),
+      /--due must be (?:an RFC3339 timestamp with an explicit timezone|a valid RFC3339 timestamp)/,
+    );
+    assert.equal(called, false);
+  }
+});
+
+test("activity previews bind an explicit event timestamp", async () => {
+  let captured: any;
+  const { program } = setup({
+    addActivity: async (opts: any) => {
+      captured = opts;
+      return {
+        preview: true,
+        expected_version: 0,
+        idempotency_key: "server-key",
+      };
+    },
+  });
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "activities",
+    "note",
+    "example-customer",
+    "--summary",
+    "Reviewed renewal timing",
+    "--occurred-at",
+    "2026-09-08T17:00:00-07:00",
+    "--reason",
+    "record reviewed customer context",
+  ]);
+  assert.equal(captured.commit, false);
+  assert.equal(captured.expected_version, undefined);
+  assert.equal(captured.occurred_at, "2026-09-09T00:00:00.000Z");
+  assert.match(captured.idempotency_key, /^cli:activity\.note:/);
+});
+
+test("activity event times require an RFC3339 timestamp with a timezone", async () => {
+  for (const occurredAt of [
+    "2026-09-08",
+    "2026-09-08T17:00:00",
+    "2026-02-30T17:00:00Z",
+    "2026-09-08T24:00:00Z",
+  ]) {
+    let called = false;
+    const { program } = setup({
+      addActivity: async () => {
+        called = true;
+        return {};
+      },
+    });
+    await assert.rejects(
+      program.parseAsync([
+        "node",
+        "test",
+        "admin",
+        "crm",
+        "activities",
+        "note",
+        "example-customer",
+        "--summary",
+        "Reviewed renewal timing",
+        "--occurred-at",
+        occurredAt,
+        "--reason",
+        "record reviewed customer context",
+      ]),
+      /--occurred-at must be (?:an RFC3339 timestamp with an explicit timezone|a valid RFC3339 timestamp)/,
+    );
+    assert.equal(called, false);
+  }
+});
+
 test("committed CRM mutations require the reviewed expected version", async () => {
   const { program } = setup({ archiveOrganization: async () => ({}) });
   await assert.rejects(
