@@ -109,7 +109,7 @@ import {
   decideInitialWatchSource,
   refineInitialWatchSourceDecision,
 } from "./watch-policy";
-import { classifyRunStreamMessage } from "./run-protocol";
+import { classifyRunStreamEnd, classifyRunStreamMessage } from "./run-protocol";
 import { doesPersistentCellSatisfyRunCellOverlay } from "./run-cell-overlay";
 import {
   createRunBatchOrderState,
@@ -686,6 +686,10 @@ export class JupyterActions extends JupyterActions0 {
     }
     this.ignoredLiveRunIds ??= new globalThis.Map<string, number>();
     this.ignoredLiveRunIds.set(runId, Date.now() + 30_000);
+  };
+
+  private forgetIgnoredLiveRunId = (runId: string) => {
+    this.ignoredLiveRunIds?.delete(runId);
   };
 
   private shouldIgnoreLiveRunId = (runId: string): boolean => {
@@ -3194,9 +3198,8 @@ export class JupyterActions extends JupyterActions0 {
           return;
         }
         this.jupyterClient = undefined;
-        // TODO: doing this is not ideal, but it's probably less confusing.
-        this.clearRunQueue();
-        this.runningNow = false;
+        // The active run iterator owns run and queue cleanup. A transient
+        // transport close does not mean that the kernel stopped executing.
       });
       this.jupyterClient = c;
       this.runDebug("client.create.wait", { socketState: c.socket.state });
@@ -3299,6 +3302,7 @@ export class JupyterActions extends JupyterActions0 {
     let runError: string | undefined;
     let runAbortReason: string | undefined;
     let runCompleted = false;
+    let runTransportLost = false;
     const readyTimer = startUxTimer();
     const initialProjectState = this.getProjectRuntimeState();
     const readiness = classifyProjectReadinessUxSegment(
@@ -3471,6 +3475,7 @@ export class JupyterActions extends JupyterActions0 {
       if (this.isClosed()) return;
       const handlers = new globalThis.Map<string, OutputHandler>();
       const finalizedCells = new Set<string>();
+      let sawRunDone = false;
       const getHandlerForId = (id: string): OutputHandler => {
         const existing = handlers.get(id);
         if (existing != null) {
@@ -3584,6 +3589,7 @@ export class JupyterActions extends JupyterActions0 {
               continue;
             }
             if (decision.lifecycle == "run_done") {
+              sawRunDone = true;
               this.runDebug("runCells.runner.lifecycle.run_done", {
                 runId,
                 openHandlers: handlers.size,
@@ -3627,27 +3633,47 @@ export class JupyterActions extends JupyterActions0 {
           handler.process(mesg);
         }
       }
-      for (const id of Array.from(handlers.keys())) {
-        finalizeHandler(id, "stream_end");
-      }
-      this.runDebug("runCells.runner.done", {
-        runId,
-        chunkNo: totalChunks,
-        totalMesgs,
+      const streamEnd = classifyRunStreamEnd({
+        sawRunDone,
+        socketState: client.socket.state,
       });
-      runCompleted = true;
+      if (streamEnd === "transport_lost") {
+        runTransportLost = true;
+        runAbortReason = "transport_lost";
+        this.runDebug("runCells.runner.transport_lost", {
+          runId,
+          openHandlers: handlers.size,
+          socketState: client.socket.state,
+        });
+      } else {
+        for (const id of Array.from(handlers.keys())) {
+          finalizeHandler(id, "stream_end");
+        }
+        this.runDebug("runCells.runner.done", {
+          runId,
+          chunkNo: totalChunks,
+          totalMesgs,
+        });
+        runCompleted = true;
+      }
       if (this.isClosed()) {
         return;
       }
-      this.scheduleKernelStatusRefresh();
-      this.syncdb.save();
-      setTimeout(() => {
-        if (!this.isClosed()) {
-          this.syncdb.save();
-        }
-      }, 1000);
+      if (!runTransportLost) {
+        this.scheduleKernelStatusRefresh();
+        this.syncdb.save();
+        setTimeout(() => {
+          if (!this.isClosed()) {
+            this.syncdb.save();
+          }
+        }, 1000);
+      }
     } catch (err) {
       runError = `${err}`;
+      if (runnerStartedAt != null && client?.socket?.state !== "ready") {
+        runTransportLost = true;
+        runAbortReason = "transport_lost";
+      }
       runUxTrace.record("jupyter_run_failed_v2", {
         path_ext: filename_extension(this.path ?? ""),
         editor: "jupyter",
@@ -3690,8 +3716,23 @@ export class JupyterActions extends JupyterActions0 {
         });
       }
       if (this.isClosed()) return;
-      this.finishPendingCells(ids);
-      this.rememberIgnoredLiveRunId(runId);
+      if (runTransportLost) {
+        // Remove local queue bookkeeping without writing a false "done" state.
+        // Live-run replay or the runtime-state snapshot remains authoritative.
+        this.deletePendingCells(ids);
+        this.forgetIgnoredLiveRunId(runId);
+        void this.replaySharedLiveRuns().catch((err) => {
+          if (!this.isClosed()) {
+            console.warn(
+              "failed to replay jupyter run after transport loss",
+              err,
+            );
+          }
+        });
+      } else {
+        this.finishPendingCells(ids);
+        this.rememberIgnoredLiveRunId(runId);
+      }
       this.runningNow = false;
       const runQueue = this.getMutableRunQueue();
       this.runDebug("runCells.finally", {

@@ -45,6 +45,21 @@ export type RunMessageDecision =
   | { kind: "lifecycle"; lifecycle: RunLifecycleType; id?: string }
   | { kind: "data"; id: string };
 
+export type RunStreamEnd = "complete" | "transport_lost";
+
+export function classifyRunStreamEnd({
+  sawRunDone,
+  socketState,
+}: {
+  sawRunDone: boolean;
+  socketState?: string;
+}): RunStreamEnd {
+  // Older project backends may close a completed iterator without sending the
+  // explicit lifecycle record. A ready socket still distinguishes that case
+  // from an iterator terminated by transport loss.
+  return sawRunDone || socketState === "ready" ? "complete" : "transport_lost";
+}
+
 export function classifyRunStreamMessage({
   message,
   activeRunId,
