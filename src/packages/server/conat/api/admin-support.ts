@@ -867,8 +867,9 @@ function normalizeTicketComment(
     ? comment.attachments
     : [];
   const body = comment.plain_body || comment.body;
+  const imageBody = comment.html_body ? `${body}\n${comment.html_body}` : body;
   const images = [
-    ...extractSupportImages(body, configuredSiteUrl),
+    ...extractSupportImages(imageBody, configuredSiteUrl),
     ...zendeskAttachmentImages(attachments),
   ].slice(0, MAX_IMAGES_PER_COMMENT);
   return {
@@ -1030,7 +1031,7 @@ async function loadTicket(ticketId: number): Promise<{
       "tickets",
       ticketId,
       "comments",
-      { sort_order: "desc" },
+      { sort_order: "desc", include_inline_images: true },
     ]) as unknown as Promise<ZendeskCommentsResult>,
   ]);
   if (!ticketResponse?.result) throw new Error(`ticket ${ticketId} not found`);
