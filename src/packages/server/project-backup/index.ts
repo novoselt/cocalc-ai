@@ -9,6 +9,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { secrets } from "@cocalc/backend/data";
 import getLogger from "@cocalc/backend/logger";
+import { install as installSandboxBinary } from "@cocalc/backend/sandbox/install";
 import rustic from "@cocalc/backend/sandbox/rustic";
 import { parseOutput } from "@cocalc/backend/sandbox/exec";
 import getPool from "@cocalc/database/pool";
@@ -574,6 +575,7 @@ async function initializeSharedProjectBackupRepo({
   repoId: string;
   toml: string;
 }): Promise<void> {
+  await installSandboxBinary("rustic");
   const dir = await mkdtemp(join(tmpdir(), "cocalc-backup-repo-init-"));
   const profile = join(dir, `repo-${repoId}.toml`);
   try {
