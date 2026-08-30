@@ -470,6 +470,83 @@ test("organization create previews with a stable idempotency key", async () => {
   });
 });
 
+test("task create previews explicitly without --commit", async () => {
+  let captured: any;
+  const response = {
+    preview: true,
+    expected_version: 0,
+    idempotency_key: "server-key",
+  };
+  const { program } = setup({
+    createTask: async (opts: any) => {
+      captured = opts;
+      return response;
+    },
+  });
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crm",
+    "tasks",
+    "create",
+    "example-customer",
+    "--type",
+    "review",
+    "--assignee",
+    "owner@example.edu",
+    "--due",
+    "2026-09-08T17:00:00-07:00",
+    "--subject",
+    "Review institutional renewal",
+    "--reason",
+    "reviewed customer next action",
+  ]);
+  assert.equal(captured.commit, false);
+  assert.equal(captured.expected_version, undefined);
+  assert.equal(captured.due_at, "2026-09-09T00:00:00.000Z");
+  assert.match(captured.idempotency_key, /^cli:task\.create:/);
+});
+
+test("task due dates require an RFC3339 timestamp with a timezone", async () => {
+  for (const due of [
+    "2026-09-08",
+    "2026-09-08T17:00:00",
+    "2026-02-30T17:00:00Z",
+  ]) {
+    let called = false;
+    const { program } = setup({
+      createTask: async () => {
+        called = true;
+        return {};
+      },
+    });
+    await assert.rejects(
+      program.parseAsync([
+        "node",
+        "test",
+        "admin",
+        "crm",
+        "tasks",
+        "create",
+        "example-customer",
+        "--type",
+        "review",
+        "--assignee",
+        "owner@example.edu",
+        "--due",
+        due,
+        "--subject",
+        "Review institutional renewal",
+        "--reason",
+        "reviewed customer next action",
+      ]),
+      /--due must be (?:an RFC3339 timestamp with an explicit timezone|a valid RFC3339 timestamp)/,
+    );
+    assert.equal(called, false);
+  }
+});
+
 test("committed CRM mutations require the reviewed expected version", async () => {
   const { program } = setup({ archiveOrganization: async () => ({}) });
   await assert.rejects(

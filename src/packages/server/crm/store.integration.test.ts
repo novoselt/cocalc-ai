@@ -171,6 +171,84 @@ describePglite("integrated CRM store", () => {
     expect(created.customer_number).toMatch(/^CRM-\d{4}-\d{6}$/);
   });
 
+  it("previews tasks without writing and replays one exact committed task", async () => {
+    const organizationPreview = await store.createOrganization({
+      account_id: actor,
+      display_name: `Task Safety University ${randomUUID()}`,
+      organization_type: "university",
+      lifecycle_stage: "customer",
+      reason: "create isolated task safety fixture",
+    });
+    if (!organizationPreview.preview) throw Error("expected preview");
+    const organization = committed(
+      await store.createOrganization({
+        account_id: actor,
+        display_name: organizationPreview.proposed.display_name as string,
+        organization_type: "university",
+        lifecycle_stage: "customer",
+        reason: "create isolated task safety fixture",
+        commit: true,
+        expected_version: organizationPreview.expected_version,
+        idempotency_key: organizationPreview.idempotency_key,
+      }),
+    );
+    const request = {
+      account_id: actor,
+      organization: organization.id,
+      type: "review" as const,
+      assignee_account_id: actor,
+      due_at: "2026-09-08T17:00:00-07:00",
+      subject: `Review task safety ${randomUUID()}`,
+      reason: "record isolated customer next action",
+    };
+    const countTasks = async () =>
+      Number(
+        (
+          await pool.query(
+            "SELECT count(*)::int AS count FROM crm_tasks WHERE organization_id=$1 AND subject=$2",
+            [organization.id, request.subject],
+          )
+        ).rows[0].count,
+      );
+
+    expect(await countTasks()).toBe(0);
+    const preview = await store.createTask(request);
+    expect(preview.preview).toBe(true);
+    expect(await countTasks()).toBe(0);
+    if (!preview.preview) throw Error("expected preview");
+    expect(preview.proposed).toMatchObject({
+      due_at: "2026-09-09T00:00:00.000Z",
+    });
+
+    const commitRequest = {
+      ...request,
+      commit: true,
+      expected_version: preview.expected_version,
+      idempotency_key: preview.idempotency_key,
+    };
+    const created = committed(await store.createTask(commitRequest));
+    const replay = await store.createTask(commitRequest);
+    expect(replay.preview).toBe(false);
+    if (replay.preview) throw Error("expected replay");
+    expect(replay.replayed).toBe(true);
+    expect(replay.result.id).toBe(created.id);
+    expect(await countTasks()).toBe(1);
+
+    for (const due_at of [
+      "2026-09-08",
+      "2026-09-08T17:00:00",
+      "2026-02-30T17:00:00Z",
+    ]) {
+      await expect(
+        store.createTask({
+          ...request,
+          due_at,
+          subject: `Reject ambiguous due ${randomUUID()}`,
+        }),
+      ).rejects.toThrow(/due_at must be (?:an RFC3339|a valid RFC3339)/);
+    }
+  });
+
   it("paginates filtered organization searches", async () => {
     const query = `Pagination University ${randomUUID()}`;
     const organizationIds = [randomUUID(), randomUUID()];

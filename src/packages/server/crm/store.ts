@@ -224,6 +224,31 @@ function isoRequired(value: unknown): string {
   return result;
 }
 
+function rfc3339TimestampRequired(value: unknown, name: string): string {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(
+      raw,
+    )
+  ) {
+    throw Error(
+      `${name} must be an RFC3339 timestamp with an explicit timezone, e.g. 2026-09-01T17:00:00Z`,
+    );
+  }
+  const calendarDate = new Date(`${raw.slice(0, 10)}T00:00:00.000Z`);
+  if (
+    !Number.isFinite(calendarDate.valueOf()) ||
+    calendarDate.toISOString().slice(0, 10) !== raw.slice(0, 10)
+  ) {
+    throw Error(`${name} must be a valid RFC3339 timestamp`);
+  }
+  const timestamp = new Date(raw);
+  if (!Number.isFinite(timestamp.valueOf())) {
+    throw Error(`${name} must be a valid RFC3339 timestamp`);
+  }
+  return timestamp.toISOString();
+}
+
 function dateOnly(value: unknown): string {
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
     const result = value.slice(0, 10);
@@ -3035,7 +3060,7 @@ export async function createTask(
     zendesk_ticket_id: zendeskTicketId,
     type: assertEnum(opts.type, CRM_TASK_TYPES, "type"),
     assignee_account_id: opts.assignee_account_id,
-    due_at: isoRequired(opts.due_at),
+    due_at: rfc3339TimestampRequired(opts.due_at, "due_at"),
     priority: assertEnum(
       opts.priority ?? "normal",
       CRM_TASK_PRIORITIES,
@@ -3127,7 +3152,8 @@ export async function updateTask(
   ) {
     throw Error("assignee_account_id must be a UUID");
   }
-  if (changes.due_at != null) changes.due_at = isoRequired(changes.due_at);
+  if (changes.due_at != null)
+    changes.due_at = rfc3339TimestampRequired(changes.due_at, "due_at");
   if (changes.subject != null)
     changes.subject = bounded(changes.subject, "subject", 500);
   if (Object.hasOwn(changes, "details"))
@@ -3176,7 +3202,9 @@ export async function transitionTask(
     throw Error("due_at is required when rescheduling a task");
   }
   const dueAt =
-    opts.action === "reschedule" ? isoRequired(opts.due_at) : original.due_at;
+    opts.action === "reschedule"
+      ? rfc3339TimestampRequired(opts.due_at, "due_at")
+      : original.due_at;
   const assigneeAccountId =
     opts.assignee_account_id ?? original.assignee_account_id;
   if (!isValidUUID(assigneeAccountId))
