@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applyCourseRootfsToManagedProjects,
   buildCourseReconfigureRequest,
   courseSettingsHash,
+  managedCourseProjectIds,
   readCourseRows,
   reconfigureCourseProjects,
   setCourseRootfs,
@@ -112,6 +114,102 @@ test("course settings hashes and summaries are deterministic", () => {
     "shared-project",
     "student-project",
   ]);
+});
+
+test("managed course projects exclude deleted students and the instructor project", () => {
+  assert.deepEqual(
+    managedCourseProjectIds({
+      course_project_id: "course-project",
+      rows: [
+        {
+          table: "settings",
+          shared_project_id: "shared-project",
+          nbgrader_grade_project: "course-project",
+        },
+        {
+          table: "students",
+          student_id: "student-1",
+          project_id: "student-project",
+        },
+        {
+          table: "students",
+          student_id: "student-2",
+          project_id: "deleted-project",
+          deleted: true,
+        },
+        {
+          table: "students",
+          student_id: "student-3",
+          project_id: "shared-project",
+        },
+      ],
+    }),
+    ["shared-project", "student-project"],
+  );
+});
+
+test("applying a course RootFS mutates every managed project and restarts active ones", async () => {
+  const calls: any[] = [];
+  const result = await applyCourseRootfsToManagedProjects({
+    hub: {
+      system: {
+        setProjectRootfsImage: async (opts) => {
+          calls.push(["set-rootfs", opts]);
+          return [{ state_role: "current", runtime_image: opts.image }];
+        },
+      },
+      projects: {
+        getProjectState: async ({ project_id }) => {
+          calls.push(["state", project_id]);
+          return {
+            state: project_id === "student-project" ? "running" : "stopped",
+          };
+        },
+        restart: async (opts) => {
+          calls.push(["restart", opts]);
+          return { op_id: `restart-${opts.project_id}` };
+        },
+      },
+    } as any,
+    course_project_id: "course-project",
+    rows: [
+      {
+        table: "settings",
+        student_project_rootfs_image: "rootfs/image",
+        student_project_rootfs_image_id: "image-id",
+        shared_project_id: "shared-project",
+      },
+      {
+        table: "students",
+        student_id: "student-1",
+        project_id: "student-project",
+      },
+    ],
+  });
+
+  assert.deepEqual(calls, [
+    ["state", "shared-project"],
+    [
+      "set-rootfs",
+      {
+        project_id: "shared-project",
+        image: "rootfs/image",
+        image_id: "image-id",
+      },
+    ],
+    ["state", "student-project"],
+    [
+      "set-rootfs",
+      {
+        project_id: "student-project",
+        image: "rootfs/image",
+        image_id: "image-id",
+      },
+    ],
+    ["restart", { project_id: "student-project", wait: true }],
+  ]);
+  assert.equal(result.project_count, 2);
+  assert.equal(result.restarted_count, 1);
 });
 
 test("setCourseRootfs checks the inspected hash and records audit metadata", async () => {

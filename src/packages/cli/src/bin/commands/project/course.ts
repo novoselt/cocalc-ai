@@ -4,6 +4,7 @@
 import { Command } from "commander";
 
 import {
+  applyCourseRootfsToManagedProjects,
   openCourseSyncDB,
   readCourseRows,
   reconfigureCourseProjects,
@@ -156,7 +157,12 @@ export function registerProjectCourseCommands(
                 timeout_ms: ctx.timeoutMs,
                 poll_ms: ctx.pollMs,
               });
-              return { config: configResult, reconfigure };
+              const rootfs = await applyCourseRootfsToManagedProjects({
+                hub: ctx.hub,
+                course_project_id: instructorProject.project_id,
+                rows: readCourseRows(syncdb),
+              });
+              return { config: configResult, reconfigure, rootfs };
             } finally {
               await syncdb.close();
             }

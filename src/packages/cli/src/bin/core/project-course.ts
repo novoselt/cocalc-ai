@@ -16,7 +16,11 @@ import {
   defaultCourseTitle,
   normalizeCoursePath,
 } from "@cocalc/util/course-path";
-import { normalizeStudentProjectFunctionality } from "@cocalc/util/db-schema/projects";
+import {
+  normalizeStudentProjectFunctionality,
+  type ProjectState,
+} from "@cocalc/util/db-schema/projects";
+import type { ProjectRootfsStateEntry } from "@cocalc/util/rootfs-images";
 
 const COURSE_PRIMARY_KEYS = [
   "table",
@@ -52,6 +56,13 @@ export type CourseSyncDB = {
 };
 
 type CourseHub = {
+  system: {
+    setProjectRootfsImage: (opts: {
+      project_id: string;
+      image: string;
+      image_id?: string;
+    }) => Promise<ProjectRootfsStateEntry[]>;
+  };
   projects: {
     getProjectEnv: (opts: {
       project_id: string;
@@ -63,6 +74,11 @@ type CourseHub = {
       course_project_id: string;
       op_id: string;
     }) => Promise<LroSummary | undefined>;
+    getProjectState: (opts: { project_id: string }) => Promise<ProjectState>;
+    restart: (opts: {
+      project_id: string;
+      wait: boolean;
+    }) => Promise<{ op_id: string }>;
   };
 };
 
@@ -110,6 +126,29 @@ function rootfsFromSettings(
   return { image, ...(image_id ? { image_id } : undefined) };
 }
 
+export function managedCourseProjectIds({
+  course_project_id,
+  rows,
+}: {
+  course_project_id: string;
+  rows: Record<string, any>[];
+}): string[] {
+  const settings = settingsRow(rows);
+  const projectIds = new Set<string>();
+  for (const student of rows) {
+    if (student.table !== "students" || student.deleted) continue;
+    const projectId = `${student.project_id ?? ""}`.trim();
+    if (projectId) projectIds.add(projectId);
+  }
+  const sharedProjectId = `${settings.shared_project_id ?? ""}`.trim();
+  if (sharedProjectId) projectIds.add(sharedProjectId);
+  const nbgraderProjectId = `${settings.nbgrader_grade_project ?? ""}`.trim();
+  if (nbgraderProjectId && nbgraderProjectId !== course_project_id) {
+    projectIds.add(nbgraderProjectId);
+  }
+  return [...projectIds].sort();
+}
+
 export function courseSettingsHash(settings: Record<string, unknown>): string {
   const json = JSON.stringify(canonicalize(settings));
   return `sha256:${createHash("sha256").update(json).digest("hex")}`;
@@ -152,6 +191,50 @@ export function summarizeCourseRows({
       with_project: students.filter((student) => !!student.project_id).length,
     },
     managed_project_ids: [...managedProjectIds].sort(),
+  };
+}
+
+export async function applyCourseRootfsToManagedProjects({
+  hub,
+  course_project_id,
+  rows,
+}: {
+  hub: CourseHub;
+  course_project_id: string;
+  rows: Record<string, any>[];
+}): Promise<Record<string, unknown>> {
+  const rootfs = rootfsFromSettings(settingsRow(rows));
+  if (!rootfs) {
+    throw new Error("No course RootFS image is configured");
+  }
+  const projectIds = managedCourseProjectIds({ course_project_id, rows });
+  const projects: Array<Record<string, unknown>> = [];
+  for (const project_id of projectIds) {
+    const state = await hub.projects.getProjectState({ project_id });
+    const stateBefore = `${state?.state ?? ""}`.trim();
+    const states = await hub.system.setProjectRootfsImage({
+      project_id,
+      image: rootfs.image,
+      image_id: rootfs.image_id,
+    });
+    const active = stateBefore === "running" || stateBefore === "starting";
+    const restart = active
+      ? await hub.projects.restart({ project_id, wait: true })
+      : undefined;
+    projects.push({
+      project_id,
+      state_before: stateBefore || null,
+      rootfs_states: states,
+      restarted: active,
+      restart_op_id: restart?.op_id ?? null,
+    });
+  }
+  return {
+    course_project_id,
+    rootfs,
+    project_count: projects.length,
+    restarted_count: projects.filter((project) => project.restarted).length,
+    projects,
   };
 }
 
