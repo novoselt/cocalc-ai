@@ -319,14 +319,14 @@ export async function truncateSessionHistoryById(
   return await truncateSessionHistory(filePath, opts);
 }
 
-// Codex can accumulate huge JSONL session files (multi-GB) because it never
-// trims prior compactions. We don't need that full history for CoCalc since the
-// authoritative chat log lives in our frontend; we only need recent compaction
-// state for context. This keeps session files bounded and prevents OOM/slow
-// behavior when resuming old sessions, e.g., "codex resume" will easily use
-// 5GB+ loading a massive jsonl history, just to ignore most of it.
-// If codex will change to not store all these old pointless compaction
-// in the jsonl history and then we can remove this.
+// Legacy Codex sessions can accumulate multi-GB JSONL files containing old
+// compaction checkpoints. CoCalc only needs recent compaction state because its
+// chat log is authoritative, so this bounds resume memory and latency.
+//
+// This replaces the rollout path by rename. Never call it while a Codex
+// app-server has the session resumed: Codex retains an open append descriptor
+// and would keep writing to the unlinked old inode. Truncate only after the old
+// process exits and before a new app-server resumes the session.
 export async function truncateSessionHistory(
   filePath: string,
   opts?: SessionHistoryOptions,

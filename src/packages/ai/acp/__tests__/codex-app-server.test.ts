@@ -12,6 +12,10 @@ import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { DEFAULT_SITE_FUNDED_CODEX_POLICY } from "@cocalc/util/ai/site-funded-codex";
 const getCodexSiteKeyGovernorMock: jest.Mock<any, []> = jest.fn(() => null);
+const truncateSessionHistoryByIdMock: jest.Mock<
+  Promise<boolean>,
+  any[]
+> = jest.fn(async () => false);
 const loggerMock = {
   debug: jest.fn(),
   info: jest.fn(),
@@ -25,6 +29,12 @@ jest.mock("../codex-site-key-governor", () => ({
 }));
 
 jest.mock("@cocalc/backend/logger", () => () => loggerMock);
+
+jest.mock("../codex-session-store", () => ({
+  ...jest.requireActual("../codex-session-store"),
+  truncateSessionHistoryById: (...args: any[]) =>
+    truncateSessionHistoryByIdMock(...args),
+}));
 
 import {
   CodexAppServerAgent,
@@ -175,6 +185,8 @@ describe("CodexAppServerAgent", () => {
     loggerMock.info.mockReset();
     loggerMock.warn.mockReset();
     loggerMock.error.mockReset();
+    truncateSessionHistoryByIdMock.mockReset();
+    truncateSessionHistoryByIdMock.mockResolvedValue(false);
     if (originalCompactRetryLimit == null) {
       delete process.env.COCALC_CODEX_REMOTE_COMPACT_MAX_RETRIES;
     } else {
@@ -4123,6 +4135,73 @@ describe("CodexAppServerAgent", () => {
     expect(rewrittenMeta?.payload?.sandbox_policy).toEqual({
       type: "danger-full-access",
     });
+  });
+
+  it("truncates legacy history before a fresh app-server resumes it", async () => {
+    const sessionId = "019d0000-0000-7000-8000-000000000009";
+    const callOrder: string[] = [];
+    truncateSessionHistoryByIdMock.mockImplementation(async () => {
+      callOrder.push("truncate");
+      return false;
+    });
+    let turnNumber = 0;
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, { ok: true });
+          break;
+        case "thread/resume":
+          callOrder.push("resume");
+          fake.sendResponse(message.id, { thread: { id: sessionId } });
+          break;
+        case "turn/start": {
+          turnNumber += 1;
+          const turnId = `turn-safe-truncate-${turnNumber}`;
+          fake.sendResponse(message.id, { turn: { id: turnId } });
+          setImmediate(() => {
+            fake.sendNotification("turn/started", {
+              turn: { id: turnId, status: "inProgress" },
+            });
+            fake.sendNotification("turn/completed", {
+              turn: { id: turnId, status: "completed" },
+            });
+          });
+          break;
+        }
+        default:
+          if (typeof message.id === "number") {
+            fake.sendResponse(message.id, {});
+          }
+      }
+    });
+
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer: async () => ({
+        proc: proc as any,
+        cmd: "fake-codex",
+        args: ["app-server"],
+        cwd: "/tmp/project",
+      }),
+    });
+
+    const agent = new CodexAppServerAgent();
+    const request = {
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      stream: async () => {},
+      config: {
+        sessionId,
+        workingDirectory: "/tmp/project",
+      } as any,
+    };
+    await agent.evaluate({ ...request, prompt: "first turn" });
+    await agent.evaluate({ ...request, prompt: "second turn" });
+
+    expect(callOrder).toEqual(["truncate", "resume"]);
+    expect(truncateSessionHistoryByIdMock).toHaveBeenCalledTimes(1);
   });
 
   it("rewrites resumed session metadata in the project codex home for container-backed sessions", async () => {

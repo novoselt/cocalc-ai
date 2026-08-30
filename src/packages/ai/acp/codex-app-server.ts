@@ -2389,7 +2389,7 @@ export class CodexAppServerAgent implements AcpAgent {
       }).filter(([, value]) => typeof value === "string"),
     ) as Record<string, string>;
     const cwd = this.resolveCwd(config);
-    const { runtime } = await this.acquireRuntime({
+    const { runtime, created } = await this.acquireRuntime({
       request,
       session,
       cwd,
@@ -2592,6 +2592,17 @@ export class CodexAppServerAgent implements AcpAgent {
         requestedServiceTier: effectiveConfig?.serviceTier ?? "standard",
         appServerServiceTier: serviceTier,
       });
+      if (created && resumeId) {
+        // A resumed Codex thread keeps its rollout file descriptor open for
+        // the life of this app-server. Replacing the JSONL after thread/resume
+        // would leave Codex appending to an unlinked inode, so legacy history
+        // maintenance must finish before the new runtime opens the thread.
+        await this.maybeTruncateSessionHistory({
+          sessionId: resumeId,
+          spawned,
+          cwd,
+        });
+      }
       if (runtime.threadId && runtime.threadId === resumeId) {
         threadResult = { thread: { id: runtime.threadId } };
       } else if (resumeId) {
@@ -3437,11 +3448,6 @@ export class CodexAppServerAgent implements AcpAgent {
         threadId: actualThreadId,
       });
       runtimeHealthy = true;
-      void this.maybeTruncateSessionHistory({
-        sessionId: actualThreadId,
-        spawned,
-        cwd,
-      });
       fundedFinishStatus = "committed";
       fundedFinishOutcome = "turn completed";
     } catch (err) {

@@ -72,9 +72,12 @@ export function CodexLogPanel({
     logSubject,
     liveLogStream,
     generating: generating === true,
-    enabled: events == null && logEnabled,
+    enabled: logEnabled,
   });
-  const resolvedEvents = events ?? codexLog.events;
+  // `events` may be the message-only preview retained by the inline renderer.
+  // Prefer the authoritative full log once it loads; use the supplied events
+  // only to avoid an empty panel while that lazy drawer load is pending.
+  const resolvedEvents = codexLog.events ?? events;
   const resolvedDeleteLog = deleteLog ?? codexLog.deleteLog;
 
   const activityEvents: AcpStreamMessage[] =
