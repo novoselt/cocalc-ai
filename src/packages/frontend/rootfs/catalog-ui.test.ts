@@ -154,6 +154,19 @@ describe("rootfs catalog upgrade suggestions", () => {
 });
 
 describe("rootfs catalog version groups", () => {
+  it("treats a legacy self-reference as a standalone lineage head", () => {
+    const octave = image("octave-11.3", "11.3", {
+      supersedes_image_id: "octave-11.3",
+    });
+
+    expect(groupRootfsVersionEntries([octave])).toEqual([
+      { latest: octave, older: [] },
+    ]);
+    expect(
+      latestRootfsVersionForEntry({ current: octave, images: [octave] }),
+    ).toBe(octave);
+  });
+
   it("keeps the newest version prominent and every older version available", () => {
     const unrelated = image("python", "3.14", {
       family: "python",

@@ -403,7 +403,7 @@ export type RootfsCatalogSaveBody = {
   family?: string;
   version?: string;
   channel?: string;
-  supersedes_image_id?: string;
+  supersedes_image_id?: string | null;
   description?: string;
   default_jupyter_kernel?: string;
   visibility?: RootfsImageVisibility;
