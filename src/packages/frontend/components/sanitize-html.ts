@@ -131,6 +131,27 @@ export const UNTRUSTED_IFRAME_SANDBOX =
 // rendered, however trusted the surrounding content claims to be.
 const NEVER_RENDERED_TAGS = new Set(["object", "embed", "applet"]);
 
+const DOCUMENT_CONTAINER_TAGS = new Set(["html", "body"]);
+const DOCUMENT_METADATA_TAGS = new Set([
+  "head",
+  "title",
+  "base",
+  "link",
+  "meta",
+]);
+
+export function isDocumentContainerHtmlTag(name: string): boolean {
+  return DOCUMENT_CONTAINER_TAGS.has(name.toLowerCase());
+}
+
+export function isDocumentMetadataHtmlTag(name: string): boolean {
+  return DOCUMENT_METADATA_TAGS.has(name.toLowerCase());
+}
+
+export function isStandaloneDocumentHtmlTag(value: string): boolean {
+  return /^<\/?(?:html|head|body)(?:\s[^>]*)?>$/i.test(value.trim());
+}
+
 // An iframe is only left alone if we vetted where it came from. Anything else
 // -- srcdoc, a data: URL, or no src at all (which is about:blank, and therefore
 // same-origin) -- has attacker-controllable content and must be sandboxed.

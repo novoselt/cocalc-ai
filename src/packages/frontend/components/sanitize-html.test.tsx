@@ -47,7 +47,7 @@ describe("HTML SSR sanitization", () => {
 });
 
 describe("safety floor (applies even when noSanitize is set)", () => {
-  function renderTrusted(value: string): string {
+  function renderTrusted(value: string, inline = false): string {
     // noSanitize: true is what project/page/content.tsx sets for every editor
     // tab, which is how the iframe XSS reached chat.
     return renderToStaticMarkup(
@@ -57,13 +57,15 @@ describe("safety floor (applies even when noSanitize is set)", () => {
           MathComponent: ({ data }) => <React.Fragment>{data}</React.Fragment>,
         }}
       >
-        <HTML value={value} />
+        <HTML value={value} inline={inline} />
       </FileContext.Provider>,
     );
   }
 
   it("sandboxes an iframe with srcdoc", () => {
-    const html = renderTrusted('<iframe srcdoc="<script>alert(1)</script>"></iframe>');
+    const html = renderTrusted(
+      '<iframe srcdoc="<script>alert(1)</script>"></iframe>',
+    );
     expect(html).toContain("sandbox=");
     expect(html).not.toContain("allow-same-origin");
   });
@@ -102,5 +104,20 @@ describe("safety floor (applies even when noSanitize is set)", () => {
     const html = renderTrusted('<div class="keep" style="color:red">hi</div>');
     expect(html).toContain('class="keep"');
     expect(html).toContain("color:red");
+  });
+
+  it("renders a standalone inline body tag as literal text", () => {
+    const html = renderTrusted("<body>", true);
+    expect(html).toContain("&lt;body&gt;");
+    expect(html).not.toContain("<body>");
+  });
+
+  it("unwraps full-document containers and drops document metadata", () => {
+    const html = renderTrusted(
+      "<html><head><title>Hidden title</title></head><body>Visible body</body></html>",
+    );
+    expect(html).toContain("Visible body");
+    expect(html).not.toContain("Hidden title");
+    expect(html).not.toMatch(/<\/?(?:html|head|body|title)\b/i);
   });
 });

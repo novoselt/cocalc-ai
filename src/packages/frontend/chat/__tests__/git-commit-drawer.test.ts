@@ -1,4 +1,6 @@
 import React, { useState } from "react";
+import { FileContext } from "@cocalc/frontend/lib/file-context";
+import { GitCommitDetailsPanel } from "../git-commit/drawer-sections";
 import {
   applySubmittedGitReviewComments,
   applyGitReviewedByCommitEntries,
@@ -156,6 +158,36 @@ describe("git commit drawer merge commit formatting", () => {
     expect(formatMergeCommitBodyMarkdown(body)).toBe(
       "````\nConflicts resolved\n```\nkeep literal\n```\n````",
     );
+  });
+
+  it("sanitizes HTML in commit messages even inside trusted project files", () => {
+    const { container } = render(
+      React.createElement(
+        FileContext.Provider,
+        { value: { noSanitize: true } },
+        React.createElement(GitCommitDetailsPanel, {
+          summary: {
+            message: [
+              "Untrusted commit",
+              "",
+              '<img src="preview.png" onerror="window.attack()">',
+              '<a href="javascript:window.attack()">unsafe link</a>',
+              "<script>window.attack()</script>",
+            ].join("\n"),
+            extraHeaderLines: [],
+          },
+          commit: "abc1234",
+          isHeadSelected: false,
+          fontSize: 14,
+          headRefLabel: "Working tree",
+        }),
+      ),
+    );
+
+    expect(container.querySelector("img")?.getAttribute("onerror")).toBeNull();
+    expect(screen.getByText("unsafe link").getAttribute("href")).toBeNull();
+    expect(container.querySelector("script")).toBeNull();
+    expect(container.textContent).not.toContain("window.attack()");
   });
 
   it("matches plain git show semantics instead of forcing rename detection", () => {

@@ -27,6 +27,9 @@ import { decodeHTML } from "entities";
 import {
   enforceHtmlSafetyFloor,
   isAllowedHtmlTag,
+  isDocumentContainerHtmlTag,
+  isDocumentMetadataHtmlTag,
+  isStandaloneDocumentHtmlTag,
   sanitizeHtmlAttributes,
   shouldDropHtmlTagContents,
 } from "./sanitize-html";
@@ -45,6 +48,12 @@ export default function HTML({
 }) {
   const { urlTransform, AnchorTagComponent, noSanitize, MathComponent } =
     useFileContext();
+  if (inline && isStandaloneDocumentHtmlTag(value)) {
+    // Markdown parsers classify a prose token such as `<body>` as inline HTML.
+    // Mounting React's singleton document elements below a span corrupts the
+    // live page, so preserve these standalone tokens as the text users wrote.
+    return <span style={style}>{value}</span>;
+  }
   if (value.trimLeft().startsWith("<html>")) {
     // Sage output formulas are wrapped in "<html>" for some stupid reason, which
     // probably originates with a ridiculous design choice that Tom Boothby or I
@@ -79,6 +88,20 @@ export default function HTML({
     try {
       if (!(domNode instanceof Element)) return;
       const { name, children } = domNode;
+
+      // Full-document nodes are never valid descendants of this component's
+      // span/div wrapper. This applies in trusted mode too: noSanitize may
+      // retain styling, but it cannot change the host document structure.
+      if (isDocumentMetadataHtmlTag(name)) {
+        return React.createElement(React.Fragment);
+      }
+      if (isDocumentContainerHtmlTag(name)) {
+        return (
+          <React.Fragment>
+            {domToReact(children as any, options)}
+          </React.Fragment>
+        );
+      }
 
       // The safety floor, applied before anything else and regardless of
       // noSanitize. Written back onto domNode so it also covers the paths
