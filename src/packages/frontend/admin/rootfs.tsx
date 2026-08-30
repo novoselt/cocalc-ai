@@ -45,6 +45,7 @@ import {
   rootfsAdminSaveBody,
   type RootfsAdminCatalogPatch,
 } from "./rootfs-save";
+import { RootfsLineageModal } from "./rootfs-lineage-modal";
 
 const ROOTFS_SCAN_ADMIN_TIMEOUT_MS = 35 * 60 * 1000;
 const ROOTFS_SCAN_HOST_CACHE_TIMEOUT_MS = 8 * 1000;
@@ -753,34 +754,15 @@ export function RootfsAdmin() {
   return (
     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
       <FreshAuthModal {...freshAuthModalProps} />
-      <Modal
+      <RootfsLineageModal
         open={!!lineageEntry}
-        title={
-          lineageEntry
-            ? `Edit lineage for "${lineageEntry.label}"`
-            : "Edit RootFS lineage"
-        }
-        okText="Save lineage"
-        onOk={() => void saveLineage()}
+        entryLabel={lineageEntry?.label}
+        target={lineageTarget}
+        busy={lineageEntry ? actionLoading(lineageEntry, "lineage") : false}
+        onTargetChange={setLineageTarget}
+        onSave={() => void saveLineage()}
         onCancel={() => setLineageEntry(null)}
-        okButtonProps={{
-          loading: lineageEntry
-            ? actionLoading(lineageEntry, "lineage")
-            : false,
-        }}
-      >
-        <Typography.Paragraph type="secondary">
-          Enter the catalog image ID this release replaces, or clear the field
-          to make it a standalone release. Other catalog metadata is preserved.
-        </Typography.Paragraph>
-        <Input
-          allowClear
-          aria-label="Superseded RootFS image ID"
-          placeholder="Predecessor catalog image ID"
-          value={lineageTarget}
-          onChange={(event) => setLineageTarget(event.target.value)}
-        />
-      </Modal>
+      />
       <Modal
         open={!!scanEntry}
         title={
@@ -1103,6 +1085,8 @@ export function RootfsAdmin() {
                   {!entry.deleted ? (
                     <Button
                       size="small"
+                      aria-haspopup="dialog"
+                      aria-expanded={lineageEntry?.id === entry.id}
                       loading={actionLoading(entry, "lineage")}
                       onClick={() => openLineageEditor(entry)}
                     >
