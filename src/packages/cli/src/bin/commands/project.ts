@@ -22,6 +22,7 @@ import { registerProjectPublishCommands } from "./project/publish";
 import { registerProjectRootfsCommands } from "./project/rootfs";
 import { registerProjectDocumentBuildCommands } from "./project/document-build";
 import { registerProjectBuildSmokeCommand } from "./project/build-smoke";
+import { registerProjectCourseCommands } from "./project/course";
 
 export type ProjectCommandDeps = {
   withContext: any;
@@ -153,6 +154,7 @@ export function registerProjectCommand(
   registerProjectStorageCommands(project, deps);
   registerProjectPublishCommands(project, deps);
   registerProjectRootfsCommands(project, deps);
+  registerProjectCourseCommands(project, deps);
   registerProjectEnvSecretCommands(project, deps);
   registerProjectLifecycleCommands(project, deps);
   registerProjectAppCommands(project, deps);
