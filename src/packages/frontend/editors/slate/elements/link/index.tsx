@@ -6,6 +6,7 @@
 import type { CSSProperties } from "react";
 import { Text } from "slate";
 import { useFileContext } from "@cocalc/frontend/lib/file-context";
+import { isSafeHtmlUrl } from "@cocalc/frontend/components/sanitize-html";
 import { dict } from "@cocalc/util/misc";
 import { register, SlateElement } from "../register";
 
@@ -30,13 +31,20 @@ register({
   StaticElement: ({ attributes, children, element }) => {
     const node = element as Link;
     let { url, title } = node;
-    const { AnchorTagComponent, urlTransform, anchorStyle } = useFileContext();
+    const { AnchorTagComponent, urlTransform, anchorStyle, noSanitize } =
+      useFileContext();
     const style: CSSProperties = { ...LINK_STYLE, ...anchorStyle };
+    const transformedUrl =
+      url == null ? undefined : (urlTransform?.(url, "a") ?? url);
+    const safeUrl =
+      transformedUrl == null || noSanitize || isSafeHtmlUrl(transformedUrl)
+        ? transformedUrl
+        : undefined;
     if (AnchorTagComponent != null) {
       return (
         <AnchorTagComponent
           {...attributes}
-          href={url}
+          href={safeUrl}
           title={title}
           style={style}
         >
@@ -45,10 +53,10 @@ register({
       );
     }
     let props;
-    if (url != null) {
-      const isExternal = url.includes("://");
+    if (safeUrl != null) {
+      const isExternal = safeUrl.includes("://");
       props = {
-        href: urlTransform?.(url, "a") ?? url,
+        href: safeUrl,
         target: isExternal ? "_blank" : undefined,
         rel: isExternal ? "noopener" : undefined,
       };

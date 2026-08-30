@@ -212,7 +212,7 @@ export function shouldDropHtmlTagContents(name: string): boolean {
   return DROP_CONTENT_TAGS.has(name.toLowerCase());
 }
 
-function isSafeUrl(value: string): boolean {
+export function isSafeHtmlUrl(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed || trimmed.startsWith("#")) {
     return true;
@@ -239,7 +239,7 @@ function sanitizeSrcset(value: string): string | undefined {
     .split(",")
     .map((part) => part.trim())
     .filter(Boolean)
-    .filter((part) => isSafeUrl(part.split(/\s+/)[0] ?? ""));
+    .filter((part) => isSafeHtmlUrl(part.split(/\s+/)[0] ?? ""));
   return candidates.length > 0 ? candidates.join(", ") : undefined;
 }
 
@@ -282,7 +282,7 @@ export function sanitizeHtmlAttributes(
       }
       continue;
     }
-    if (URL_ATTRIBUTES.has(attr) && !isSafeUrl(transformed)) {
+    if (URL_ATTRIBUTES.has(attr) && !isSafeHtmlUrl(transformed)) {
       continue;
     }
     if (

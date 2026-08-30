@@ -170,7 +170,9 @@ describe("git commit drawer merge commit formatting", () => {
             message: [
               "Untrusted commit",
               "",
+              "focus on <body>",
               '<img src="preview.png" onerror="window.attack()">',
+              '<img alt="unsafe image" src="javascript:window.attack()">',
               '<a href="javascript:window.attack()">unsafe link</a>',
               "<script>window.attack()</script>",
             ].join("\n"),
@@ -185,9 +187,16 @@ describe("git commit drawer merge commit formatting", () => {
     );
 
     expect(container.querySelector("img")?.getAttribute("onerror")).toBeNull();
-    expect(screen.getByText("unsafe link").getAttribute("href")).toBeNull();
+    expect(
+      screen.getByText("unsafe link").closest("a")?.getAttribute("href"),
+    ).toBeNull();
+    expect(
+      container.querySelector('img[alt="unsafe image"]')?.getAttribute("src"),
+    ).toBeNull();
     expect(container.querySelector("script")).toBeNull();
     expect(container.textContent).not.toContain("window.attack()");
+    expect(container.textContent).toContain("focus on <body>");
+    expect(container.querySelector("body")).toBeNull();
   });
 
   it("matches plain git show semantics instead of forcing rename detection", () => {
