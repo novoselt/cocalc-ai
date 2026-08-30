@@ -106,10 +106,23 @@ function effectiveArch(): string {
   return normalizeArch(overrideArch ?? arch());
 }
 
-function getCodexReleaseAssetName(
-  version: string,
-  binary: "codex" | "codex-code-mode-host",
-): string {
+type CodexBinary = "codex" | "codex-code-mode-host";
+type CodexArch = "x64" | "arm64";
+
+const CODEX_RELEASE_SHA256: Record<CodexArch, Record<CodexBinary, string>> = {
+  x64: {
+    codex: "605b4b183f22c645f5def63a5b7191767407fb66a6feaec4eaf10b5b7e0058f6",
+    "codex-code-mode-host":
+      "332da68215f070321cb52ebe792ecce8dfd614d02ea5541309d0a5df01e14894",
+  },
+  arm64: {
+    codex: "c1cf2baf375e261c1469381a52dc2c8fd05b6fb45cfff83fed0988fd6c5369b6",
+    "codex-code-mode-host":
+      "15515396675737d947dcb370da0a5b258e6aea871446639b065ca004b843a498",
+  },
+};
+
+function getCodexArch(): CodexArch {
   if (effectivePlatform() !== "linux") {
     throw Error(`unsupported codex platform ${effectivePlatform()}`);
   }
@@ -117,22 +130,40 @@ function getCodexReleaseAssetName(
   if (currentArch !== "x64" && currentArch !== "arm64") {
     throw Error(`unsupported codex arch ${currentArch}`);
   }
-  return `${binary}-v${version}-linux-${currentArch}.xz`;
+  return currentArch;
+}
+
+function getCodexReleaseAssetName(
+  binary: CodexBinary,
+  currentArch: CodexArch,
+): string {
+  const upstreamArch = currentArch === "x64" ? "x86_64" : "aarch64";
+  return `${binary}-${upstreamArch}-unknown-linux-musl.tar.gz`;
 }
 
 function getCodexInstallScript(version: string): string {
-  const releaseBase = `https://github.com/sagemathinc/codex/releases/download/v${version}`;
+  const releaseBase = `https://github.com/openai/codex/releases/download/rust-v${version}`;
+  const currentArch = getCodexArch();
   const binaries = ["codex", "codex-code-mode-host"] as const;
   const paths = Object.fromEntries(
     binaries.map((binary) => [binary, join(binPath, binary)]),
   );
-  const downloads = binaries.map((binary) => {
-    const assetName = getCodexReleaseAssetName(version, binary);
-    return `curl -fL "${releaseBase}/${assetName}" | xz -dc > "${paths[binary]}.tmp"`;
+  const archives = Object.fromEntries(
+    binaries.map((binary) => [binary, `${paths[binary]}.tar.gz.tmp`]),
+  );
+  const downloads = binaries.flatMap((binary) => {
+    const assetName = getCodexReleaseAssetName(binary, currentArch);
+    const extractedName = assetName.slice(0, -".tar.gz".length);
+    return [
+      `curl -fL "${releaseBase}/${assetName}" -o "${archives[binary]}"`,
+      `printf '%s  %s\\n' "${CODEX_RELEASE_SHA256[currentArch][binary]}" "${archives[binary]}" | sha256sum -c -`,
+      `tar -xOzf "${archives[binary]}" "${extractedName}" > "${paths[binary]}.tmp"`,
+    ];
   });
   return [
-    `rm -f "${paths.codex}.tmp" "${paths["codex-code-mode-host"]}.tmp"`,
+    `rm -f "${paths.codex}.tmp" "${paths["codex-code-mode-host"]}.tmp" "${archives.codex}" "${archives["codex-code-mode-host"]}"`,
     ...downloads,
+    `rm -f "${archives.codex}" "${archives["codex-code-mode-host"]}"`,
     `chmod a+x "${paths.codex}.tmp" "${paths["codex-code-mode-host"]}.tmp"`,
     `mv "${paths["codex-code-mode-host"]}.tmp" "${paths["codex-code-mode-host"]}"`,
     `mv "${paths.codex}.tmp" "${paths.codex}"`,
@@ -354,7 +385,7 @@ export const SPEC = {
     },
     BASE: "https://github.com/sagemathinc/sshpiper-binaries/releases",
   },
-  // https://github.com/sagemathinc/codex/releases
+  // https://github.com/openai/codex/releases
   codex: {
     optional: false,
     desc: "codex",
@@ -363,7 +394,7 @@ export const SPEC = {
     VERSION: "0.151.0",
     platforms: ["linux"],
     script: () => getCodexInstallScript(SPEC.codex.VERSION),
-    BASE: "https://github.com/sagemathinc/codex/releases",
+    BASE: "https://github.com/openai/codex/releases",
   },
   blit: {
     optional: false,
