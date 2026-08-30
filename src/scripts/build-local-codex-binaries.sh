@@ -164,6 +164,11 @@ cargo metadata --format-version 1 --manifest-path "${CARGO_MANIFEST}" >/dev/null
 
 X64_DEST="${LOCAL_BIN_ROOT}/${CODEX_VERSION}/linux-x64"
 ARM64_DEST="${LOCAL_BIN_ROOT}/${CODEX_VERSION}/linux-arm64"
+if [[ "${BUILD_PLATFORM}" != "all" ]]; then
+  # A selective rebuild invalidates provenance for any previously assembled
+  # two-platform release until a new combined manifest is created.
+  rm -f "${LOCAL_BIN_ROOT}/${CODEX_VERSION}/manifest.json"
+fi
 
 build_x64() {
   if [[ "${HOST_ARCH}" != "x86_64" ]]; then
