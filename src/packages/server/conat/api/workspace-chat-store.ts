@@ -14,7 +14,6 @@ import {
   vacuumChatStore,
   type ChatStoreScope,
 } from "@cocalc/backend/chat-store/sqlite-offload";
-import { workspaceProjectFilesystem } from "@cocalc/server/conat/project/workspace-filesystem";
 import { isWorkspaceProjectRuntime } from "@cocalc/server/launchpad/project-runtime";
 
 const HOSTED_CHAT_STORE_ERROR =
@@ -37,6 +36,8 @@ export async function resolveWorkspaceChatStorePaths({
   if (!isWorkspaceProjectRuntime()) {
     throw Error(HOSTED_CHAT_STORE_ERROR);
   }
+  const { workspaceProjectFilesystem } =
+    await import("@cocalc/server/conat/project/workspace-filesystem");
   const fs = workspaceProjectFilesystem({ project_id });
   return {
     chat_path: await fs.safeAbsPath(chat_path),
