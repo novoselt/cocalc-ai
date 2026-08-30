@@ -814,7 +814,9 @@ export default function RootFilesystemImage({
               version: publishDraft.version.trim() || undefined,
               channel: publishDraft.channel.trim() || undefined,
               supersedes_image_id:
-                publishDraft.supersedes_image_id.trim() || undefined,
+                publishMode === "manage"
+                  ? publishDraft.supersedes_image_id.trim() || null
+                  : publishDraft.supersedes_image_id.trim() || undefined,
               default_jupyter_kernel:
                 publishDraft.default_jupyter_kernel.trim() || undefined,
               description: publishDraft.description,
@@ -882,7 +884,9 @@ export default function RootFilesystemImage({
             version: publishDraft.version.trim() || undefined,
             channel: publishDraft.channel.trim() || undefined,
             supersedes_image_id:
-              publishDraft.supersedes_image_id.trim() || undefined,
+              publishMode === "manage"
+                ? publishDraft.supersedes_image_id.trim() || null
+                : publishDraft.supersedes_image_id.trim() || undefined,
             default_jupyter_kernel:
               publishDraft.default_jupyter_kernel.trim() || undefined,
             description: publishDraft.description,

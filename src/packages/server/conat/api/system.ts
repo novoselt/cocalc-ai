@@ -4719,6 +4719,7 @@ const ROOTFS_ADMIN_CATALOG_FIELDS = [
   "hidden",
   "blocked",
   "blocked_reason",
+  "supersedes_image_id",
 ] as const;
 
 function hasRootfsAdminCatalogField(

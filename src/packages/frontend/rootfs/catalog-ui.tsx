@@ -155,6 +155,7 @@ export function isRootfsLineageSuccessor({
   predecessor: RootfsImageEntry;
 }): boolean {
   return (
+    entry.id !== predecessor.id &&
     isSameRootfsLineage(entry, predecessor) &&
     (entry.official === true ||
       rootfsOwnerKey(entry) === rootfsOwnerKey(predecessor)) &&

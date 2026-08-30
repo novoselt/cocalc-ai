@@ -135,6 +135,35 @@ function enumValue<T extends string>(
   return normalized as T;
 }
 
+function rfc3339Timestamp(value: unknown, name: string): string {
+  const raw = `${value ?? ""}`.trim();
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(
+      raw,
+    )
+  ) {
+    throw Error(
+      `${name} must be an RFC3339 timestamp with an explicit timezone, e.g. 2026-09-01T17:00:00Z`,
+    );
+  }
+  const [hour, minute, second] = raw.slice(11, 19).split(":").map(Number);
+  if (hour > 23 || minute > 59 || second > 59) {
+    throw Error(`${name} must be a valid RFC3339 timestamp`);
+  }
+  const calendarDate = new Date(`${raw.slice(0, 10)}T00:00:00.000Z`);
+  if (
+    !Number.isFinite(calendarDate.valueOf()) ||
+    calendarDate.toISOString().slice(0, 10) !== raw.slice(0, 10)
+  ) {
+    throw Error(`${name} must be a valid RFC3339 timestamp`);
+  }
+  const timestamp = new Date(raw);
+  if (!Number.isFinite(timestamp.valueOf())) {
+    throw Error(`${name} must be a valid RFC3339 timestamp`);
+  }
+  return timestamp.toISOString();
+}
+
 function commercialNextAction(value: unknown): string {
   const normalized = `${value ?? ""}`
     .trim()
@@ -1004,7 +1033,10 @@ function registerTasks(crm: Command, deps: CrmCommandDeps): void {
       .description("preview or create a task")
       .requiredOption("--type <type>", `type: ${CRM_TASK_TYPES.join(", ")}`)
       .requiredOption("--assignee <account>", "assignee")
-      .requiredOption("--due <iso>", "due timestamp")
+      .requiredOption(
+        "--due <iso>",
+        "RFC3339 due timestamp with an explicit timezone",
+      )
       .requiredOption("--subject <text>", "short subject")
       .option(
         "--priority <priority>",
@@ -1026,7 +1058,7 @@ function registerTasks(crm: Command, deps: CrmCommandDeps): void {
             organization,
             type: enumValue(opts.type, CRM_TASK_TYPES, "--type"),
             assignee_account_id: await resolveAccount(ctx, opts.assignee, deps),
-            due_at: opts.due,
+            due_at: rfc3339Timestamp(opts.due, "--due"),
             priority: enumValue(
               opts.priority,
               CRM_TASK_PRIORITIES,
@@ -1059,7 +1091,10 @@ function registerTasks(crm: Command, deps: CrmCommandDeps): void {
           "--assignee <account>",
           action === "assign" ? "new assignee (required)" : "optional assignee",
         )
-        .option("--due <iso>", "new due timestamp (required for reschedule)"),
+        .option(
+          "--due <iso>",
+          "new RFC3339 due timestamp with an explicit timezone (required for reschedule)",
+        ),
     ).action(async (task: string, opts: any, cmd: Command) =>
       deps.withContext(cmd, `admin crm tasks ${action}`, async (ctx) => {
         if (action === "assign" && !opts.assignee)
@@ -1073,7 +1108,10 @@ function registerTasks(crm: Command, deps: CrmCommandDeps): void {
             assignee_account_id: opts.assignee
               ? await resolveAccount(ctx, opts.assignee, deps)
               : undefined,
-            due_at: opts.due,
+            due_at:
+              action === "reschedule"
+                ? rfc3339Timestamp(opts.due, "--due")
+                : undefined,
           }),
         );
       }),
@@ -1113,7 +1151,10 @@ function registerActivities(crm: Command, deps: CrmCommandDeps): void {
         .option("--person <person>", "contact selector")
         .option("--opportunity <opportunity>", "opportunity selector")
         .option("--task <task>", "task selector")
-        .option("--occurred-at <iso>", "event timestamp"),
+        .requiredOption(
+          "--occurred-at <iso>",
+          "RFC3339 event timestamp with an explicit timezone",
+        ),
     ).action(async (organization: string, opts: any, cmd: Command) =>
       deps.withContext(
         cmd,
@@ -1128,7 +1169,7 @@ function registerActivities(crm: Command, deps: CrmCommandDeps): void {
               person: opts.person,
               opportunity: opts.opportunity,
               task: opts.task,
-              occurred_at: opts.occurredAt,
+              occurred_at: rfc3339Timestamp(opts.occurredAt, "--occurred-at"),
             }),
           ),
       ),

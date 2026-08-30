@@ -805,6 +805,7 @@ function addRootfsCatalogFilters({
             candidate.supersedes_image_id = current.image_id
             OR current.supersedes_image_id = candidate.image_id
           )
+          AND candidate.image_id <> current.image_id
       )
       SELECT image_id FROM lineage
     )`);
@@ -1499,6 +1500,7 @@ export async function assertRootfsSupersessionAllowed({
        FROM rootfs_images AS candidate
        JOIN predecessors AS current
          ON candidate.image_id = current.supersedes_image_id
+        AND candidate.image_id <> current.image_id
        WHERE NOT current.cycle
      )
      SELECT image_id, cycle
@@ -1593,6 +1595,9 @@ async function upsertRootfsRow({
   const family = trimString(body.family) ?? null;
   const version = trimString(body.version) ?? null;
   const channel = trimString(body.channel) ?? null;
+  const supersedesSpecified =
+    hasOwn(body, "supersedes_image_id") &&
+    body.supersedes_image_id !== undefined;
   const supersedes_image_id = trimString(body.supersedes_image_id) ?? null;
   const default_jupyter_kernel =
     trimString(body.default_jupyter_kernel) ?? null;
@@ -1686,7 +1691,10 @@ async function upsertRootfsRow({
       family = COALESCE(EXCLUDED.family, rootfs_images.family),
       version = COALESCE(EXCLUDED.version, rootfs_images.version),
       channel = COALESCE(EXCLUDED.channel, rootfs_images.channel),
-      supersedes_image_id = COALESCE(EXCLUDED.supersedes_image_id, rootfs_images.supersedes_image_id),
+      supersedes_image_id = CASE
+        WHEN $29 THEN EXCLUDED.supersedes_image_id
+        ELSE rootfs_images.supersedes_image_id
+      END,
       description = EXCLUDED.description,
       default_jupyter_kernel = EXCLUDED.default_jupyter_kernel,
       visibility = EXCLUDED.visibility,
@@ -1754,6 +1762,7 @@ async function upsertRootfsRow({
       content ? JSON.stringify(content) : null,
       content_warnings ? JSON.stringify(content_warnings) : null,
       contentMetadataSpecified,
+      supersedesSpecified,
     ],
   );
 
@@ -1887,7 +1896,7 @@ export async function saveRootfsImage({
       family: body.family,
       version: body.version,
       channel: body.channel,
-      supersedes_image_id: body.supersedes_image_id,
+      supersedes_image_id: trimString(body.supersedes_image_id),
       default_jupyter_kernel: body.default_jupyter_kernel,
       description: description ?? undefined,
       visibility,

@@ -8,6 +8,7 @@ import {
   crmMutationContext,
   filterCrmActivities,
   safeExternalHttpUrl,
+  withActivityOccurredAt,
 } from "./helpers";
 
 test("CRM committed mutations carry the browser identity from fresh auth", () => {
@@ -32,6 +33,18 @@ test("CRM committed mutations carry the browser identity from fresh auth", () =>
     reason: "Schedule procurement follow-up",
     source: "admin-ui",
   });
+});
+
+test("activity preview requests preserve one generated event timestamp", () => {
+  const values = { summary: "Reviewed renewal timing" };
+  const now = jest.fn(() => new Date("2026-09-09T00:00:00.000Z"));
+  const previewRequest = withActivityOccurredAt(values, now);
+  const commitRequest = withActivityOccurredAt(previewRequest, now);
+
+  expect(values).toEqual({ summary: "Reviewed renewal timing" });
+  expect(previewRequest.occurred_at).toBe("2026-09-09T00:00:00.000Z");
+  expect(commitRequest.occurred_at).toBe(previewRequest.occurred_at);
+  expect(now).toHaveBeenCalledTimes(1);
 });
 
 test("timeline filtering searches humanized activity kinds and details", () => {

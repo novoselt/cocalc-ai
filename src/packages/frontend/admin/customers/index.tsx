@@ -73,6 +73,7 @@ import {
   crmMutationContext,
   filterCrmActivities,
   safeExternalHttpUrl,
+  withActivityOccurredAt,
 } from "./helpers";
 import { CustomerSelector } from "./selector";
 import { CustomerTaskCard, type CustomerTaskTransition } from "./task-card";
@@ -505,6 +506,7 @@ function CustomerActionModal({
           details: values.details,
           person: values.person,
           opportunity: values.opportunity,
+          occurred_at: values.occurred_at,
         });
       case "link": {
         const [provider, objectKind] = `${values.link_kind}`.split(":");
@@ -553,7 +555,11 @@ function CustomerActionModal({
     setBusy(true);
     try {
       if (!preview) {
-        const values = await form.validateFields();
+        const formValues = await form.validateFields();
+        const values =
+          action?.kind === "add-note"
+            ? withActivityOccurredAt(formValues)
+            : formValues;
         const result = await call(values, false);
         if (!result.preview) throw Error("CRM preview unexpectedly committed");
         setRequest(values);

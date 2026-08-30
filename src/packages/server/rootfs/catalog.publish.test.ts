@@ -156,6 +156,36 @@ describe("assertRootfsSupersessionAllowed", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("allows a new release to supersede a legacy self-referencing predecessor", async () => {
+    queryMock.mockResolvedValueOnce({
+      rows: [
+        {
+          channel: "stable",
+          deleted: false,
+          family: "texlive",
+          gpu: false,
+          image_id: "image-1",
+          official: true,
+          owner_id: ACCOUNT_ID,
+          supersedes_image_id: "image-1",
+        },
+      ],
+    });
+    queryMock.mockResolvedValueOnce({ rows: [] });
+    const { assertRootfsSupersessionAllowed } = await import("./catalog");
+
+    await expect(
+      assertRootfsSupersessionAllowed({
+        image_id: "image-2",
+        ...stableCpu,
+        supersedes_image_id: "image-1",
+      }),
+    ).resolves.toBeUndefined();
+    expect(`${queryMock.mock.calls[1]?.[0]}`).toContain(
+      "candidate.image_id <> current.image_id",
+    );
+  });
+
   it("accepts same-owner community supersession", async () => {
     queryMock
       .mockResolvedValueOnce({
@@ -349,7 +379,7 @@ describe("publishProjectRootfsCatalogEntry", () => {
       ([sql, params]) =>
         `${sql}`.includes("INSERT INTO rootfs_images") &&
         Array.isArray(params) &&
-        params.length === 28,
+        params.length === 29,
     );
     expect(insert).toBeDefined();
     expect(insert?.[1]?.[23]).toBe("published-rootfs");
@@ -387,11 +417,41 @@ describe("saveRootfsImage", () => {
       ([sql, params]) =>
         `${sql}`.includes("INSERT INTO rootfs_images") &&
         Array.isArray(params) &&
-        params.length === 28,
+        params.length === 29,
     );
     expect(insert).toBeDefined();
     expect(insert?.[1]?.[23]).toBe("saved-rootfs");
     expect(result.slug).toBe("saved-rootfs");
+  });
+
+  it("distinguishes clearing a predecessor from omitting it", async () => {
+    const { saveRootfsImage } = await import("./catalog");
+
+    await saveRootfsImage({
+      account_id: ACCOUNT_ID,
+      body: {
+        image: "cocalc.local/rootfs/clear-lineage",
+        label: "Clear lineage",
+        supersedes_image_id: null,
+      },
+    });
+    await saveRootfsImage({
+      account_id: ACCOUNT_ID,
+      body: {
+        image: "cocalc.local/rootfs/keep-lineage",
+        label: "Keep lineage",
+      },
+    });
+
+    const inserts = queryMock.mock.calls.filter(
+      ([sql, params]) =>
+        `${sql}`.includes("INSERT INTO rootfs_images") &&
+        Array.isArray(params) &&
+        params.length === 29,
+    );
+    expect(inserts[0]?.[1]?.[8]).toBeNull();
+    expect(inserts[0]?.[1]?.[28]).toBe(true);
+    expect(inserts[1]?.[1]?.[28]).toBe(false);
   });
 });
 

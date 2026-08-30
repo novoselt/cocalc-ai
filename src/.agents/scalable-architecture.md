@@ -78,7 +78,7 @@ workspace filesystem service (`server/conat/project/workspace-filesystem.ts`).
 
 This is a trusted single-machine deployment: the hub, the projects, and the
 filesystem are the same trust domain, so hub-mediated reads leak nothing that
-direct access would not. The exception is deliberately narrow:
+direct access would not. The download exception is deliberately narrow:
 
 - gated on `isWorkspaceProjectRuntime()`, so hosted deployments are unaffected.
 - authenticated `GET`/`HEAD` only, after the normal `hasAccess` check.
@@ -88,6 +88,22 @@ direct access would not. The exception is deliberately narrow:
 Because the reader is owned by the hub rather than the project process,
 downloads also work for projects that are not running, which matches the
 project-host behaviour users expect.
+
+Workspace mode also permits authenticated chat-store maintenance RPCs to run in
+the hub process. This is a separate, narrowly scoped exception needed because
+there is no project-host data service in workspace mode. These RPCs:
+
+- require the normal project collaborator authorization before touching data.
+- are gated on `isWorkspaceProjectRuntime()`, so hosted deployments continue to
+  use the project-host chat-store service.
+- resolve both the chat and SQLite paths through the same
+  `SandboxedFilesystem` boundary as workspace file operations.
+- cover only chat-store stats, bounded archive reads/search, rotation, deletion,
+  and vacuum operations; they do not create a generic hub filesystem API.
+
+This is acceptable only for the trusted, same-UID workspace runtime. Any future
+isolated workspace mode must move these operations behind its project data
+service rather than retaining direct hub access.
 
 Terminology note:
 

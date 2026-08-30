@@ -135,4 +135,20 @@ describe("StaticMarkdown inline code links", () => {
     expect(links).toHaveLength(1);
     expect(links[0].getAttribute("href")).toBe("sandbox:/home/user/b.ipynb");
   });
+
+  it("rejects lookalike internal file links", () => {
+    const { container } = render(
+      <StaticMarkdown
+        value={
+          "[bad cocalc](cocalc-file://elsewhere?path=%2Ftmp%2Fx) " +
+          "[credential cocalc](cocalc-file://user@open?path=%2Ftmp%2Fx) " +
+          "[bad sandbox](sandbox://elsewhere/home/user/x)"
+        }
+      />,
+    );
+
+    const links = Array.from(container.querySelectorAll("a"));
+    expect(links).toHaveLength(3);
+    expect(links.every((link) => link.getAttribute("href") == null)).toBe(true);
+  });
 });

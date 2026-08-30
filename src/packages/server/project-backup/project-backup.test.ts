@@ -8,6 +8,7 @@ let listBucketsMock: jest.Mock;
 let deleteObjectMock: jest.Mock;
 let seedBackupConfigMock: jest.Mock;
 let rusticMock: jest.Mock;
+let installSandboxBinaryMock: jest.Mock;
 let settings: Record<string, any> = {};
 
 jest.mock("@cocalc/database/pool", () => ({
@@ -37,6 +38,10 @@ jest.mock("fs/promises", () => ({
 jest.mock("@cocalc/backend/sandbox/rustic", () => ({
   __esModule: true,
   default: (...args: any[]) => rusticMock(...args),
+}));
+
+jest.mock("@cocalc/backend/sandbox/install", () => ({
+  install: (...args: any[]) => installSandboxBinaryMock(...args),
 }));
 
 jest.mock("@cocalc/backend/sandbox/exec", () => ({
@@ -150,6 +155,7 @@ describe("project-backup", () => {
       stderr: "",
       code: 0,
     }));
+    installSandboxBinaryMock = jest.fn(async () => undefined);
     jest.doMock("@cocalc/database/settings/server-settings", () => ({
       __esModule: true,
       getServerSettings: jest.fn(async () => settings),
@@ -655,6 +661,11 @@ describe("project-backup", () => {
       ),
     ).toBe(true);
     expect(settings.repos).toHaveLength(4);
+    expect(installSandboxBinaryMock).toHaveBeenCalledTimes(4);
+    expect(installSandboxBinaryMock).toHaveBeenCalledWith("rustic");
+    expect(installSandboxBinaryMock.mock.invocationCallOrder[0]).toBeLessThan(
+      rusticMock.mock.invocationCallOrder[0],
+    );
     expect(rusticMock).toHaveBeenCalledTimes(4);
     expect(settings.repos.map((repo: any) => repo.root)).toEqual([
       expect.stringMatching(/^rustic\/shared-wnam-0001-[0-9a-f-]{36}$/),

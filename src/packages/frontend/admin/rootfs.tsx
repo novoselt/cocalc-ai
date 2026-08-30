@@ -41,6 +41,12 @@ import type {
   RootfsStorageLocation,
 } from "@cocalc/util/rootfs-images";
 import { plural } from "@cocalc/util/misc";
+import {
+  rootfsAdminSaveBody,
+  runRootfsAdminSaveAction,
+  type RootfsAdminCatalogPatch,
+} from "./rootfs-save";
+import { RootfsLineageModal } from "./rootfs-lineage-modal";
 
 const ROOTFS_SCAN_ADMIN_TIMEOUT_MS = 35 * 60 * 1000;
 const ROOTFS_SCAN_HOST_CACHE_TIMEOUT_MS = 8 * 1000;
@@ -53,6 +59,7 @@ type RootfsAdminAction =
   | "unhide"
   | "block"
   | "unblock"
+  | "lineage"
   | "scan";
 
 type RootfsScanHostCandidate = {
@@ -475,6 +482,9 @@ export function RootfsAdmin() {
   const [scanHostId, setScanHostId] = React.useState<string>();
   const [scanHostsLoading, setScanHostsLoading] = React.useState(false);
   const [scanHostError, setScanHostError] = React.useState<string>("");
+  const [lineageEntry, setLineageEntry] =
+    React.useState<RootfsAdminCatalogEntry | null>(null);
+  const [lineageTarget, setLineageTarget] = React.useState("");
 
   function actionLoading(
     entry: RootfsAdminCatalogEntry,
@@ -549,51 +559,53 @@ export function RootfsAdmin() {
 
   async function saveEntry(
     entry: RootfsAdminCatalogEntry,
-    patch: Partial<RootfsAdminCatalogEntry>,
+    patch: RootfsAdminCatalogPatch,
     success: string,
     action: RootfsAdminAction,
-  ) {
+  ): Promise<boolean> {
     try {
-      await runFreshAuthAction(async () => {
-        setActiveAction({ image_id: entry.id, action });
-        try {
-          await hub.system.saveRootfsCatalogEntry({
-            image_id: entry.id,
-            image: entry.image,
-            label: entry.label,
-            description: entry.description,
-            visibility: entry.visibility,
-            arch: entry.arch,
-            gpu: entry.gpu,
-            size_gb: entry.size_gb,
-            tags: entry.tags,
-            theme: entry.theme,
-            family: entry.family,
-            version: entry.version,
-            channel: entry.channel,
-            supersedes_image_id: entry.supersedes_image_id,
-            official: patch.official ?? entry.official,
-            prepull: patch.prepull ?? entry.prepull,
-            hidden: patch.hidden ?? entry.hidden,
-            blocked: patch.blocked ?? entry.blocked,
-            blocked_reason:
-              patch.blocked === false
-                ? undefined
-                : (patch.blocked_reason ??
-                  entry.blocked_reason ??
-                  "Blocked by admin"),
-            browser_id: webapp_client.browser_id,
-          });
-          message.success(success);
-          await load();
-        } finally {
-          setActiveAction(undefined);
-        }
+      return await runRootfsAdminSaveAction({
+        runFreshAuthAction,
+        save: async () => {
+          setActiveAction({ image_id: entry.id, action });
+          try {
+            await hub.system.saveRootfsCatalogEntry({
+              ...rootfsAdminSaveBody(entry, patch),
+              browser_id: webapp_client.browser_id,
+            });
+            message.success(success);
+            await load();
+          } finally {
+            setActiveAction(undefined);
+          }
+        },
       });
     } catch (err) {
       message.error(`Failed to update RootFS image: ${err}`);
       await load();
       setActiveAction(undefined);
+      return false;
+    }
+  }
+
+  function openLineageEditor(entry: RootfsAdminCatalogEntry) {
+    setLineageEntry(entry);
+    setLineageTarget(entry.supersedes_image_id ?? "");
+  }
+
+  async function saveLineage() {
+    if (!lineageEntry) return;
+    const saved = await saveEntry(
+      lineageEntry,
+      { supersedes_image_id: lineageTarget.trim() || null },
+      lineageTarget.trim()
+        ? "RootFS lineage updated."
+        : "RootFS predecessor cleared.",
+      "lineage",
+    );
+    if (saved) {
+      setLineageEntry(null);
+      setLineageTarget("");
     }
   }
 
@@ -745,6 +757,15 @@ export function RootfsAdmin() {
   return (
     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
       <FreshAuthModal {...freshAuthModalProps} />
+      <RootfsLineageModal
+        open={!!lineageEntry}
+        entryLabel={lineageEntry?.label}
+        target={lineageTarget}
+        busy={lineageEntry ? actionLoading(lineageEntry, "lineage") : false}
+        onTargetChange={setLineageTarget}
+        onSave={() => void saveLineage()}
+        onCancel={() => setLineageEntry(null)}
+      />
       <Modal
         open={!!scanEntry}
         title={
@@ -1062,6 +1083,17 @@ export function RootfsAdmin() {
                       onClick={() => void openScanHostPicker(entry)}
                     >
                       Scan now
+                    </Button>
+                  ) : null}
+                  {!entry.deleted ? (
+                    <Button
+                      size="small"
+                      aria-haspopup="dialog"
+                      aria-expanded={lineageEntry?.id === entry.id}
+                      loading={actionLoading(entry, "lineage")}
+                      onClick={() => openLineageEditor(entry)}
+                    >
+                      Edit lineage
                     </Button>
                   ) : null}
                 </Space>

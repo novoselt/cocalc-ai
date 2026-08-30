@@ -115,6 +115,56 @@ describe("LaTeX configuration", () => {
     ).toEqual(["latexmk", "-pdf", "-f", "-deps", "paper.tex"]);
   });
 
+  it("preserves quoted arguments before an unquoted target", () => {
+    const command =
+      "latexmk -e '$pdflatex=q/pdflatex %O -shell-escape %S/' -pdf old.tex";
+    expect(ensureTargetPathIsCorrect(command, "slowbuild.tex")).toBe(
+      "latexmk -e '$pdflatex=q/pdflatex %O -shell-escape %S/' -pdf 'slowbuild.tex'",
+    );
+  });
+
+  it("preserves quoted arguments before a quoted target", () => {
+    const command =
+      "latexmk -e '$pdflatex=q/pdflatex %O -shell-escape %S/' -pdf 'old file.tex'";
+    expect(ensureTargetPathIsCorrect(command, "new file.tex")).toBe(
+      "latexmk -e '$pdflatex=q/pdflatex %O -shell-escape %S/' -pdf 'new file.tex'",
+    );
+  });
+
+  it("repairs an unterminated quoted target without truncating earlier arguments", () => {
+    expect(
+      ensureTargetPathIsCorrect("latexmk -pdf 'broken target.tex", "fixed.tex"),
+    ).toBe("latexmk -pdf 'fixed.tex'");
+  });
+
+  it("quotes apostrophes in the replacement target", () => {
+    expect(ensureTargetPathIsCorrect("pdflatex old.tex", "author's.tex")).toBe(
+      "pdflatex 'author'\\''s.tex'",
+    );
+  });
+
+  it("keeps array command arguments separate", () => {
+    expect(
+      sanitizeLatexCommandArray(
+        [
+          "latexmk",
+          "-e",
+          "$pdflatex=q/pdflatex %O -shell-escape %S/",
+          "-pdf",
+          "old.tex",
+        ],
+        "new.tex",
+      ),
+    ).toEqual([
+      "latexmk",
+      "-e",
+      "$pdflatex=q/pdflatex %O -shell-escape %S/",
+      "-deps",
+      "-pdf",
+      "new.tex",
+    ]);
+  });
+
   it("generates the existing engine command shape", () => {
     expect(
       buildLatexCommand("XeLaTeX", "paper.tex", false, outputDirectory),

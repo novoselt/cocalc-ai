@@ -25,6 +25,34 @@ export interface Link extends SlateElement {
   title?: string;
 }
 
+function isSafeInternalFileUrl(value: string): boolean {
+  const trimmed = value.trim();
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol === "sandbox:") {
+      return url.host === "" && url.pathname.startsWith("/");
+    }
+    if (
+      url.protocol !== "cocalc-file:" ||
+      url.hostname !== "open" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.port !== "" ||
+      (url.pathname !== "" && url.pathname !== "/")
+    ) {
+      return false;
+    }
+    const path = url.searchParams.get("path") ?? "";
+    return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
+  } catch {
+    return false;
+  }
+}
+
+function isSafeSlateLinkUrl(value: string): boolean {
+  return isSafeHtmlUrl(value) || isSafeInternalFileUrl(value);
+}
+
 register({
   slateType: "link",
 
@@ -37,7 +65,7 @@ register({
     const transformedUrl =
       url == null ? undefined : (urlTransform?.(url, "a") ?? url);
     const safeUrl =
-      transformedUrl == null || noSanitize || isSafeHtmlUrl(transformedUrl)
+      transformedUrl == null || noSanitize || isSafeSlateLinkUrl(transformedUrl)
         ? transformedUrl
         : undefined;
     if (AnchorTagComponent != null) {
