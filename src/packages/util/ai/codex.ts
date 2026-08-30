@@ -78,6 +78,16 @@ export function resolveCodexSessionMode(
 
 export const DEFAULT_CODEX_MODEL_NAME = "gpt-5.6-sol";
 export const CODEX_FAST_SERVICE_TIER_REQUEST_VALUE = "fast";
+// These 0.151 features are disabled by default upstream. Keep every CoCalc
+// app-server launch path on the same rollout format and maintenance policy.
+export const CODEX_APP_SERVER_FEATURE_ARGS = [
+  "--enable",
+  "image_generation",
+  "--enable",
+  "background_paginated_rollout_migration",
+  "--enable",
+  "local_thread_store_compression",
+] as const;
 
 const GPT_5_6_SOL_REASONING_LEVELS: CodexReasoningLevel[] = [
   {

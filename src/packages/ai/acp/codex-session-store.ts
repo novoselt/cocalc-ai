@@ -1,16 +1,13 @@
-// Manage Codex session JSONL files on disk.
-// We do this directly because the CLI does not expose a way to update
-// session_meta for resumed sessions (e.g. cwd/sandbox), and Codex
-// cannot override those settings once a session exists. If upstream
-// adds a supported API, we can delete this and call that instead.
+// Read Codex session history for portable CoCalc chat exports. Codex owns all
+// mutation and maintenance of its rollout store.
 
 import fs from "node:fs/promises";
-import { createReadStream, createWriteStream } from "node:fs";
+import { createReadStream } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
-import getLogger from "@cocalc/backend/logger";
+import type { Readable, Transform } from "node:stream";
+import * as zlib from "node:zlib";
 
-const logger = getLogger("ai:acp:codex-session-store");
 const DEFAULT_KEEP_COMPACTIONS = 2;
 // Codex rollout JSONL is not "one line per turn". A single turn can emit many
 // lines (token counts, reasoning deltas, tool calls/outputs, messages, etc.),
@@ -19,8 +16,8 @@ const DEFAULT_KEEP_COMPACTIONS = 2;
 // is accumulated old compaction checkpoints making resume slow and memory
 // hungry, even when the raw file is still well below 100 MiB. Keep the byte
 // threshold modest and also require more compaction checkpoints than we plan to
-// retain, so we only trim when there is actual stale summarized history to
-// discard.
+// retain, so portable exports discard stale summarized history without
+// modifying Codex's authoritative rollout.
 const DEFAULT_TRUNCATE_BYTES = 25 * 1024 * 1024;
 const DEFAULT_MIN_COMPACTIONS_TO_TRUNCATE = DEFAULT_KEEP_COMPACTIONS + 1;
 
@@ -94,7 +91,37 @@ export async function findSessionFile(
 ): Promise<string | undefined> {
   const files = await walk(sessionsRoot);
   const suffix = `-${sessionId}.jsonl`;
-  return files.find((file) => file.endsWith(suffix));
+  return (
+    files.find((file) => file.endsWith(suffix)) ??
+    files.find((file) => file.endsWith(`${suffix}.zst`))
+  );
+}
+
+function isCompressedSessionFile(filePath: string): boolean {
+  return filePath.endsWith(".jsonl.zst");
+}
+
+type ZstdZlib = typeof zlib & {
+  createZstdDecompress?: () => Transform;
+};
+
+function openSessionReadStream(filePath: string): Readable {
+  const source = createReadStream(filePath);
+  if (!isCompressedSessionFile(filePath)) {
+    source.setEncoding("utf8");
+    return source;
+  }
+  const createZstdDecompress = (zlib as ZstdZlib).createZstdDecompress;
+  if (createZstdDecompress == null) {
+    source.destroy();
+    throw new Error(
+      "this Node.js runtime cannot read Codex .jsonl.zst session files",
+    );
+  }
+  const output = source.pipe(createZstdDecompress());
+  output.setEncoding("utf8");
+  output.once("close", () => source.destroy());
+  return output;
 }
 
 export async function readSessionMeta(
@@ -109,7 +136,7 @@ export async function readSessionMeta(
 }
 
 async function readFirstLine(filePath: string): Promise<string> {
-  const stream = createReadStream(filePath, { encoding: "utf8" });
+  const stream = openSessionReadStream(filePath);
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   return await new Promise<string>((resolve, reject) => {
     let done = false;
@@ -130,61 +157,6 @@ async function readFirstLine(filePath: string): Promise<string> {
   });
 }
 
-export async function rewriteSessionMeta(
-  filePath: string,
-  updater: (payload: Record<string, unknown>) => Record<string, unknown>,
-): Promise<boolean> {
-  const firstLine = await readFirstLine(filePath);
-  const parsed = JSON.parse(firstLine) as SessionMetaLine;
-  if (!parsed || parsed.type !== "session_meta") {
-    throw new Error(`invalid session meta in ${filePath}`);
-  }
-  const nextPayload = updater(parsed.payload);
-  if (JSON.stringify(nextPayload) === JSON.stringify(parsed.payload)) {
-    return false;
-  }
-  const nextLine = JSON.stringify({
-    type: "session_meta",
-    payload: nextPayload,
-    timestamp: parsed["timestamp"] ?? new Date().toISOString(),
-  });
-  const dir = path.dirname(filePath);
-  const tmp = path.join(dir, `.tmp-${path.basename(filePath)}-${Date.now()}`);
-  await new Promise<void>((resolve, reject) => {
-    const input = createReadStream(filePath, { encoding: "utf8" });
-    const output = createWriteStream(tmp, { encoding: "utf8" });
-    const rl = readline.createInterface({ input, crlfDelay: Infinity });
-    let wroteFirst = false;
-    rl.on("line", (line) => {
-      if (!wroteFirst) {
-        output.write(`${nextLine}\n`);
-        wroteFirst = true;
-        return;
-      }
-      output.write(`${line}\n`);
-    });
-    rl.on("close", () => {
-      output.end();
-    });
-    rl.on("error", (err) => {
-      input.destroy();
-      output.destroy();
-      reject(err);
-    });
-    input.on("error", (err) => {
-      output.destroy();
-      reject(err);
-    });
-    output.on("error", (err) => {
-      input.destroy();
-      reject(err);
-    });
-    output.on("close", () => resolve());
-  });
-  await fs.rename(tmp, filePath);
-  return true;
-}
-
 async function planSessionHistoryRewrite(
   filePath: string,
   opts?: SessionHistoryOptions,
@@ -195,13 +167,14 @@ async function planSessionHistoryRewrite(
     opts?.minCompactionsToTruncate ?? DEFAULT_MIN_COMPACTIONS_TO_TRUNCATE;
   const force = opts?.force === true;
   const stats = await fs.stat(filePath);
-  if (keepCompactions <= 0) {
+  const compressed = isCompressedSessionFile(filePath);
+  if (keepCompactions <= 0 && !compressed) {
     return {
       originalBytes: stats.size,
       totalCompactions: 0,
     };
   }
-  if (!force && stats.size < maxBytes) {
+  if (!force && !compressed && stats.size < maxBytes) {
     return {
       originalBytes: stats.size,
       totalCompactions: 0,
@@ -212,10 +185,12 @@ async function planSessionHistoryRewrite(
   let firstLine: string | undefined;
   let totalLines = 0;
   let totalCompactions = 0;
-  const input = createReadStream(filePath, { encoding: "utf8" });
+  let decodedBytes = 0;
+  const input = openSessionReadStream(filePath);
   const rl = readline.createInterface({ input, crlfDelay: Infinity });
   try {
     for await (const line of rl) {
+      decodedBytes += Buffer.byteLength(line, "utf8") + 1;
       if (firstLine == null) {
         firstLine = line;
       }
@@ -232,18 +207,19 @@ async function planSessionHistoryRewrite(
     rl.close();
     input.destroy();
   }
+  const originalBytes = compressed ? decodedBytes : stats.size;
 
   if (totalCompactions < minCompactionsToTruncate) {
     return {
       firstLine,
-      originalBytes: stats.size,
+      originalBytes,
       totalCompactions,
     };
   }
   if (compactionLines.length === 0) {
     return {
       firstLine,
-      originalBytes: stats.size,
+      originalBytes,
       totalCompactions,
     };
   }
@@ -251,14 +227,14 @@ async function planSessionHistoryRewrite(
   if (startIndex <= 1) {
     return {
       firstLine,
-      originalBytes: stats.size,
+      originalBytes,
       totalCompactions,
     };
   }
 
   return {
     firstLine,
-    originalBytes: stats.size,
+    originalBytes,
     totalCompactions,
     startIndex,
   };
@@ -268,16 +244,23 @@ async function renderTrimmedSessionHistory(
   filePath: string,
   plan: SessionHistoryPlan,
 ): Promise<Uint8Array> {
-  if (plan.startIndex == null || plan.firstLine == null) {
+  if (
+    plan.startIndex == null &&
+    plan.firstLine == null &&
+    !isCompressedSessionFile(filePath)
+  ) {
     return new Uint8Array(await fs.readFile(filePath));
   }
-  const chunks: string[] = [`${plan.firstLine}\n`];
-  const input = createReadStream(filePath, { encoding: "utf8" });
+  const chunks: string[] = [];
+  if (plan.startIndex != null && plan.firstLine != null) {
+    chunks.push(`${plan.firstLine}\n`);
+  }
+  const input = openSessionReadStream(filePath);
   const rl = readline.createInterface({ input, crlfDelay: Infinity });
   let lineNum = 0;
   try {
     for await (const line of rl) {
-      if (lineNum >= plan.startIndex) {
+      if (plan.startIndex == null || lineNum >= plan.startIndex) {
         chunks.push(`${line}\n`);
       }
       lineNum += 1;
@@ -302,86 +285,4 @@ export async function readPortableSessionHistory(
     exportedBytes: content.byteLength,
     totalCompactions: plan.totalCompactions,
   };
-}
-
-export async function truncateSessionHistoryById(
-  sessionId: string,
-  opts?: SessionHistoryOptions & {
-    sessionsRoot?: string;
-  },
-): Promise<boolean> {
-  const trimmedSessionId = `${sessionId ?? ""}`.trim();
-  if (!trimmedSessionId) return false;
-  const sessionsRoot = opts?.sessionsRoot ?? getSessionsRoot();
-  if (!sessionsRoot) return false;
-  const filePath = await findSessionFile(trimmedSessionId, sessionsRoot);
-  if (!filePath) return false;
-  return await truncateSessionHistory(filePath, opts);
-}
-
-// Legacy Codex sessions can accumulate multi-GB JSONL files containing old
-// compaction checkpoints. CoCalc only needs recent compaction state because its
-// chat log is authoritative, so this bounds resume memory and latency.
-//
-// This replaces the rollout path by rename. Never call it while a Codex
-// app-server has the session resumed: Codex retains an open append descriptor
-// and would keep writing to the unlinked old inode. Truncate only after the old
-// process exits and before a new app-server resumes the session.
-export async function truncateSessionHistory(
-  filePath: string,
-  opts?: SessionHistoryOptions,
-): Promise<boolean> {
-  const plan = await planSessionHistoryRewrite(filePath, opts);
-  if (plan.startIndex == null || plan.firstLine == null) return false;
-  const startIndex = plan.startIndex;
-  const dir = path.dirname(filePath);
-  const tmp = path.join(dir, `.tmp-${path.basename(filePath)}-${Date.now()}`);
-
-  await new Promise<void>((resolve, reject) => {
-    const read = createReadStream(filePath, { encoding: "utf8" });
-    const write = createWriteStream(tmp, { encoding: "utf8" });
-    const rlCopy = readline.createInterface({
-      input: read,
-      crlfDelay: Infinity,
-    });
-    let lineNum = 0;
-    let wroteHeader = false;
-
-    rlCopy.on("line", (line) => {
-      if (!wroteHeader) {
-        write.write(`${plan.firstLine}\n`);
-        wroteHeader = true;
-      }
-      if (lineNum >= startIndex) {
-        write.write(`${line}\n`);
-      }
-      lineNum += 1;
-    });
-    rlCopy.on("close", () => {
-      write.end();
-    });
-    rlCopy.on("error", (err) => {
-      read.destroy();
-      write.destroy();
-      reject(err);
-    });
-    read.on("error", (err) => {
-      write.destroy();
-      reject(err);
-    });
-    write.on("error", (err) => {
-      read.destroy();
-      reject(err);
-    });
-    write.on("close", () => resolve());
-  });
-
-  await fs.rename(tmp, filePath);
-  logger.debug("truncated session history", {
-    filePath,
-    startIndex: plan.startIndex,
-    totalCompactions: plan.totalCompactions,
-    size: plan.originalBytes,
-  });
-  return true;
 }

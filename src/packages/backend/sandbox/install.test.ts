@@ -19,4 +19,22 @@ describe("sandbox tool install scripts", () => {
       `bin/xwayland-satellite" "${SPEC.xwaylandSatellite.path}"`,
     );
   });
+
+  it("installs hash-pinned official Codex binaries atomically", () => {
+    const script = SPEC.codex.script();
+    expect(script).toContain(
+      "https://github.com/openai/codex/releases/download/rust-v0.151.0",
+    );
+    expect(script).toMatch(
+      /codex-(?:x86_64|aarch64)-unknown-linux-musl\.tar\.gz/,
+    );
+    expect(script).toMatch(
+      /codex-code-mode-host-(?:x86_64|aarch64)-unknown-linux-musl\.tar\.gz/,
+    );
+    expect(script).toContain("sha256sum -c -");
+    expect(script).toContain("tar -xOzf");
+    expect(script).toContain(
+      `mv \"${SPEC.codex.path}.tmp\" \"${SPEC.codex.path}\"`,
+    );
+  });
 });

@@ -10,6 +10,7 @@ import getLogger from "@cocalc/backend/logger";
 import { argsJoin } from "@cocalc/util/args";
 import {
   codexServiceTierForAppServer,
+  CODEX_APP_SERVER_FEATURE_ARGS,
   DEFAULT_CODEX_MODEL_NAME,
   normalizeCodexSessionId,
   type CodexSessionConfig,
@@ -34,18 +35,7 @@ import {
   type CodexSiteFundedTurnRuntime,
 } from "./codex-project";
 import { getCodexSiteKeyGovernor } from "./codex-site-key-governor";
-import {
-  findSessionFile,
-  getSessionsRoot,
-  rewriteSessionMeta,
-  truncateSessionHistoryById,
-} from "./codex-session-store";
-
 const logger = getLogger("ai:acp:codex-app-server");
-// Codex 0.120 still marks this under-development and disabled by default.
-// The built-in tool has its own auth/model gates, so enabling the feature flag
-// here does not expose image generation to unsupported auth modes.
-const IMAGE_GENERATION_FEATURE_ARGS = ["--enable", "image_generation"];
 const REQUEST_TIMEOUT_MS = Math.max(
   5_000,
   Number(process.env.COCALC_CODEX_APP_SERVER_TIMEOUT_MS ?? 90_000),
@@ -59,10 +49,6 @@ const TURN_NOTIFICATION_IDLE_TIMEOUT_MS = Math.max(
   Number(process.env.COCALC_CODEX_APP_SERVER_NOTIFICATION_TIMEOUT_MS ?? 60_000),
 );
 const TURN_RECONCILE_FAILURE_LIMIT = 3;
-const SESSION_TRUNCATE_CHECK_INTERVAL_MS = Math.max(
-  60_000,
-  Number(process.env.COCALC_CODEX_SESSION_TRUNCATE_INTERVAL_MS ?? 15 * 60_000),
-);
 const APP_SERVER_IDLE_EXIT_MS = Math.max(
   0,
   Number(process.env.COCALC_CODEX_APP_SERVER_IDLE_EXIT_MS ?? 10 * 60_000),
@@ -1532,36 +1518,6 @@ function toTurnSandboxPolicy(
   }
 }
 
-function getSessionMetaSandboxPolicy(
-  spawned: SpawnedCodexAppServer | undefined,
-  config?: CodexSessionConfig,
-):
-  | { type: "read-only" }
-  | {
-      type: "workspace-write";
-      network_access: true;
-      exclude_tmpdir_env_var: false;
-      exclude_slash_tmp: false;
-    }
-  | { type: "danger-full-access" } {
-  const mode = resolveCodexSessionMode(config);
-  if (spawned?.containerPathMap?.rootHostPath && mode !== "read-only") {
-    return { type: "danger-full-access" };
-  }
-  if (mode === "read-only") {
-    return { type: "read-only" };
-  }
-  if (mode === "full-access") {
-    return { type: "danger-full-access" };
-  }
-  return {
-    type: "workspace-write",
-    network_access: true,
-    exclude_tmpdir_env_var: false,
-    exclude_slash_tmp: false,
-  };
-}
-
 function getCoCalcCliCommand(runtimeEnv?: Record<string, string>): string {
   const rawCliCommand = `${runtimeEnv?.COCALC_CLI_CMD ?? ""}`.trim();
   if (rawCliCommand) return rawCliCommand;
@@ -1651,7 +1607,7 @@ async function spawnStandaloneAppServer(
 ): Promise<SpawnedCodexAppServer> {
   const cmd = opts.binaryPath ?? "codex";
   const args = [
-    ...IMAGE_GENERATION_FEATURE_ARGS,
+    ...CODEX_APP_SERVER_FEATURE_ARGS,
     "app-server",
     "--listen",
     "stdio://",
@@ -1744,6 +1700,7 @@ export async function forkCodexAppServerSession(opts: {
     await loginAppServerIfNeeded(client, spawned.appServerLogin);
     const result = await client.request("thread/fork", {
       threadId: opts.sessionId,
+      excludeTurns: true,
     });
     const sessionId = `${result?.thread?.id ?? ""}`.trim();
     if (!sessionId) {
@@ -1897,8 +1854,6 @@ export class CodexAppServerAgent implements AcpAgent {
   private readonly running = new Map<string, RunningTurn>();
   private readonly runtimes = new Set<CodexAppServerRuntime>();
   private readonly runtimesByAlias = new Map<string, CodexAppServerRuntime>();
-  private readonly lastSessionTruncateAt = new Map<string, number>();
-  private readonly truncatingSessions = new Set<string>();
 
   private registerRuntimeAlias(
     runtime: CodexAppServerRuntime,
@@ -2606,16 +2561,11 @@ export class CodexAppServerAgent implements AcpAgent {
       if (runtime.threadId && runtime.threadId === resumeId) {
         threadResult = { thread: { id: runtime.threadId } };
       } else if (resumeId) {
-        await this.tryEnsureSessionConfig(
-          spawned,
-          resumeId,
-          cwd,
-          effectiveConfig,
-        );
         try {
           threadResult = await client.request("thread/resume", {
             threadId: resumeId,
             ...threadParams,
+            excludeTurns: true,
           });
         } catch (err) {
           if (!hasEstablishedSession) {
@@ -3764,31 +3714,6 @@ export class CodexAppServerAgent implements AcpAgent {
     return path.resolve(base, requested);
   }
 
-  private async ensureSessionConfig(
-    spawned: SpawnedCodexAppServer,
-    sessionId: string,
-    cwd: string,
-    config?: CodexSessionConfig,
-  ): Promise<void> {
-    const codexHome = getCodexHomeHostPath(spawned, cwd);
-    const sessionsRoot = codexHome
-      ? path.join(codexHome, "sessions")
-      : getSessionsRoot();
-    if (!sessionsRoot) return;
-    const filePath = await findSessionFile(sessionId, sessionsRoot);
-    if (!filePath) return;
-    await rewriteSessionMeta(filePath, (payload) => ({
-      ...payload,
-      cwd,
-      approval_policy: "never",
-      sandbox_policy: getSessionMetaSandboxPolicy(spawned, config),
-      service_tier: this.resolveAppServerServiceTier(
-        config,
-        this.effectiveModel(config),
-      ),
-    }));
-  }
-
   private effectiveModel(config: CodexSessionConfig | undefined): string {
     return config?.model ?? this.opts.model ?? DEFAULT_CODEX_MODEL_NAME;
   }
@@ -3801,70 +3726,6 @@ export class CodexAppServerAgent implements AcpAgent {
       model,
       serviceTier: config?.serviceTier,
     });
-  }
-
-  private async tryEnsureSessionConfig(
-    spawned: SpawnedCodexAppServer,
-    sessionId: string,
-    cwd: string,
-    config?: CodexSessionConfig,
-  ): Promise<void> {
-    try {
-      await this.ensureSessionConfig(spawned, sessionId, cwd, config);
-    } catch (err) {
-      logger.warn("codex app-server: failed to update session metadata", {
-        sessionId,
-        cwd,
-        err: `${err}`,
-      });
-    }
-  }
-
-  private async maybeTruncateSessionHistory({
-    sessionId,
-    spawned,
-    cwd,
-    force = false,
-  }: {
-    sessionId?: string;
-    spawned: SpawnedCodexAppServer;
-    cwd: string;
-    force?: boolean;
-  }): Promise<void> {
-    const normalizedSessionId = normalizeCodexSessionId(sessionId);
-    if (!normalizedSessionId) return;
-    if (this.truncatingSessions.has(normalizedSessionId)) return;
-    const now = Date.now();
-    const last = this.lastSessionTruncateAt.get(normalizedSessionId) ?? 0;
-    if (!force && now - last < SESSION_TRUNCATE_CHECK_INTERVAL_MS) {
-      return;
-    }
-    const codexHome = getCodexHomeHostPath(spawned, cwd);
-    if (!codexHome) return;
-    this.truncatingSessions.add(normalizedSessionId);
-    this.lastSessionTruncateAt.set(normalizedSessionId, now);
-    try {
-      const truncated = await truncateSessionHistoryById(normalizedSessionId, {
-        sessionsRoot: path.join(codexHome, "sessions"),
-        force,
-      });
-      if (truncated) {
-        logger.debug("codex app-server: truncated session history", {
-          sessionId: normalizedSessionId,
-          cwd,
-          codexHome,
-        });
-      }
-    } catch (err) {
-      logger.warn("codex app-server: failed to truncate session history", {
-        sessionId: normalizedSessionId,
-        cwd,
-        codexHome,
-        err: `${err}`,
-      });
-    } finally {
-      this.truncatingSessions.delete(normalizedSessionId);
-    }
   }
 
   private async spawnAppServer({
