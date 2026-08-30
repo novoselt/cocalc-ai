@@ -1,6 +1,38 @@
-import { classifyRunStreamMessage, getRunLifecycleType } from "../run-protocol";
+import {
+  classifyRunStreamEnd,
+  classifyRunStreamMessage,
+  getRunLifecycleType,
+  shouldReplayLiveRunSnapshot,
+} from "../run-protocol";
 
 describe("jupyter run protocol classification", () => {
+  it("distinguishes completion from transport loss", () => {
+    expect(
+      classifyRunStreamEnd({ sawRunDone: true, socketState: "closed" }),
+    ).toBe("complete");
+    expect(
+      classifyRunStreamEnd({ sawRunDone: false, socketState: "ready" }),
+    ).toBe("complete");
+    expect(
+      classifyRunStreamEnd({ sawRunDone: false, socketState: "closed" }),
+    ).toBe("transport_lost");
+  });
+
+  it("replays a completed snapshot when disconnect recovery requires it", () => {
+    expect(
+      shouldReplayLiveRunSnapshot({
+        done: true,
+        needsCompletionReplay: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldReplayLiveRunSnapshot({
+        done: true,
+        needsCompletionReplay: false,
+      }),
+    ).toBe(false);
+  });
+
   it("parses lifecycle from either lifecycle or msg_type field", () => {
     expect(getRunLifecycleType({ lifecycle: "cell_start" })).toBe("cell_start");
     expect(getRunLifecycleType({ msg_type: "cell_done" })).toBe("cell_done");

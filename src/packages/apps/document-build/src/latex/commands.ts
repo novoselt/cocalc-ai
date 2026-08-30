@@ -92,13 +92,53 @@ export function ensureTargetPathIsCorrect(
   filename: string,
 ): string {
   command = command.trim();
-  const quoted = `'${filename}'`;
-  const quote = command.indexOf("'");
-  if (quote === -1) {
-    const space = command.lastIndexOf(" ");
-    return space === -1 ? command : `${command.slice(0, space)} ${quoted}`;
+  const words = shellWordSpans(command);
+  if (words.length < 2) {
+    return command;
   }
-  return `${command.slice(0, quote).trim()} ${quoted}`;
+  const target = words[words.length - 1];
+  return `${command.slice(0, target.start)}${shellQuote(filename)}`;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.split("'").join("'\\''")}'`;
+}
+
+function shellWordSpans(
+  command: string,
+): Array<{ start: number; end: number }> {
+  const words: Array<{ start: number; end: number }> = [];
+  let start: number | undefined;
+  let quote: "'" | '"' | undefined;
+
+  for (let i = 0; i < command.length; i += 1) {
+    const char = command[i];
+    if (quote != null) {
+      if (char === quote) {
+        quote = undefined;
+      } else if (quote === '"' && char === "\\") {
+        i += 1;
+      }
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (start != null) {
+        words.push({ start, end: i });
+        start = undefined;
+      }
+      continue;
+    }
+    start ??= i;
+    if (char === "'" || char === '"') {
+      quote = char;
+    } else if (char === "\\") {
+      i += 1;
+    }
+  }
+  if (start != null) {
+    words.push({ start, end: command.length });
+  }
+  return words;
 }
 
 export function sanitizeLatexCommandString(
