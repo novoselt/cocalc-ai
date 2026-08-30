@@ -1730,6 +1730,7 @@ export interface Purchases {
   getClaimableMembershipPackages: (opts?: {
     account_id?: string;
     include_claimed_site_license_pools?: boolean;
+    site_only?: boolean;
   }) => Promise<ClaimableMembershipPackage[]>;
   claimMembershipPackageSeat: (opts?: {
     account_id?: string;

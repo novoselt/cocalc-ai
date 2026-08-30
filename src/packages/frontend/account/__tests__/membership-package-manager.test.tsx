@@ -2188,6 +2188,19 @@ describe("ClaimableMembershipPackagesPanel", () => {
     sendVerificationEmail.mockResolvedValue(undefined);
   });
 
+  it("can limit the shared manager to site-license opportunities", async () => {
+    getClaimableMembershipPackages.mockResolvedValue([]);
+
+    render(<ClaimableMembershipPackagesPanel siteOnly />);
+
+    await waitFor(() =>
+      expect(getClaimableMembershipPackages).toHaveBeenCalledWith({
+        include_claimed_site_license_pools: true,
+        site_only: true,
+      }),
+    );
+  });
+
   it("shows a resend verification callout when claiming is blocked by unverified email", async () => {
     emailVerified = false;
     getClaimableMembershipPackages.mockResolvedValue([]);

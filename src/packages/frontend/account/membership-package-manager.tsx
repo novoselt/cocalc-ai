@@ -228,6 +228,7 @@ interface ClaimableMembershipPackagesPanelProps {
   onChanged?: () => void;
   onSiteLicenseTitleChange?: (title?: string) => void;
   refreshToken?: number;
+  siteOnly?: boolean;
 }
 
 function CompactField({
@@ -962,6 +963,7 @@ export function ClaimableMembershipPackagesPanel({
   onChanged,
   onSiteLicenseTitleChange,
   refreshToken,
+  siteOnly = false,
 }: ClaimableMembershipPackagesPanelProps) {
   const account_id = useTypedRedux("account", "account_id");
   const email_address = useTypedRedux("account", "email_address");
@@ -1000,6 +1002,7 @@ export function ClaimableMembershipPackagesPanel({
     try {
       const nextClaimables = await getClaimableMembershipPackages({
         include_claimed_site_license_pools: true,
+        ...(siteOnly ? { site_only: true } : {}),
       });
       setClaimables(nextClaimables);
       onSiteLicenseTitleChange?.(
@@ -1014,7 +1017,7 @@ export function ClaimableMembershipPackagesPanel({
 
   useEffect(() => {
     void refreshClaimables();
-  }, [account_id, refreshToken]);
+  }, [account_id, refreshToken, siteOnly]);
 
   async function resendVerificationEmail(): Promise<void> {
     setError("");

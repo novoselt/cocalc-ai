@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAsyncEffect, useTypedRedux } from "@cocalc/frontend/app-framework";
 import api from "@cocalc/frontend/client/api";
@@ -82,6 +82,14 @@ export function useMembershipSettingsData(): {
   const [error, setError] = useState<string>("");
   const [refreshToken, setRefreshToken] = useState<number>(0);
   const previousAccountIdRef = useRef(account_id);
+
+  useEffect(() => {
+    const refresh = () => setRefreshToken((value) => value + 1);
+    window.addEventListener("cocalc:membership-changed", refresh);
+    return () => {
+      window.removeEventListener("cocalc:membership-changed", refresh);
+    };
+  }, []);
 
   useAsyncEffect(
     async (isMounted) => {

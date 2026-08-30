@@ -35,6 +35,10 @@ import { NavbarMembershipSetting } from "./navbar-membership-setting";
 import { SettingsCard } from "./settings-card";
 import type { SettingsPageDefinition } from "./settings-page";
 import { openAccountSettings } from "./settings-routing";
+import {
+  normalizeSiteLicenseReminderDismissals,
+  SITE_LICENSE_REMINDER_DISMISSALS,
+} from "./site-license-reminder-preferences";
 import { UseBalance } from "./balance-toward-subs";
 
 const { Paragraph, Text } = Typography;
@@ -94,6 +98,13 @@ function MembershipSettingsContent() {
     "account",
     "membership_plan_chooser_requested",
   );
+  const otherSettings = useTypedRedux("account", "other_settings");
+  const siteLicenseReminderDismissals = normalizeSiteLicenseReminderDismissals(
+    otherSettings?.get?.(SITE_LICENSE_REMINDER_DISMISSALS),
+  );
+  const hiddenSiteLicenseReminderCount = Object.keys(
+    siteLicenseReminderDismissals,
+  ).length;
   const stripeEnabled = !!useTypedRedux("customize", "stripe_enabled");
   const [purchaseOpen, setPurchaseOpen] = useState<boolean>(false);
   const [purchaseCurrentClass, setPurchaseCurrentClass] = useState<
@@ -428,6 +439,28 @@ function MembershipSettingsContent() {
                 Manage site license membership
               </Button>
             </Space>
+          ) : null}
+          {hiddenSiteLicenseReminderCount > 0 ? (
+            <Alert
+              showIcon
+              type="info"
+              title={`Site-license reminders are hidden for ${hiddenSiteLicenseReminderCount} ${
+                hiddenSiteLicenseReminderCount === 1 ? "license" : "licenses"
+              }`}
+              description="You previously chose not to show claim reminders for these licenses."
+              action={
+                <Button
+                  onClick={() =>
+                    accountActions.set_other_settings(
+                      SITE_LICENSE_REMINDER_DISMISSALS,
+                      {},
+                    )
+                  }
+                >
+                  Show reminders again
+                </Button>
+              }
+            />
           ) : null}
           {reverificationError ? (
             <Alert type="error" title={reverificationError} />

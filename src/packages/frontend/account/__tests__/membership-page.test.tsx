@@ -21,17 +21,25 @@ const getSiteLicenseAffiliationReverificationStatus = jest.fn();
 const refreshSiteLicenseAffiliationVerification = jest.fn();
 const refresh = jest.fn();
 const setAccountState = jest.fn();
+const setOtherSettings = jest.fn();
 let planChooserRequested = false;
+let siteLicenseReminderDismissals: Record<string, number> = {};
 
 jest.mock("../membership-settings-data", () => ({
   useMembershipSettingsData: () => useMembershipSettingsData(),
 }));
 
 jest.mock("@cocalc/frontend/app-framework", () => ({
-  useActions: () => ({ setState: setAccountState }),
+  useActions: () => ({
+    setState: setAccountState,
+    set_other_settings: setOtherSettings,
+  }),
   useTypedRedux: (store: string, key: string) => {
     if (store === "account" && key === "membership_plan_chooser_requested") {
       return planChooserRequested;
+    }
+    if (store === "account" && key === "other_settings") {
+      return { get: () => siteLicenseReminderDismissals };
     }
     return store === "customize" && key === "stripe_enabled";
   },
@@ -97,18 +105,24 @@ jest.mock("@cocalc/frontend/purchases/api", () => ({
 
 jest.mock("antd", () => {
   const Box = ({
+    action,
     children,
+    description,
     message,
     title,
   }: {
+    action?: ReactNode;
     children?: ReactNode;
+    description?: ReactNode;
     message?: ReactNode;
     title?: ReactNode;
   }) => (
     <section>
       {title ? <h2>{title}</h2> : null}
       {message}
+      {description}
       {children}
+      {action}
     </section>
   );
   const Modal = Object.assign(
@@ -182,6 +196,7 @@ describe("MembershipPage", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     planChooserRequested = false;
+    siteLicenseReminderDismissals = {};
     getSiteLicenseAffiliationReverificationStatus.mockResolvedValue({
       grace_expired_count: 0,
       pending_count: 0,
@@ -198,6 +213,26 @@ describe("MembershipPage", () => {
     render(<MembershipPage />);
 
     expect(screen.getByText("membership navigation setting")).toBeVisible();
+  });
+
+  it("restores permanently hidden site-license reminders", () => {
+    siteLicenseReminderDismissals = {
+      "site-license-1": Date.now(),
+      "site-license-2": Date.now(),
+    };
+    useMembershipSettingsData.mockReturnValue(
+      baseData({ membership: { class: "free", source: "free" } }),
+    );
+
+    render(<MembershipPage />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show reminders again" }),
+    );
+
+    expect(setOtherSettings).toHaveBeenCalledWith(
+      "site_license_reminder_dismissals",
+      {},
+    );
   });
 
   it("opens the personal plan chooser from a pending navigation intent", async () => {

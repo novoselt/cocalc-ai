@@ -805,19 +805,54 @@ async function getSiteLicenseTermsForPackage({
   return rows[0] ?? {};
 }
 
+async function getSiteLicenseTermsForPackages({
+  packages,
+  client,
+}: {
+  packages: MembershipPackageRecord[];
+  client?: PoolClient;
+}): Promise<Map<string, RawSiteLicenseTerms>> {
+  const siteLicenseIds = Array.from(
+    new Set(
+      packages
+        .map((pkg) => getPackageStringMetadata(pkg, "site_license_id"))
+        .filter((id): id is string => !!id && isValidUUID(id)),
+    ),
+  );
+  if (siteLicenseIds.length === 0) {
+    return new Map();
+  }
+  const { rows } = await getQueryClient(client).query<RawSiteLicenseTerms>(
+    `SELECT id, name, organization_name, owner_account_id,
+            allowed_domains, custom_terms_url, custom_policy_url,
+            terms_version_label
+       FROM site_licenses
+       WHERE id = ANY($1::uuid[])`,
+    [siteLicenseIds],
+  );
+  return new Map(
+    rows
+      .filter((row): row is RawSiteLicenseTerms & { id: string } => !!row.id)
+      .map((row) => [row.id, row]),
+  );
+}
+
 async function resolveSiteLicensePoolEmailEligibilityForPackage({
   pkg,
   verified_email_address,
+  terms: suppliedTerms,
   client,
 }: {
   pkg: MembershipPackageRecord;
   verified_email_address?: string | null;
+  terms?: RawSiteLicenseTerms;
   client?: PoolClient;
 }): Promise<SiteLicensePoolEmailEligibility & { terms: RawSiteLicenseTerms }> {
   if (pkg.kind !== "site") {
     throw Error("site-license pool not found");
   }
-  const terms = await getSiteLicenseTermsForPackage({ pkg, client });
+  const terms =
+    suppliedTerms ?? (await getSiteLicenseTermsForPackage({ pkg, client }));
   const license_domains = normalizeSitePackageDomains(
     terms.allowed_domains ?? [],
   );
@@ -2105,15 +2140,22 @@ export async function listMembershipPackagesForOwner({
     .filter((row) => row != null);
 }
 
-export async function listMembershipPackageAssignments({
-  package_id,
+async function listMembershipPackageAssignmentsByPackage({
+  package_ids,
   include_revoked = false,
   client,
 }: {
-  package_id: string;
+  package_ids: string[];
   include_revoked?: boolean;
   client?: PoolClient;
-}): Promise<MembershipPackageAssignment[]> {
+}): Promise<Map<string, MembershipPackageAssignment[]>> {
+  const uniquePackageIds = Array.from(new Set(package_ids));
+  const assignmentsByPackage = new Map<string, MembershipPackageAssignment[]>(
+    uniquePackageIds.map((packageId) => [packageId, []]),
+  );
+  if (uniquePackageIds.length === 0) {
+    return assignmentsByPackage;
+  }
   const { rows } = await getQueryClient(
     client,
   ).query<RawMembershipPackageAssignment>(
@@ -2140,13 +2182,40 @@ export async function listMembershipPackageAssignments({
        AND g.account_id = a.account_id
        AND g.revoked_at IS NULL
        AND (g.metadata->>'assignment_id' = a.id::text OR g.metadata->>'assignment_id' IS NULL)
-      WHERE a.package_id = $1
+      WHERE a.package_id = ANY($1::uuid[])
         AND ($2::boolean OR a.revoked_at IS NULL)
-      ORDER BY a.assigned_at DESC NULLS LAST, a.created DESC NULLS LAST
+      ORDER BY a.package_id,
+               a.assigned_at DESC NULLS LAST,
+               a.created DESC NULLS LAST
     `,
-    [package_id, include_revoked],
+    [uniquePackageIds, include_revoked],
   );
-  return rows.map(normalizeAssignmentRecord);
+  for (const row of rows) {
+    assignmentsByPackage
+      .get(row.package_id)
+      ?.push(normalizeAssignmentRecord(row));
+  }
+  return assignmentsByPackage;
+}
+
+export async function listMembershipPackageAssignments({
+  package_id,
+  include_revoked = false,
+  client,
+}: {
+  package_id: string;
+  include_revoked?: boolean;
+  client?: PoolClient;
+}): Promise<MembershipPackageAssignment[]> {
+  return (
+    (
+      await listMembershipPackageAssignmentsByPackage({
+        package_ids: [package_id],
+        include_revoked,
+        client,
+      })
+    ).get(package_id) ?? []
+  );
 }
 
 export async function listMembershipPackageDetailsForOwner({
@@ -2543,10 +2612,12 @@ export async function revokeMembershipPackageSeat(
 export async function listClaimableMembershipPackagesForAccount({
   account_id,
   include_claimed_site_license_pools = false,
+  site_only = false,
   client,
 }: {
   account_id: string;
   include_claimed_site_license_pools?: boolean;
+  site_only?: boolean;
   client?: PoolClient;
 }): Promise<ClaimableMembershipPackage[]> {
   const verifiedEmailAddress = await getVerifiedEmailAddressForAccount({
@@ -2561,6 +2632,7 @@ export async function listClaimableMembershipPackagesForAccount({
   const claimables = await listClaimableMembershipPackagesAcrossCluster({
     account_id,
     include_claimed_site_license_pools,
+    site_only,
     verified_email_addresses: verifiedEmailAddresses,
     client,
   });
@@ -2574,11 +2646,13 @@ export async function listClaimableMembershipPackagesForAccount({
 export async function listLocalClaimableMembershipPackagesForVerifiedEmails({
   account_id,
   include_claimed_site_license_pools = false,
+  site_only = false,
   verified_email_addresses,
   client,
 }: {
   account_id: string;
   include_claimed_site_license_pools?: boolean;
+  site_only?: boolean;
   verified_email_addresses: string[];
   client?: PoolClient;
 }): Promise<ClaimableMembershipPackage[]> {
@@ -2611,22 +2685,33 @@ export async function listLocalClaimableMembershipPackagesForVerifiedEmails({
       FROM membership_packages
       WHERE (starts_at IS NULL OR starts_at <= NOW())
         AND (expires_at IS NULL OR expires_at > NOW())
+        AND (NOT $1::boolean OR kind = 'site')
     `,
+    [site_only],
   );
   const allPackages = rows
     .map((row) => normalizePackageRecord(row))
     .filter((row): row is MembershipPackageRecord => !!row);
+  const assignmentsByPackage = await listMembershipPackageAssignmentsByPackage({
+    package_ids: allPackages.map((pkg) => pkg.id),
+    include_revoked: false,
+    client,
+  });
+  const termsBySiteLicense = await getSiteLicenseTermsForPackages({
+    packages: allPackages.filter((pkg) => pkg.kind === "site"),
+    client,
+  });
+  const getTerms = (pkg: MembershipPackageRecord): RawSiteLicenseTerms => {
+    const siteLicenseId = getPackageStringMetadata(pkg, "site_license_id");
+    return siteLicenseId ? (termsBySiteLicense.get(siteLicenseId) ?? {}) : {};
+  };
   const claimables = new Map<string, ClaimableMembershipPackage>();
   const claimIdentityCache = new Map<
     string,
     { account_id?: string | null } | null
   >();
   for (const pkg of allPackages) {
-    const assignments = await listMembershipPackageAssignments({
-      package_id: pkg.id,
-      include_revoked: false,
-      client,
-    });
+    const assignments = assignmentsByPackage.get(pkg.id) ?? [];
     const accountAssignment = assignments.find(
       (assignment) => assignment.account_id === account_id,
     );
@@ -2644,7 +2729,7 @@ export async function listLocalClaimableMembershipPackagesForVerifiedEmails({
           emailSet.has(accountAssignment.email_address)
             ? accountAssignment.email_address
             : verifiedEmailAddresses[0];
-        const terms = await getSiteLicenseTermsForPackage({ pkg, client });
+        const terms = getTerms(pkg);
         claimables.set(pkg.id, {
           package_id: pkg.id,
           assignment_id: accountAssignment.id,
@@ -2683,7 +2768,7 @@ export async function listLocalClaimableMembershipPackagesForVerifiedEmails({
         assignment.email_address &&
         emailSet.has(assignment.email_address)
       ) {
-        const terms = await getSiteLicenseTermsForPackage({ pkg, client });
+        const terms = getTerms(pkg);
         claimables.set(pkg.id, {
           package_id: pkg.id,
           assignment_id: assignment.id,
@@ -2731,6 +2816,7 @@ export async function listLocalClaimableMembershipPackagesForVerifiedEmails({
         await resolveSiteLicensePoolEmailEligibilityForPackage({
           pkg,
           verified_email_address: verifiedEmailAddresses[0],
+          terms: getTerms(pkg),
           client,
         });
       if (eligibility.matched_email_address == null) {
@@ -2815,11 +2901,13 @@ export async function listLocalClaimableMembershipPackagesForVerifiedEmails({
 async function listClaimableMembershipPackagesAcrossCluster({
   account_id,
   include_claimed_site_license_pools = false,
+  site_only = false,
   verified_email_addresses,
   client,
 }: {
   account_id: string;
   include_claimed_site_license_pools?: boolean;
+  site_only?: boolean;
   verified_email_addresses: string[];
   client?: PoolClient;
 }): Promise<ClaimableMembershipPackageWithBay[]> {
@@ -2837,16 +2925,20 @@ async function listClaimableMembershipPackagesAcrossCluster({
     }
   };
   const seedBayId = getSeedBayId();
-  addClaimables(
-    await listLocalClaimableMembershipPackagesForVerifiedEmails({
-      account_id,
-      include_claimed_site_license_pools,
-      verified_email_addresses,
-      client,
-    }),
-    getConfiguredBayId(),
-    (row) => row.kind !== "site" || isSeedBay(),
-  );
+  if (!site_only || isSeedBay()) {
+    addClaimables(
+      await listLocalClaimableMembershipPackagesForVerifiedEmails({
+        account_id,
+        include_claimed_site_license_pools,
+        site_only,
+        verified_email_addresses,
+        client,
+      }),
+      getConfiguredBayId(),
+      (row) =>
+        site_only ? row.kind === "site" : row.kind !== "site" || isSeedBay(),
+    );
+  }
   if (!isSeedBay()) {
     const seedRows = await createInterBayAccountLocalClient({
       client: getInterBayFabricClient(),
@@ -2854,9 +2946,13 @@ async function listClaimableMembershipPackagesAcrossCluster({
     }).getClaimableMembershipPackages({
       account_id,
       include_claimed_site_license_pools,
+      site_only,
       verified_email_addresses,
     });
     addClaimables(seedRows, seedBayId, (row) => row.kind === "site");
+  }
+  if (site_only) {
+    return sortClaimableMembershipPackages(Array.from(claimables.values()));
   }
   for (const bay_id of getConfiguredClusterBayIdsForStaticEnumerationOnly()) {
     if (bay_id === getConfiguredBayId() || bay_id === seedBayId) continue;

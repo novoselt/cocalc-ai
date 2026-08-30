@@ -1553,13 +1553,20 @@ async function startAccountLocalService(): Promise<void> {
     getClaimableMembershipPackages: async ({
       account_id,
       include_claimed_site_license_pools,
+      site_only,
       verified_email_addresses,
     }) => {
       const rows = await listLocalClaimableMembershipPackagesForVerifiedEmails({
         account_id,
         include_claimed_site_license_pools,
+        site_only,
         verified_email_addresses,
       });
+      if (site_only) {
+        return isSeedSiteLicenseBay()
+          ? rows.filter((row) => row.kind === "site")
+          : [];
+      }
       return isSeedSiteLicenseBay()
         ? rows
         : rows.filter((row) => row.kind !== "site");
@@ -1567,10 +1574,12 @@ async function startAccountLocalService(): Promise<void> {
     getClaimableMembershipPackagesForAccount: async ({
       account_id,
       include_claimed_site_license_pools,
+      site_only,
     }) =>
       await listClaimableMembershipPackagesForAccount({
         account_id,
         include_claimed_site_license_pools,
+        site_only,
       }),
     claimMembershipPackageSeat: async ({
       package_id,
