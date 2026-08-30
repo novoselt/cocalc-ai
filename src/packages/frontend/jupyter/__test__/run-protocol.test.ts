@@ -2,6 +2,7 @@ import {
   classifyRunStreamEnd,
   classifyRunStreamMessage,
   getRunLifecycleType,
+  shouldReplayLiveRunSnapshot,
 } from "../run-protocol";
 
 describe("jupyter run protocol classification", () => {
@@ -15,6 +16,21 @@ describe("jupyter run protocol classification", () => {
     expect(
       classifyRunStreamEnd({ sawRunDone: false, socketState: "closed" }),
     ).toBe("transport_lost");
+  });
+
+  it("replays a completed snapshot when disconnect recovery requires it", () => {
+    expect(
+      shouldReplayLiveRunSnapshot({
+        done: true,
+        needsCompletionReplay: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldReplayLiveRunSnapshot({
+        done: true,
+        needsCompletionReplay: false,
+      }),
+    ).toBe(false);
   });
 
   it("parses lifecycle from either lifecycle or msg_type field", () => {

@@ -60,6 +60,16 @@ export function classifyRunStreamEnd({
   return sawRunDone || socketState === "ready" ? "complete" : "transport_lost";
 }
 
+export function shouldReplayLiveRunSnapshot({
+  done,
+  needsCompletionReplay,
+}: {
+  done?: boolean;
+  needsCompletionReplay: boolean;
+}): boolean {
+  return done !== true || needsCompletionReplay;
+}
+
 export function classifyRunStreamMessage({
   message,
   activeRunId,

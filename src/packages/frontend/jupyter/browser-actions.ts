@@ -109,7 +109,11 @@ import {
   decideInitialWatchSource,
   refineInitialWatchSourceDecision,
 } from "./watch-policy";
-import { classifyRunStreamEnd, classifyRunStreamMessage } from "./run-protocol";
+import {
+  classifyRunStreamEnd,
+  classifyRunStreamMessage,
+  shouldReplayLiveRunSnapshot,
+} from "./run-protocol";
 import { doesPersistentCellSatisfyRunCellOverlay } from "./run-cell-overlay";
 import {
   createRunBatchOrderState,
@@ -139,6 +143,7 @@ import { recordProductActivity } from "@cocalc/frontend/monitoring/product-activ
 const OUTPUT_FPS = 29;
 const DEFAULT_OUTPUT_MESSAGE_LIMIT = 500;
 const STALE_LIVE_RUN_IDLE_CHECK_MS = 10_000;
+const LIVE_RUN_COMPLETION_REPLAY_GRACE_MS = 60_000;
 const WATCH_RECREATE_WAIT = 3000;
 const JUPYTER_OPEN_INCOMPLETE_AFTER_MS = 45_000;
 
@@ -255,6 +260,7 @@ export class JupyterActions extends JupyterActions0 {
     }
   >();
   private ignoredLiveRunIds = new globalThis.Map<string, number>();
+  private liveRunCompletionReplayIds = new globalThis.Map<string, number>();
   private liveRunReplayPoll?: ReturnType<typeof setInterval>;
   private kernelStatusRefreshTimeout?: ReturnType<typeof setTimeout>;
   private completedLiveRunIds = new globalThis.Map<string, number>();
@@ -692,6 +698,25 @@ export class JupyterActions extends JupyterActions0 {
     this.ignoredLiveRunIds?.delete(runId);
   };
 
+  private requireLiveRunCompletionReplay = (runId: string) => {
+    this.liveRunCompletionReplayIds.set(
+      runId,
+      Date.now() + LIVE_RUN_COMPLETION_REPLAY_GRACE_MS,
+    );
+  };
+
+  private needsLiveRunCompletionReplay = (runId: string): boolean => {
+    const until = this.liveRunCompletionReplayIds.get(runId);
+    if (until == null) {
+      return false;
+    }
+    if (until < Date.now()) {
+      this.liveRunCompletionReplayIds.delete(runId);
+      return false;
+    }
+    return true;
+  };
+
   private shouldIgnoreLiveRunId = (runId: string): boolean => {
     this.ignoredLiveRunIds ??= new globalThis.Map<string, number>();
     const until = this.ignoredLiveRunIds.get(runId);
@@ -706,6 +731,7 @@ export class JupyterActions extends JupyterActions0 {
   };
 
   private rememberCompletedLiveRunId = (runId: string) => {
+    this.liveRunCompletionReplayIds.delete(runId);
     this.completedLiveRunIds ??= new globalThis.Map<string, number>();
     this.completedLiveRunIds.set(runId, Date.now() + 30_000);
   };
@@ -902,6 +928,7 @@ export class JupyterActions extends JupyterActions0 {
     reason: "cell_done" | "run_done" | "stream_end",
     opts: { preferPersistent?: boolean; refreshKernelStatus?: boolean } = {},
   ) => {
+    this.liveRunCompletionReplayIds.delete(runId);
     const ctx = this.liveRunContexts.get(runId);
     if (ctx == null) {
       this.clearLiveRunGapRepair(runId);
@@ -1157,13 +1184,18 @@ export class JupyterActions extends JupyterActions0 {
       const runId = `${snapshot?.run_id ?? ""}`.trim();
       const needsCompletionReplay =
         runId !== "" &&
-        (this.liveRunBatchOrder.has(runId) || this.liveRunContexts.has(runId));
+        (this.needsLiveRunCompletionReplay(runId) ||
+          this.liveRunBatchOrder.has(runId) ||
+          this.liveRunContexts.has(runId));
       return (
         snapshot?.path === this.liveRunPath &&
         !this.hasCompletedLiveRunId(runId) &&
         typeof snapshot?.run_id === "string" &&
         Array.isArray(snapshot?.batches) &&
-        (snapshot?.done !== true || needsCompletionReplay)
+        shouldReplayLiveRunSnapshot({
+          done: snapshot?.done,
+          needsCompletionReplay,
+        })
       );
     });
     const oldActiveSnapshots = snapshots0.filter(
@@ -1742,6 +1774,7 @@ export class JupyterActions extends JupyterActions0 {
       this.liveRunGapRepairs.clear();
       this.ignoredLiveRunIds.clear();
       this.completedLiveRunIds.clear();
+      this.liveRunCompletionReplayIds.clear();
       this.clearAllRunCellOverlays();
       this.jupyterClient?.close();
       this.jupyterClient = undefined;
@@ -3721,6 +3754,7 @@ export class JupyterActions extends JupyterActions0 {
         // Live-run replay or the runtime-state snapshot remains authoritative.
         this.deletePendingCells(ids);
         this.forgetIgnoredLiveRunId(runId);
+        this.requireLiveRunCompletionReplay(runId);
         void this.replaySharedLiveRuns().catch((err) => {
           if (!this.isClosed()) {
             console.warn(
