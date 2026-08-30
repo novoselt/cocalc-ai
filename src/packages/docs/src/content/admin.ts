@@ -764,6 +764,8 @@ cocalc admin crm tasks create CRM-2026-000123 \
 Run \`cocalc admin crm --help\` and each nested command's help for the full
 command tree. Every admin UI mutation has a CLI equivalent.
 CRM task deadlines must be RFC3339 timestamps with an explicit timezone.
+Manual activity commands require \`--occurred-at\` in the same format. The Admin
+UI captures a note's event time once for preview and reuses it for commit.
 
 ## Complete CLI leaf-command inventory
 

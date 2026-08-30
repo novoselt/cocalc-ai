@@ -434,7 +434,7 @@ export interface CrmActivityCreateRequest extends CrmMutationRequest {
   person?: string;
   opportunity?: string;
   task?: string;
-  occurred_at?: string;
+  occurred_at: string;
   supersedes_activity_id?: string;
 }
 

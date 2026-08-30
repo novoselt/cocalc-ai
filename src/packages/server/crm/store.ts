@@ -235,6 +235,10 @@ function rfc3339TimestampRequired(value: unknown, name: string): string {
       `${name} must be an RFC3339 timestamp with an explicit timezone, e.g. 2026-09-01T17:00:00Z`,
     );
   }
+  const [hour, minute, second] = raw.slice(11, 19).split(":").map(Number);
+  if (hour > 23 || minute > 59 || second > 59) {
+    throw Error(`${name} must be a valid RFC3339 timestamp`);
+  }
   const calendarDate = new Date(`${raw.slice(0, 10)}T00:00:00.000Z`);
   if (
     !Number.isFinite(calendarDate.valueOf()) ||
@@ -3291,9 +3295,7 @@ export async function addActivity(
     source: "manual",
     summary: bounded(opts.summary, "summary", 1_000),
     details: optionalBounded(opts.details, "details", 10_000),
-    occurred_at: opts.occurred_at
-      ? isoRequired(opts.occurred_at)
-      : new Date().toISOString(),
+    occurred_at: rfc3339TimestampRequired(opts.occurred_at, "occurred_at"),
     supersedes_activity_id: opts.supersedes_activity_id ?? null,
   };
   return await mutate({

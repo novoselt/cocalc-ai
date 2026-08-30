@@ -238,6 +238,7 @@ describePglite("integrated CRM store", () => {
       "2026-09-08",
       "2026-09-08T17:00:00",
       "2026-02-30T17:00:00Z",
+      "2026-09-08T24:00:00Z",
     ]) {
       await expect(
         store.createTask({
@@ -246,6 +247,88 @@ describePglite("integrated CRM store", () => {
           subject: `Reject ambiguous due ${randomUUID()}`,
         }),
       ).rejects.toThrow(/due_at must be (?:an RFC3339|a valid RFC3339)/);
+    }
+  });
+
+  it("preserves explicit activity time across preview and exact replay", async () => {
+    const organizationPreview = await store.createOrganization({
+      account_id: actor,
+      display_name: `Activity Safety University ${randomUUID()}`,
+      organization_type: "university",
+      lifecycle_stage: "customer",
+      relationship_owner_account_id: actor,
+      reason: "create isolated activity safety fixture",
+    });
+    if (!organizationPreview.preview) throw Error("expected preview");
+    const organization = committed(
+      await store.createOrganization({
+        account_id: actor,
+        display_name: organizationPreview.proposed.display_name as string,
+        organization_type: "university",
+        lifecycle_stage: "customer",
+        relationship_owner_account_id: actor,
+        reason: "create isolated activity safety fixture",
+        commit: true,
+        expected_version: organizationPreview.expected_version,
+        idempotency_key: organizationPreview.idempotency_key,
+      }),
+    );
+    const request = {
+      account_id: actor,
+      organization: organization.id,
+      kind: "note" as const,
+      summary: `Activity safety ${randomUUID()}`,
+      occurred_at: "2026-09-08T17:00:00-07:00",
+      reason: "record isolated customer context",
+    };
+    const countActivities = async () =>
+      Number(
+        (
+          await pool.query(
+            "SELECT count(*)::int AS count FROM crm_activities WHERE organization_id=$1 AND summary=$2",
+            [organization.id, request.summary],
+          )
+        ).rows[0].count,
+      );
+
+    expect(await countActivities()).toBe(0);
+    const preview = await store.addActivity(request);
+    expect(preview.preview).toBe(true);
+    expect(await countActivities()).toBe(0);
+    if (!preview.preview) throw Error("expected preview");
+    expect(preview.proposed).toMatchObject({
+      occurred_at: "2026-09-09T00:00:00.000Z",
+    });
+
+    const commitRequest = {
+      ...request,
+      commit: true,
+      expected_version: preview.expected_version,
+      idempotency_key: preview.idempotency_key,
+    };
+    const created = committed(await store.addActivity(commitRequest));
+    const replay = await store.addActivity(commitRequest);
+    expect(replay.preview).toBe(false);
+    if (replay.preview) throw Error("expected replay");
+    expect(replay.replayed).toBe(true);
+    expect(replay.result.id).toBe(created.id);
+    expect(replay.result.occurred_at).toBe("2026-09-09T00:00:00.000Z");
+    expect(await countActivities()).toBe(1);
+
+    for (const occurred_at of [
+      "",
+      "2026-09-08",
+      "2026-09-08T17:00:00",
+      "2026-02-30T17:00:00Z",
+      "2026-09-08T24:00:00Z",
+    ]) {
+      await expect(
+        store.addActivity({
+          ...request,
+          occurred_at,
+          summary: `Reject ambiguous activity time ${randomUUID()}`,
+        }),
+      ).rejects.toThrow(/occurred_at must be (?:an RFC3339|a valid RFC3339)/);
     }
   });
 
