@@ -943,7 +943,10 @@ export async function createStripeCommercialInvoiceDraft(
           customer,
           auto_advance: false,
           collection_method: "send_invoice",
-          due_date: expectedDueDate(invoice),
+          // Relative terms remain valid after local DB work or a delayed retry.
+          // Stripe calculates the authoritative due timestamp when it creates
+          // the invoice, including for due-on-receipt (zero-day) invoices.
+          days_until_due: preview.payment_terms_days,
           currency: preview.currency,
           custom_fields: customFields(order),
           description: invoiceDescription(order),
