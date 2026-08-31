@@ -371,6 +371,7 @@ import type {
   SiteSettingsSyncResult,
 } from "@cocalc/conat/hub/api/system";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
+import { resolveProjectBay } from "@cocalc/server/inter-bay/directory";
 import { getClusterConfig } from "@cocalc/server/cluster-config";
 import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
 import { assertAccountTrustedForProductAccess } from "@cocalc/server/accounts/trusted-product-access";
@@ -5047,6 +5048,19 @@ export async function getProjectRootfsStates(opts: {
     throw Error("user must be signed in");
   }
   await assertProjectCollaboratorAccessAllowRemote({ account_id, project_id });
+  const ownership = await resolveProjectBay(project_id);
+  if (!ownership) {
+    throw new Error(`project ${project_id} not found`);
+  }
+  if (ownership.bay_id !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .projectControl(ownership.bay_id)
+      .getRootfsStates({
+        project_id,
+        account_id,
+        epoch: ownership.epoch,
+      });
+  }
   return await getProjectRootfsStates0({ project_id });
 }
 
@@ -5067,6 +5081,21 @@ export async function setProjectRootfsImage(opts: {
     image,
     image_id,
   });
+  const ownership = await resolveProjectBay(project_id);
+  if (!ownership) {
+    throw new Error(`project ${project_id} not found`);
+  }
+  if (ownership.bay_id !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .projectControl(ownership.bay_id)
+      .setRootfsImage({
+        project_id,
+        account_id,
+        image,
+        image_id,
+        epoch: ownership.epoch,
+      });
+  }
   return await setProjectRootfsImageWithRollback({
     project_id,
     image,

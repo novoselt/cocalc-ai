@@ -27,6 +27,7 @@ import {
   createInterBayBayDirectoryHandlers,
   createInterBayDirectoryHandlers,
   createInterBayProjectControlGetEntitlementOverrideHandler,
+  createInterBayProjectControlGetRootfsStatesHandler,
   createInterBayProjectControlHardDeleteStatusHandler,
   createInterBayProjectControlHandler,
   createInterBayProjectControlAcceptRehomeHandler,
@@ -36,6 +37,7 @@ import {
   createInterBayProjectControlRehomeHandler,
   createInterBayProjectControlRestartHandler,
   createInterBayProjectControlSetEntitlementOverrideHandler,
+  createInterBayProjectControlSetRootfsImageHandler,
   createInterBayProjectControlStateHandler,
   createInterBayProjectLroHandler,
   createInterBayProjectReferenceHandler,
@@ -334,6 +336,7 @@ import {
   handleProjectControlClearEntitlementOverride,
   handleProjectControlAcceptRehome,
   handleProjectControlGetEntitlementOverride,
+  handleProjectControlGetRootfsStates,
   handleProjectControlHardDeleteStatus,
   handleProjectControlSetUsageAccount,
   handleProjectControlAssignHost,
@@ -341,6 +344,7 @@ import {
   handleProjectControlRehome,
   handleProjectControlRestart,
   handleProjectControlSetEntitlementOverride,
+  handleProjectControlSetRootfsImage,
   handleProjectControlStart,
   handleProjectControlState,
   handleProjectDetailsGet,
@@ -1900,6 +1904,10 @@ async function startProjectControlStartService(): Promise<void> {
     },
     backup: async (opts) => await handleProjectControlBackup(opts),
     state: async (opts) => await handleProjectControlState(opts),
+    getRootfsStates: async (opts) =>
+      await handleProjectControlGetRootfsStates(opts),
+    setRootfsImage: async (opts) =>
+      await handleProjectControlSetRootfsImage(opts),
     hardDeleteStatus: async (opts) =>
       await handleProjectControlHardDeleteStatus(opts),
     setUsageAccount: async (opts) =>
@@ -1954,6 +1962,18 @@ async function startProjectControlStartService(): Promise<void> {
       impl,
     }),
     createInterBayProjectControlStateHandler({
+      client,
+      bay_id,
+      parallel: true,
+      impl,
+    }),
+    createInterBayProjectControlGetRootfsStatesHandler({
+      client,
+      bay_id,
+      parallel: true,
+      impl,
+    }),
+    createInterBayProjectControlSetRootfsImageHandler({
       client,
       bay_id,
       parallel: true,

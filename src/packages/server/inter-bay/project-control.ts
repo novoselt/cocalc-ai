@@ -16,6 +16,7 @@ import type {
   ProjectControlBackupRequest,
   ProjectControlClearEntitlementOverrideRequest,
   ProjectControlGetEntitlementOverrideRequest,
+  ProjectControlGetRootfsStatesRequest,
   ProjectControlHardDeleteStatusRequest,
   ProjectControlHardDeleteStatusResponse,
   ProjectControlMoveRequest,
@@ -25,6 +26,7 @@ import type {
   ProjectControlRestartRequest,
   ProjectControlStartAdmission,
   ProjectControlSetEntitlementOverrideRequest,
+  ProjectControlSetRootfsImageRequest,
   ProjectControlSetUsageAccountRequest,
   ProjectControlSetUsageAccountResponse,
   ProjectControlStartRequest,
@@ -75,6 +77,10 @@ import {
   RuntimeSponsorSlotsExhaustedError,
 } from "@cocalc/server/projects/runtime-slots";
 import { assertProjectStartAllowedDuringMove } from "@cocalc/server/projects/move-guard";
+import {
+  getProjectRootfsStates,
+  setProjectRootfsImageWithRollback,
+} from "@cocalc/server/projects/rootfs-state";
 import { createBackup as createBackupLocal } from "@cocalc/server/conat/api/project-backups";
 import { getLro } from "@cocalc/server/lro/lro-db";
 import { BACKUP_TIMEOUT_MS } from "@cocalc/server/projects/backup-lro";
@@ -175,6 +181,33 @@ export async function handleProjectControlGetEntitlementOverride({
 }: ProjectControlGetEntitlementOverrideRequest): Promise<ProjectEntitlementOverride | null> {
   await assertCurrentProjectOwnership({ project_id, epoch });
   return (await getProjectEntitlementOverrideLocal(project_id)) ?? null;
+}
+
+export async function handleProjectControlGetRootfsStates({
+  project_id,
+  account_id,
+  epoch,
+}: ProjectControlGetRootfsStatesRequest) {
+  await assertCurrentProjectOwnership({ project_id, epoch });
+  await assertLocalProjectCollaborator({ account_id, project_id });
+  return await getProjectRootfsStates({ project_id });
+}
+
+export async function handleProjectControlSetRootfsImage({
+  project_id,
+  account_id,
+  image,
+  image_id,
+  epoch,
+}: ProjectControlSetRootfsImageRequest) {
+  await assertCurrentProjectOwnership({ project_id, epoch });
+  await assertLocalProjectCollaborator({ account_id, project_id });
+  return await setProjectRootfsImageWithRollback({
+    project_id,
+    image,
+    image_id,
+    set_by_account_id: account_id,
+  });
 }
 
 export async function handleProjectControlSetEntitlementOverride({
@@ -843,6 +876,24 @@ export async function dispatchProjectControlRpc(
   if (subject === stateExpected) {
     return await handleProjectControlState(
       payload as ProjectControlStateRequest,
+    );
+  }
+  const getRootfsStatesExpected = projectControlSubject({
+    dest_bay: getConfiguredBayId(),
+    method: "get-rootfs-states",
+  });
+  if (subject === getRootfsStatesExpected) {
+    return await handleProjectControlGetRootfsStates(
+      payload as ProjectControlGetRootfsStatesRequest,
+    );
+  }
+  const setRootfsImageExpected = projectControlSubject({
+    dest_bay: getConfiguredBayId(),
+    method: "set-rootfs-image",
+  });
+  if (subject === setRootfsImageExpected) {
+    return await handleProjectControlSetRootfsImage(
+      payload as ProjectControlSetRootfsImageRequest,
     );
   }
   const setUsageAccountExpected = projectControlSubject({

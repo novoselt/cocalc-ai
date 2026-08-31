@@ -122,6 +122,7 @@ const poolQuery = jest.fn(async (sql: string, params: any[] = []) => {
 
 const PROJECT_ID = "881e5f4d-fca6-4739-9848-45bfaa8d49d3";
 const IMAGE_UUID = "835c0265-a303-4322-af0c-9cbfe2da05e8";
+const INLINE_IMAGE_UUID = "1c6dca0d-5155-4dd1-8bd6-38aa8927a33b";
 
 function ticket(overrides: Record<string, unknown> = {}) {
   const now = new Date();
@@ -260,6 +261,10 @@ describe("admin support API", () => {
             plain_body:
               "Contact alice@example.com; api_key=super-secret\n" +
               `- Image: https://cocalc.ai/blobs/support.png?uuid=${IMAGE_UUID}`,
+            html_body:
+              "<p>Contact html-secret@example.com</p>" +
+              `<img src="https://cocalc.ai/blobs/inline%20screenshot.png?uuid=${INLINE_IMAGE_UUID}">` +
+              `<img src="https://evil.example/blobs/external.png?uuid=${INLINE_IMAGE_UUID}">`,
             body: "ignored",
             attachments: [
               {
@@ -306,6 +311,11 @@ describe("admin support API", () => {
             url: `https://cocalc.ai/blobs/support.png?uuid=${IMAGE_UUID}`,
           },
           {
+            filename: "inline screenshot.png",
+            source: "cocalc_blob",
+            url: `https://cocalc.ai/blobs/inline%20screenshot.png?uuid=${INLINE_IMAGE_UUID}`,
+          },
+          {
             filename: "zendesk-attachment-987.png",
             source: "zendesk_attachment",
             attachment_id: 987,
@@ -317,6 +327,7 @@ describe("admin support API", () => {
       }),
     ]);
     expect(JSON.stringify(result)).not.toContain("alice@example.com");
+    expect(JSON.stringify(result)).not.toContain("html-secret@example.com");
     expect(JSON.stringify(result)).not.toContain("super-secret");
     expect(JSON.stringify(result)).not.toContain("private-token");
     expect(JSON.stringify(result)).not.toContain("alice-private.txt");
@@ -325,7 +336,7 @@ describe("admin support API", () => {
       "tickets",
       123,
       "comments",
-      { sort_order: "desc" },
+      { sort_order: "desc", include_inline_images: true },
     ]);
   });
 
