@@ -14,6 +14,13 @@ let createLroMock: jest.Mock;
 let publishLroSummaryMock: jest.Mock;
 let publishLroEventMock: jest.Mock;
 let listVisibleRootfsImagesByIdMock: jest.Mock;
+let assertCanSelectProjectRootfsImageMock: jest.Mock;
+let resolveProjectBayMock: jest.Mock;
+let getInterBayBridgeMock: jest.Mock;
+let getProjectRootfsStatesMock: jest.Mock;
+let setProjectRootfsImageWithRollbackMock: jest.Mock;
+let remoteGetRootfsStatesMock: jest.Mock;
+let remoteSetRootfsImageMock: jest.Mock;
 
 jest.mock("@cocalc/server/accounts/is-admin", () => ({
   __esModule: true,
@@ -60,7 +67,31 @@ jest.mock("@cocalc/server/membership/rootfs-limits", () => ({
   __esModule: true,
   assertCanCreateOrUpdateRootfs: (...args: any[]) =>
     assertCanCreateOrUpdateRootfsMock(...args),
-  assertCanSelectProjectRootfsImage: jest.fn(),
+  assertCanSelectProjectRootfsImage: (...args: any[]) =>
+    assertCanSelectProjectRootfsImageMock(...args),
+}));
+
+jest.mock("@cocalc/server/inter-bay/directory", () => ({
+  __esModule: true,
+  resolveProjectBay: (...args: any[]) => resolveProjectBayMock(...args),
+}));
+
+jest.mock("@cocalc/server/inter-bay/bridge", () => ({
+  __esModule: true,
+  getInterBayBridge: (...args: any[]) => getInterBayBridgeMock(...args),
+}));
+
+jest.mock("@cocalc/server/bay-config", () => ({
+  __esModule: true,
+  getConfiguredBayId: jest.fn(() => "bay-0"),
+}));
+
+jest.mock("@cocalc/server/projects/rootfs-state", () => ({
+  __esModule: true,
+  getProjectRootfsStates: (...args: any[]) =>
+    getProjectRootfsStatesMock(...args),
+  setProjectRootfsImageWithRollback: (...args: any[]) =>
+    setProjectRootfsImageWithRollbackMock(...args),
 }));
 
 jest.mock("@cocalc/server/lro/lro-db", () => ({
@@ -126,6 +157,21 @@ describe("RootFS catalog dangerous-session auth", () => {
       version: 1,
       images: [],
     }));
+    assertCanSelectProjectRootfsImageMock = jest.fn(async () => undefined);
+    resolveProjectBayMock = jest.fn(async () => ({
+      bay_id: "bay-0",
+      epoch: 3,
+    }));
+    remoteGetRootfsStatesMock = jest.fn(async () => []);
+    remoteSetRootfsImageMock = jest.fn(async () => []);
+    getInterBayBridgeMock = jest.fn(() => ({
+      projectControl: jest.fn(() => ({
+        getRootfsStates: remoteGetRootfsStatesMock,
+        setRootfsImage: remoteSetRootfsImageMock,
+      })),
+    }));
+    getProjectRootfsStatesMock = jest.fn(async () => []);
+    setProjectRootfsImageWithRollbackMock = jest.fn(async () => []);
   });
 
   it("requires fresh auth, not 2FA, for ordinary owner catalog saves", async () => {
@@ -310,5 +356,43 @@ describe("RootFS catalog dangerous-session auth", () => {
       }),
     ).rejects.toThrow("must be an admin");
     expect(listRootfsRusticReposAdminMock).not.toHaveBeenCalled();
+  });
+
+  it("routes RootFS state reads to the authoritative project bay", async () => {
+    resolveProjectBayMock.mockResolvedValue({ bay_id: "bay-2", epoch: 7 });
+    const { getProjectRootfsStates } = await import("./system");
+
+    await getProjectRootfsStates({
+      account_id: ACCOUNT_ID,
+      project_id: "project-1",
+    });
+
+    expect(remoteGetRootfsStatesMock).toHaveBeenCalledWith({
+      project_id: "project-1",
+      account_id: ACCOUNT_ID,
+      epoch: 7,
+    });
+    expect(getProjectRootfsStatesMock).not.toHaveBeenCalled();
+  });
+
+  it("routes RootFS writes to the authoritative project bay", async () => {
+    resolveProjectBayMock.mockResolvedValue({ bay_id: "bay-2", epoch: 8 });
+    const { setProjectRootfsImage } = await import("./system");
+
+    await setProjectRootfsImage({
+      account_id: ACCOUNT_ID,
+      project_id: "project-1",
+      image: "rootfs/image",
+      image_id: "image-id",
+    });
+
+    expect(remoteSetRootfsImageMock).toHaveBeenCalledWith({
+      project_id: "project-1",
+      account_id: ACCOUNT_ID,
+      image: "rootfs/image",
+      image_id: "image-id",
+      epoch: 8,
+    });
+    expect(setProjectRootfsImageWithRollbackMock).not.toHaveBeenCalled();
   });
 });

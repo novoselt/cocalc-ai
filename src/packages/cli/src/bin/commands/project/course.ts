@@ -130,6 +130,12 @@ export function registerProjectCourseCommands(
           command,
           "project course config set-rootfs",
           async (ctx) => {
+            if (opts.apply) {
+              // Force project-scoped callers through account bootstrap before
+              // the SyncDB mutation. withContext may retry this callback with
+              // account authority when this read rejects.
+              await ctx.hub.system.getAccountBay({});
+            }
             const { project: instructorProject, client } =
               await resolveProjectConatClient(ctx, opts.project);
             const { path, syncdb } = await openCourseSyncDB({

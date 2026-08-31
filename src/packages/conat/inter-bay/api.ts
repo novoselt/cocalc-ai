@@ -24,6 +24,7 @@ import type {
 } from "@cocalc/conat/hub/api/admin-crashes";
 import type { ManagedProjectEgressOverride } from "@cocalc/conat/files/file-server";
 import type { LroEvent, LroSummary } from "@cocalc/conat/hub/api/lro";
+import type { ProjectRootfsStateEntry } from "@cocalc/util/rootfs-images";
 import type {
   ExternalCredentialSelector,
   Host,
@@ -366,6 +367,20 @@ export interface ProjectControlBackupRequest {
 
 export interface ProjectControlStateRequest {
   project_id: string;
+  epoch?: number;
+}
+
+export interface ProjectControlGetRootfsStatesRequest {
+  project_id: string;
+  account_id: string;
+  epoch?: number;
+}
+
+export interface ProjectControlSetRootfsImageRequest {
+  project_id: string;
+  account_id: string;
+  image: string;
+  image_id?: string;
   epoch?: number;
 }
 
@@ -2464,6 +2479,8 @@ export type ProjectControlMethod =
   | "restart"
   | "backup"
   | "state"
+  | "get-rootfs-states"
+  | "set-rootfs-image"
   | "hard-delete-status"
   | "set-usage-account"
   | "assign-host"
@@ -2958,6 +2975,12 @@ export interface InterBayProjectControlApi {
   restart: (opts: ProjectControlRestartRequest) => Promise<void>;
   backup: (opts: ProjectControlBackupRequest) => Promise<LroSummary>;
   state: (opts: ProjectControlStateRequest) => Promise<ProjectState>;
+  getRootfsStates: (
+    opts: ProjectControlGetRootfsStatesRequest,
+  ) => Promise<ProjectRootfsStateEntry[]>;
+  setRootfsImage: (
+    opts: ProjectControlSetRootfsImageRequest,
+  ) => Promise<ProjectRootfsStateEntry[]>;
   hardDeleteStatus: (
     opts: ProjectControlHardDeleteStatusRequest,
   ) => Promise<ProjectControlHardDeleteStatusResponse>;
@@ -5345,6 +5368,24 @@ export function createInterBayProjectControlClient({
     ...serviceClientOptions({ client, timeout }),
     subject: projectControlSubject({ dest_bay, method: "state" }),
   });
+  const getRootfsStatesClient = createServiceClient<
+    Pick<InterBayProjectControlApi, "getRootfsStates">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectControlSubject({
+      dest_bay,
+      method: "get-rootfs-states",
+    }),
+  });
+  const setRootfsImageClient = createServiceClient<
+    Pick<InterBayProjectControlApi, "setRootfsImage">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectControlSubject({
+      dest_bay,
+      method: "set-rootfs-image",
+    }),
+  });
   const hardDeleteStatusClient = createServiceClient<
     Pick<InterBayProjectControlApi, "hardDeleteStatus">
   >({
@@ -5437,6 +5478,10 @@ export function createInterBayProjectControlClient({
     restart: async (opts) => await restartClient.restart(opts),
     backup: async (opts) => await backupClient.backup(opts),
     state: async (opts) => await stateClient.state(opts),
+    getRootfsStates: async (opts) =>
+      await getRootfsStatesClient.getRootfsStates(opts),
+    setRootfsImage: async (opts) =>
+      await setRootfsImageClient.setRootfsImage(opts),
     hardDeleteStatus: async (opts) =>
       await hardDeleteStatusClient.hardDeleteStatus(opts),
     setUsageAccount: async (opts) =>
@@ -11847,6 +11892,52 @@ export function createInterBayProjectControlStateHandler({
     subject: projectControlSubject({ dest_bay: bay_id, method: "state" }),
     impl: {
       state: async (opts) => await impl.state(opts),
+    },
+  });
+}
+
+export function createInterBayProjectControlGetRootfsStatesHandler({
+  bay_id,
+  impl,
+  ...options
+}: ServiceHandlerOptions & {
+  bay_id: string;
+  impl: InterBayProjectControlApi;
+}): ConatService {
+  return createServiceHandler<
+    Pick<InterBayProjectControlApi, "getRootfsStates">
+  >({
+    ...options,
+    service: "inter-bay-project-control",
+    subject: projectControlSubject({
+      dest_bay: bay_id,
+      method: "get-rootfs-states",
+    }),
+    impl: {
+      getRootfsStates: async (opts) => await impl.getRootfsStates(opts),
+    },
+  });
+}
+
+export function createInterBayProjectControlSetRootfsImageHandler({
+  bay_id,
+  impl,
+  ...options
+}: ServiceHandlerOptions & {
+  bay_id: string;
+  impl: InterBayProjectControlApi;
+}): ConatService {
+  return createServiceHandler<
+    Pick<InterBayProjectControlApi, "setRootfsImage">
+  >({
+    ...options,
+    service: "inter-bay-project-control",
+    subject: projectControlSubject({
+      dest_bay: bay_id,
+      method: "set-rootfs-image",
+    }),
+    impl: {
+      setRootfsImage: async (opts) => await impl.setRootfsImage(opts),
     },
   });
 }
