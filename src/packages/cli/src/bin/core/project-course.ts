@@ -126,7 +126,7 @@ function rootfsFromSettings(
   return { image, ...(image_id ? { image_id } : undefined) };
 }
 
-export function managedCourseProjectIds({
+export function courseRootfsProjectIds({
   course_project_id,
   rows,
 }: {
@@ -142,10 +142,7 @@ export function managedCourseProjectIds({
   }
   const sharedProjectId = `${settings.shared_project_id ?? ""}`.trim();
   if (sharedProjectId) projectIds.add(sharedProjectId);
-  const nbgraderProjectId = `${settings.nbgrader_grade_project ?? ""}`.trim();
-  if (nbgraderProjectId && nbgraderProjectId !== course_project_id) {
-    projectIds.add(nbgraderProjectId);
-  }
+  projectIds.delete(course_project_id);
   return [...projectIds].sort();
 }
 
@@ -207,7 +204,7 @@ export async function applyCourseRootfsToManagedProjects({
   if (!rootfs) {
     throw new Error("No course RootFS image is configured");
   }
-  const projectIds = managedCourseProjectIds({ course_project_id, rows });
+  const projectIds = courseRootfsProjectIds({ course_project_id, rows });
   const projectStates = new Map<string, string>();
   for (const project_id of projectIds) {
     const state = await hub.projects.getProjectState({ project_id });

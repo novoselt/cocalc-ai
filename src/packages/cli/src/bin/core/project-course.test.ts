@@ -5,7 +5,7 @@ import {
   applyCourseRootfsToManagedProjects,
   buildCourseReconfigureRequest,
   courseSettingsHash,
-  managedCourseProjectIds,
+  courseRootfsProjectIds,
   readCourseRows,
   reconfigureCourseProjects,
   setCourseRootfs,
@@ -116,15 +116,15 @@ test("course settings hashes and summaries are deterministic", () => {
   ]);
 });
 
-test("managed course projects exclude deleted students and the instructor project", () => {
+test("course RootFS projects exclude deleted, instructor, and nbgrader projects", () => {
   assert.deepEqual(
-    managedCourseProjectIds({
+    courseRootfsProjectIds({
       course_project_id: "course-project",
       rows: [
         {
           table: "settings",
           shared_project_id: "shared-project",
-          nbgrader_grade_project: "course-project",
+          nbgrader_grade_project: "nbgrader-project",
         },
         {
           table: "students",
@@ -141,6 +141,11 @@ test("managed course projects exclude deleted students and the instructor projec
           table: "students",
           student_id: "student-3",
           project_id: "shared-project",
+        },
+        {
+          table: "students",
+          student_id: "student-4",
+          project_id: "course-project",
         },
       ],
     }),
