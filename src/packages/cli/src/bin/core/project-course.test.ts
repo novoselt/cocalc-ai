@@ -189,6 +189,7 @@ test("applying a course RootFS mutates every managed project and restarts active
 
   assert.deepEqual(calls, [
     ["state", "shared-project"],
+    ["state", "student-project"],
     [
       "set-rootfs",
       {
@@ -197,7 +198,6 @@ test("applying a course RootFS mutates every managed project and restarts active
         image_id: "image-id",
       },
     ],
-    ["state", "student-project"],
     [
       "set-rootfs",
       {
@@ -210,6 +210,53 @@ test("applying a course RootFS mutates every managed project and restarts active
   ]);
   assert.equal(result.project_count, 2);
   assert.equal(result.restarted_count, 1);
+});
+
+test("applying a course RootFS preflights every project before mutating", async () => {
+  const calls: any[] = [];
+  await assert.rejects(
+    applyCourseRootfsToManagedProjects({
+      hub: {
+        system: {
+          setProjectRootfsImage: async (opts) => {
+            calls.push(["set-rootfs", opts.project_id]);
+            return [];
+          },
+        },
+        projects: {
+          getProjectState: async ({ project_id }) => {
+            calls.push(["state", project_id]);
+            if (project_id === "student-project") {
+              throw new Error("project access denied");
+            }
+            return { state: "stopped" };
+          },
+          restart: async () => {
+            throw new Error("unexpected restart");
+          },
+        },
+      } as any,
+      course_project_id: "course-project",
+      rows: [
+        {
+          table: "settings",
+          student_project_rootfs_image: "rootfs/image",
+          shared_project_id: "shared-project",
+        },
+        {
+          table: "students",
+          student_id: "student-1",
+          project_id: "student-project",
+        },
+      ],
+    }),
+    /project access denied/,
+  );
+
+  assert.deepEqual(calls, [
+    ["state", "shared-project"],
+    ["state", "student-project"],
+  ]);
 });
 
 test("setCourseRootfs checks the inspected hash and records audit metadata", async () => {

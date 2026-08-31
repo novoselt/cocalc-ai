@@ -208,10 +208,14 @@ export async function applyCourseRootfsToManagedProjects({
     throw new Error("No course RootFS image is configured");
   }
   const projectIds = managedCourseProjectIds({ course_project_id, rows });
-  const projects: Array<Record<string, unknown>> = [];
+  const projectStates = new Map<string, string>();
   for (const project_id of projectIds) {
     const state = await hub.projects.getProjectState({ project_id });
-    const stateBefore = `${state?.state ?? ""}`.trim();
+    projectStates.set(project_id, `${state?.state ?? ""}`.trim());
+  }
+  const projects: Array<Record<string, unknown>> = [];
+  for (const project_id of projectIds) {
+    const stateBefore = projectStates.get(project_id) ?? "";
     const states = await hub.system.setProjectRootfsImage({
       project_id,
       image: rootfs.image,
