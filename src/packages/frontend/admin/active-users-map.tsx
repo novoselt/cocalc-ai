@@ -18,7 +18,7 @@ import {
 import { CaretRightFilled, PauseOutlined } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
 import utc from "dayjs/plugin/utc";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
 
 import type {
@@ -174,7 +174,7 @@ function UserList({
   onSelect,
 }: {
   users: ActiveUserMapDetailUser[];
-  onSelect: (user: ActiveUserMapDetailUser) => void;
+  onSelect: (user: ActiveUserMapDetailUser, trigger: HTMLElement) => void;
 }) {
   return (
     <div aria-label="Active users" role="list">
@@ -215,7 +215,10 @@ function UserList({
                   </Text>
                 </Space>
               </Space>
-              <Button size="small" onClick={() => onSelect(user)}>
+              <Button
+                size="small"
+                onClick={(event) => onSelect(user, event.currentTarget)}
+              >
                 Admin details
               </Button>
             </div>
@@ -228,6 +231,7 @@ function UserList({
 }
 
 export function ActiveUsersMapAdmin() {
+  const userDrawerTitleId = useId();
   const [view, setView] = useState<MapView>("live");
   const [liveActiveMinutes, setLiveActiveMinutes] =
     useState<ActiveUserMapWindowMinutes>(15);
@@ -252,13 +256,18 @@ export function ActiveUsersMapAdmin() {
   const [details, setDetails] = useState<ActiveUserMapDetails>();
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState<string>();
+  const [selectedDetailUser, setSelectedDetailUser] =
+    useState<ActiveUserMapDetailUser>();
   const [selectedUser, setSelectedUser] = useState<User>();
   const [loadingUser, setLoadingUser] = useState(false);
+  const [userError, setUserError] = useState<string>();
   const [drawerWidth, setDrawerWidth] = useState<number | undefined>(
     readDrawerWidth,
   );
   const liveRequest = useRef(0);
   const detailsRequest = useRef(0);
+  const userRequest = useRef(0);
+  const userTriggerRef = useRef<HTMLElement | null>(null);
   const snapshotRequest = useRef(0);
   const requestedHistorySnapshot = useRef<string | undefined>(undefined);
   const snapshotCache = useRef(
@@ -464,20 +473,36 @@ export function ActiveUsersMapAdmin() {
     (location) =>
       (location.group_id ?? location.country_code) === selectedGroup,
   );
-  async function openUser(user: ActiveUserMapDetailUser) {
+  function closeUserDrawer() {
+    userRequest.current += 1;
+    setSelectedDetailUser(undefined);
+    setSelectedUser(undefined);
+    setLoadingUser(false);
+    setUserError(undefined);
+  }
+
+  async function openUser(user: ActiveUserMapDetailUser, trigger: HTMLElement) {
+    const request = ++userRequest.current;
+    userTriggerRef.current = trigger;
+    setSelectedDetailUser(user);
     setLoadingUser(true);
     setSelectedUser(undefined);
+    setUserError(undefined);
     try {
       const result = await user_search({
         query: user.account_id,
         admin: true,
         limit: 1,
       });
-      setSelectedUser(result?.[0]);
+      if (request !== userRequest.current) return;
+      if (!result?.[0]) {
+        throw Error("Account details are unavailable.");
+      }
+      setSelectedUser(result[0]);
     } catch (err) {
-      setError(`${err}`);
+      if (request === userRequest.current) setUserError(`${err}`);
     } finally {
-      setLoadingUser(false);
+      if (request === userRequest.current) setLoadingUser(false);
     }
   }
 
@@ -549,7 +574,7 @@ export function ActiveUsersMapAdmin() {
     requestedHistorySnapshot.current = snapshotHour;
     setHistoryActiveMinutes(activeMinutes);
     setSelectedGroup(undefined);
-    setSelectedUser(undefined);
+    closeUserDrawer();
     setView("history");
     if (view === "history" && activeMinutes === historyActiveMinutes) {
       requestedHistorySnapshot.current = undefined;
@@ -579,7 +604,7 @@ export function ActiveUsersMapAdmin() {
             const nextView = value as MapView;
             setPlayback(undefined);
             setSelectedGroup(undefined);
-            setSelectedUser(undefined);
+            closeUserDrawer();
             if (nextView === "history") {
               setSnapshotLoading(true);
             }
@@ -597,7 +622,7 @@ export function ActiveUsersMapAdmin() {
               setPlayback(undefined);
               if (view === "live") {
                 setSelectedGroup(undefined);
-                setSelectedUser(undefined);
+                closeUserDrawer();
                 setLiveActiveMinutes(value as ActiveUserMapWindowMinutes);
               } else {
                 requestedHistorySnapshot.current =
@@ -715,7 +740,7 @@ export function ActiveUsersMapAdmin() {
                 value={liveGrouping}
                 onChange={({ target: { value } }) => {
                   setSelectedGroup(undefined);
-                  setSelectedUser(undefined);
+                  closeUserDrawer();
                   setLiveGrouping(value as ActiveUserMapGrouping);
                 }}
               />
@@ -817,7 +842,7 @@ export function ActiveUsersMapAdmin() {
         title={drawerTitle}
         onClose={() => {
           setSelectedGroup(undefined);
-          setSelectedUser(undefined);
+          closeUserDrawer();
         }}
       >
         {detailsError && (
@@ -831,7 +856,7 @@ export function ActiveUsersMapAdmin() {
             />
             <UserList
               users={details.users}
-              onSelect={(user) => void openUser(user)}
+              onSelect={(user, trigger) => void openUser(user, trigger)}
             />
           </>
         ) : detailsLoading ? (
@@ -839,12 +864,44 @@ export function ActiveUsersMapAdmin() {
             <Spin description="Loading active users" />
           </div>
         ) : null}
-        {loadingUser && (
-          <div style={{ padding: 24, textAlign: "center" }}>
-            <Spin />
-          </div>
-        )}
-        {selectedUser && <UserResult {...selectedUser} />}
+        <Drawer
+          aria-labelledby={userDrawerTitleId}
+          afterOpenChange={(open) => {
+            if (!open && selectedGroup != null) {
+              userTriggerRef.current?.focus();
+            }
+          }}
+          destroyOnHidden
+          onClose={closeUserDrawer}
+          open={selectedDetailUser != null}
+          placement="right"
+          size={drawerWidth ?? DEFAULT_DRAWER_WIDTH}
+          styles={{ body: { padding: 16 } }}
+          title={
+            <Space id={userDrawerTitleId}>
+              <Icon name="user" />
+              <span>
+                {selectedDetailUser
+                  ? `${userName(selectedDetailUser)} admin details`
+                  : "User admin details"}
+              </span>
+            </Space>
+          }
+        >
+          {userError && <ShowError error={userError} setError={setUserError} />}
+          {loadingUser ? (
+            <div style={{ padding: 48, textAlign: "center" }}>
+              <Spin description="Loading user details" />
+            </div>
+          ) : selectedUser ? (
+            <UserResult
+              key={selectedUser.account_id}
+              {...selectedUser}
+              defaultExpanded
+              defaultSection="projects"
+            />
+          ) : null}
+        </Drawer>
       </Drawer>
     </Space>
   );

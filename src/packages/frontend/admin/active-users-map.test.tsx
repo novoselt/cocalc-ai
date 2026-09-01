@@ -11,6 +11,7 @@ import { ActiveUsersMapSummary } from "./active-users-map-summary";
 const mockGetActiveUserMap = jest.fn();
 const mockGetActiveUserMapDetails = jest.fn();
 const mockGetHistorySeries = jest.fn();
+const mockUserSearch = jest.fn();
 
 jest.mock("@cocalc/frontend/webapp-client", () => ({
   webapp_client: {
@@ -62,9 +63,23 @@ jest.mock("react-virtuoso", () => ({
     </div>
   ),
 }));
-jest.mock("./users/user", () => ({ UserResult: () => null }));
+jest.mock("./users/user", () => ({
+  UserResult: ({
+    account_id,
+    defaultExpanded,
+    defaultSection,
+  }: {
+    account_id: string;
+    defaultExpanded?: boolean;
+    defaultSection?: string;
+  }) => (
+    <div>
+      user-result:{account_id}:{defaultSection}:{`${defaultExpanded}`}
+    </div>
+  ),
+}));
 jest.mock("@cocalc/frontend/frame-editors/generic/client", () => ({
-  user_search: jest.fn(async () => []),
+  user_search: (...args: unknown[]) => mockUserSearch(...args),
 }));
 
 beforeEach(() => {
@@ -94,6 +109,13 @@ beforeEach(() => {
     country_codes: [],
     points: [],
   });
+  mockUserSearch.mockResolvedValue([
+    {
+      account_id: "account-1",
+      display_name: "Ada Lovelace",
+      email_address: "ada@example.com",
+    },
+  ]);
 });
 
 describe("ActiveUsersMapSummary", () => {
@@ -251,6 +273,19 @@ describe("ActiveUsersMapAdmin", () => {
         group_id: undefined,
       }),
     );
+
+    fireEvent.click(screen.getByRole("button", { name: "Admin details" }));
+    await waitFor(() =>
+      expect(mockUserSearch).toHaveBeenCalledWith({
+        query: "account-1",
+        admin: true,
+        limit: 1,
+      }),
+    );
+    expect(await screen.findByText("Ada Lovelace admin details")).toBeVisible();
+    expect(
+      await screen.findByText("user-result:account-1:projects:true"),
+    ).toBeVisible();
   });
 });
 
