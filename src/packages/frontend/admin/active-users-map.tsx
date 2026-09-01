@@ -6,10 +6,8 @@
 import {
   Alert,
   Button,
-  Checkbox,
   DatePicker,
   Drawer,
-  List,
   Radio,
   Select,
   Space,
@@ -21,10 +19,13 @@ import { CaretRightFilled, PauseOutlined } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
 import utc from "dayjs/plugin/utc";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Virtuoso } from "react-virtuoso";
 
 import type {
+  ActiveUserMapDetails,
+  ActiveUserMapDetailUser,
+  ActiveUserMapGrouping,
   ActiveUserMapOverview,
-  ActiveUserMapUser,
   ActiveUserMapWindowMinutes,
 } from "@cocalc/conat/hub/api/system";
 import type {
@@ -32,7 +33,7 @@ import type {
   ActiveUserMapHistorySnapshot,
   ActiveUserMapHistoryWindowMinutes,
 } from "@cocalc/conat/inter-bay/api";
-import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
+import { COLORS } from "@cocalc/util/theme";
 import { Icon, TimeAgo, Tooltip } from "@cocalc/frontend/components";
 import ShowError from "@cocalc/frontend/components/error";
 import {
@@ -92,6 +93,14 @@ const WINDOW_OPTIONS: Array<{
   { label: "1 hour", value: 60 },
   { label: "1 day", value: 1440 },
 ];
+const GROUPING_OPTIONS: Array<{
+  label: string;
+  value: ActiveUserMapGrouping;
+}> = [
+  { label: "Country", value: "country" },
+  { label: "Region", value: "region" },
+  { label: "City", value: "city" },
+];
 
 const HISTORY_WINDOW_OPTIONS: Array<{
   label: string;
@@ -116,11 +125,11 @@ function PlaybackIcon({ playing }: { playing: boolean }) {
   return playing ? <PauseOutlined /> : <CaretRightFilled />;
 }
 
-function userName(user: ActiveUserMapUser): string {
-  return displayNameFromAccount(user) || user.email_address || user.account_id;
+function userName(user: ActiveUserMapDetailUser): string {
+  return user.name || user.email_address || user.account_id;
 }
 
-function locationLabel(user: ActiveUserMapUser): string {
+function locationLabel(user: ActiveUserMapDetailUser): string {
   return [user.city, user.region_code ?? user.region]
     .filter(Boolean)
     .join(", ");
@@ -144,7 +153,6 @@ export function activeUsersMapHistoryFallbackCountries(
     const existing = countries.get(location.country_code);
     if (existing) {
       existing.count += location.count;
-      existing.users.push(...location.users);
       continue;
     }
     countries.set(location.country_code, {
@@ -154,7 +162,6 @@ export function activeUsersMapHistoryFallbackCountries(
       region_code: null,
       region: null,
       city: null,
-      users: [...location.users],
     });
   }
   return [...countries.values()].sort(
@@ -166,39 +173,57 @@ function UserList({
   users,
   onSelect,
 }: {
-  users: ActiveUserMapUser[];
-  onSelect: (user: ActiveUserMapUser) => void;
+  users: ActiveUserMapDetailUser[];
+  onSelect: (user: ActiveUserMapDetailUser) => void;
 }) {
   return (
-    <List
-      dataSource={users}
-      locale={{ emptyText: "No users in this group." }}
-      renderItem={(user) => (
-        <List.Item
-          actions={[
-            <Button key="details" size="small" onClick={() => onSelect(user)}>
-              Admin details
-            </Button>,
-          ]}
-        >
-          <List.Item.Meta
-            title={userName(user)}
-            description={
-              <Space size="small" wrap>
-                {user.email_address && (
-                  <Text copyable>{user.email_address}</Text>
-                )}
-                {locationLabel(user) && <Tag>{locationLabel(user)}</Tag>}
-                <Tag>Bay: {user.bay_id}</Tag>
-                <Text type="secondary">
-                  Active <TimeAgo date={user.last_active} />
-                </Text>
+    <div aria-label="Active users" role="list">
+      <Virtuoso
+        data={users}
+        computeItemKey={(_, user) => user.account_id}
+        components={{
+          EmptyPlaceholder: () => (
+            <Text type="secondary">No users in this group.</Text>
+          ),
+        }}
+        itemContent={(_, user) => (
+          <div
+            role="listitem"
+            style={{
+              borderBottom: `1px solid ${COLORS.GRAY_LL}`,
+              padding: "12px 0",
+            }}
+          >
+            <div
+              style={{
+                alignItems: "flex-start",
+                display: "flex",
+                gap: 16,
+                justifyContent: "space-between",
+              }}
+            >
+              <Space orientation="vertical" size="small">
+                <Text strong>{userName(user)}</Text>
+                <Space size="small" wrap>
+                  {user.email_address && (
+                    <Text copyable>{user.email_address}</Text>
+                  )}
+                  {locationLabel(user) && <Tag>{locationLabel(user)}</Tag>}
+                  <Tag>Bay: {user.bay_id}</Tag>
+                  <Text type="secondary">
+                    Active <TimeAgo date={user.last_active} />
+                  </Text>
+                </Space>
               </Space>
-            }
-          />
-        </List.Item>
-      )}
-    />
+              <Button size="small" onClick={() => onSelect(user)}>
+                Admin details
+              </Button>
+            </div>
+          </div>
+        )}
+        style={{ height: "clamp(180px, 45vh, 720px)" }}
+      />
+    </div>
   );
 }
 
@@ -206,7 +231,8 @@ export function ActiveUsersMapAdmin() {
   const [view, setView] = useState<MapView>("live");
   const [liveActiveMinutes, setLiveActiveMinutes] =
     useState<ActiveUserMapWindowMinutes>(15);
-  const [groupLiveByCity, setGroupLiveByCity] = useState(false);
+  const [liveGrouping, setLiveGrouping] =
+    useState<ActiveUserMapGrouping>("country");
   const [historyActiveMinutes, setHistoryActiveMinutes] =
     useState<ActiveUserMapHistoryWindowMinutes>(60);
   const [overview, setOverview] = useState<ActiveUserMapOverview>();
@@ -223,12 +249,16 @@ export function ActiveUsersMapAdmin() {
   const [playback, setPlayback] = useState<Playback>();
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [selectedGroup, setSelectedGroup] = useState<string>();
+  const [details, setDetails] = useState<ActiveUserMapDetails>();
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState<string>();
   const [selectedUser, setSelectedUser] = useState<User>();
   const [loadingUser, setLoadingUser] = useState(false);
   const [drawerWidth, setDrawerWidth] = useState<number | undefined>(
     readDrawerWidth,
   );
   const liveRequest = useRef(0);
+  const detailsRequest = useRef(0);
   const snapshotRequest = useRef(0);
   const requestedHistorySnapshot = useRef<string | undefined>(undefined);
   const snapshotCache = useRef(
@@ -249,7 +279,7 @@ export function ActiveUsersMapAdmin() {
       const next = await webapp_client.conat_client.hub.system.getActiveUserMap(
         {
           active_minutes: liveActiveMinutes,
-          group_by: groupLiveByCity ? "city" : "country",
+          group_by: liveGrouping,
         },
       );
       if (request === liveRequest.current) setOverview(next);
@@ -258,7 +288,36 @@ export function ActiveUsersMapAdmin() {
     } finally {
       if (request === liveRequest.current) setLoading(false);
     }
-  }, [groupLiveByCity, liveActiveMinutes]);
+  }, [liveActiveMinutes, liveGrouping]);
+
+  const loadDetails = useCallback(async () => {
+    if (view !== "live" || selectedGroup == null) return;
+    const request = ++detailsRequest.current;
+    setDetailsLoading(true);
+    setDetailsError(undefined);
+    try {
+      const next =
+        await webapp_client.conat_client.hub.system.getActiveUserMapDetails({
+          active_minutes: liveActiveMinutes,
+          group_by: liveGrouping,
+          scope:
+            selectedGroup === "all"
+              ? "all"
+              : selectedGroup === "unknown"
+                ? "unknown"
+                : "group",
+          group_id:
+            selectedGroup === "unknown" || selectedGroup === "all"
+              ? undefined
+              : selectedGroup,
+        });
+      if (request === detailsRequest.current) setDetails(next);
+    } catch (err) {
+      if (request === detailsRequest.current) setDetailsError(`${err}`);
+    } finally {
+      if (request === detailsRequest.current) setDetailsLoading(false);
+    }
+  }, [liveActiveMinutes, liveGrouping, selectedGroup, view]);
 
   useEffect(() => {
     if (view !== "live") return;
@@ -270,6 +329,13 @@ export function ActiveUsersMapAdmin() {
     }, REFRESH_MS);
     return () => clearInterval(timer);
   }, [load, view]);
+
+  useEffect(() => {
+    setDetails(undefined);
+    if (view === "live" && selectedGroup != null) {
+      void loadDetails();
+    }
+  }, [loadDetails, selectedGroup, view]);
 
   useEffect(() => {
     let disposed = false;
@@ -398,12 +464,7 @@ export function ActiveUsersMapAdmin() {
     (location) =>
       (location.group_id ?? location.country_code) === selectedGroup,
   );
-  const selectedUsers =
-    selectedGroup === "unknown"
-      ? (overview?.unknown_users ?? [])
-      : (selectedLocation?.users ?? []);
-
-  async function openUser(user: ActiveUserMapUser) {
+  async function openUser(user: ActiveUserMapDetailUser) {
     setLoadingUser(true);
     setSelectedUser(undefined);
     try {
@@ -421,14 +482,19 @@ export function ActiveUsersMapAdmin() {
   }
 
   const drawerLocation =
-    selectedGroup === "unknown"
-      ? "Location unavailable"
-      : selectedLocation
-        ? activeUsersMapLocationName(selectedLocation)
-        : "Selected location";
+    selectedGroup === "all"
+      ? "All locations"
+      : selectedGroup === "unknown"
+        ? "Location unavailable"
+        : selectedLocation
+          ? activeUsersMapLocationName(selectedLocation)
+          : "Selected location";
   const drawerTitle = activeUsersMapDrawerTitle(
     drawerLocation,
-    selectedUsers.length,
+    details?.total ??
+      (selectedGroup === "unknown"
+        ? (overview?.unknown_location ?? 0)
+        : (selectedLocation?.count ?? 0)),
   );
   const failedBays = overview?.bays.filter(({ ok }) => !ok) ?? [];
   const disabledBays =
@@ -638,18 +704,23 @@ export function ActiveUsersMapAdmin() {
           </Space>
         )}
         {view === "live" && (
-          <Tooltip title="Group current users using approximate Cloudflare IP geolocation.">
-            <Checkbox
-              checked={groupLiveByCity}
-              onChange={({ target: { checked } }) => {
-                setSelectedGroup(undefined);
-                setSelectedUser(undefined);
-                setGroupLiveByCity(checked);
-              }}
-            >
-              Group by city
-            </Checkbox>
-          </Tooltip>
+          <Space>
+            <Text>Group by:</Text>
+            <Tooltip title="Group current users using approximate Cloudflare IP geolocation. Region means a state, province, or equivalent first-level administrative area.">
+              <Radio.Group
+                aria-label="Group by location"
+                buttonStyle="solid"
+                optionType="button"
+                options={GROUPING_OPTIONS}
+                value={liveGrouping}
+                onChange={({ target: { value } }) => {
+                  setSelectedGroup(undefined);
+                  setSelectedUser(undefined);
+                  setLiveGrouping(value as ActiveUserMapGrouping);
+                }}
+              />
+            </Tooltip>
+          </Space>
         )}
       </Space>
       {error && <ShowError error={error} setError={setError} />}
@@ -684,14 +755,15 @@ export function ActiveUsersMapAdmin() {
                   : undefined
               }
               unavailable={displaySummary.unknown_location}
+              onShowAll={
+                view === "live" ? () => setSelectedGroup("all") : undefined
+              }
               onShowUnavailable={
                 view === "live" ? () => setSelectedGroup("unknown") : undefined
               }
               hint={
                 view === "live"
-                  ? groupLiveByCity
-                    ? "Select a location to view its active users."
-                    : "Select a country to view its active users."
+                  ? `Select a ${liveGrouping} to view its active users.`
                   : "Select a country to filter the plot."
               }
             />
@@ -748,11 +820,25 @@ export function ActiveUsersMapAdmin() {
           setSelectedUser(undefined);
         }}
       >
-        <ActiveUsersMapDomainChart users={selectedUsers} />
-        <UserList
-          users={selectedUsers}
-          onSelect={(user) => void openUser(user)}
-        />
+        {detailsError && (
+          <ShowError error={detailsError} setError={setDetailsError} />
+        )}
+        {details ? (
+          <>
+            <ActiveUsersMapDomainChart
+              counts={details.domain_counts}
+              total={details.total}
+            />
+            <UserList
+              users={details.users}
+              onSelect={(user) => void openUser(user)}
+            />
+          </>
+        ) : detailsLoading ? (
+          <div style={{ padding: 48, textAlign: "center" }}>
+            <Spin description="Loading active users" />
+          </div>
+        ) : null}
         {loadingUser && (
           <div style={{ padding: 24, textAlign: "center" }}>
             <Spin />

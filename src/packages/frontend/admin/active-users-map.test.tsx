@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 
 import {
   ActiveUsersMapAdmin,
@@ -8,6 +9,7 @@ import {
 import { ActiveUsersMapSummary } from "./active-users-map-summary";
 
 const mockGetActiveUserMap = jest.fn();
+const mockGetActiveUserMapDetails = jest.fn();
 const mockGetHistorySeries = jest.fn();
 
 jest.mock("@cocalc/frontend/webapp-client", () => ({
@@ -17,6 +19,8 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
         system: {
           getActiveUserMap: (...args: unknown[]) =>
             mockGetActiveUserMap(...args),
+          getActiveUserMapDetails: (...args: unknown[]) =>
+            mockGetActiveUserMapDetails(...args),
           getActiveUserMapHistorySeries: (...args: unknown[]) =>
             mockGetHistorySeries(...args),
           getActiveUserMapHistorySnapshot: jest.fn(async () => null),
@@ -27,10 +31,36 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
 }));
 jest.mock("./active-users-map-plot", () => ({
   activeUsersMapLocationName: () => "Location",
-  ActiveUsersMapPlot: () => <div>Map</div>,
+  ActiveUsersMapPlot: ({ onSelect }: { onSelect: (id: string) => void }) => (
+    <button onClick={() => onSelect("CA")}>Select map location</button>
+  ),
+}));
+jest.mock("./active-users-map-domains", () => ({
+  ActiveUsersMapDomainChart: ({ total }: { total: number }) => (
+    <div>Domains for {total} active users</div>
+  ),
 }));
 jest.mock("./active-users-map-history-plot", () => ({
   ActiveUsersMapHistoryPlot: () => <div>History plot</div>,
+}));
+jest.mock("react-virtuoso", () => ({
+  Virtuoso: ({
+    components,
+    data = [],
+    itemContent,
+  }: {
+    components?: { EmptyPlaceholder?: () => ReactNode };
+    data?: Array<{ account_id: string }>;
+    itemContent: (index: number, item: { account_id: string }) => ReactNode;
+  }) => (
+    <div>
+      {data.length === 0
+        ? components?.EmptyPlaceholder?.()
+        : data.map((item, index) => (
+            <div key={item.account_id}>{itemContent(index, item)}</div>
+          ))}
+    </div>
+  ),
 }));
 jest.mock("./users/user", () => ({ UserResult: () => null }));
 jest.mock("@cocalc/frontend/frame-editors/generic/client", () => ({
@@ -49,8 +79,13 @@ beforeEach(() => {
     mapped_active: 0,
     unknown_location: 0,
     countries: [],
-    unknown_users: [],
     bays: [{ bay_id: "bay-1", ok: true, enabled: true, total_active: 0 }],
+  });
+  mockGetActiveUserMapDetails.mockResolvedValue({
+    checked_at: "2026-08-27T00:00:00.000Z",
+    total: 0,
+    users: [],
+    domain_counts: [],
   });
   mockGetHistorySeries.mockResolvedValue({
     active_minutes: 60,
@@ -63,22 +98,28 @@ beforeEach(() => {
 
 describe("ActiveUsersMapSummary", () => {
   it("shows compact counts and opens unavailable locations", () => {
+    const onShowAll = jest.fn();
     const onShowUnavailable = jest.fn();
     render(
       <ActiveUsersMapSummary
         total={793}
         mapped={435}
         unavailable={358}
+        onShowAll={onShowAll}
         onShowUnavailable={onShowUnavailable}
         hint="Select a country to view its active users."
       />,
     );
 
-    expect(screen.getByText("Active users:")).toHaveTextContent("793");
+    expect(
+      screen.getByRole("button", { name: "Active users: 793" }),
+    ).toBeVisible();
     expect(screen.getByText("On map:")).toHaveTextContent("435");
     expect(
       screen.getByText("Select a country to view its active users."),
     ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Active users: 793" }));
+    expect(onShowAll).toHaveBeenCalledTimes(1);
     fireEvent.click(
       screen.getByRole("button", { name: "Location unavailable: 358" }),
     );
@@ -104,10 +145,12 @@ describe("ActiveUsersMapSummary", () => {
 });
 
 describe("ActiveUsersMapAdmin", () => {
-  it("requests optional city groups from the last live-mode control", async () => {
+  it("requests live groups selected by country, region, or city", async () => {
     render(<ActiveUsersMapAdmin />);
 
-    const checkbox = screen.getByRole("checkbox", { name: "Group by city" });
+    expect(
+      screen.getByRole("radiogroup", { name: "Group by location" }),
+    ).toBeVisible();
     await waitFor(() =>
       expect(mockGetActiveUserMap).toHaveBeenCalledWith({
         active_minutes: 15,
@@ -115,7 +158,15 @@ describe("ActiveUsersMapAdmin", () => {
       }),
     );
 
-    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("radio", { name: "Region" }));
+    await waitFor(() =>
+      expect(mockGetActiveUserMap).toHaveBeenLastCalledWith({
+        active_minutes: 15,
+        group_by: "region",
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "City" }));
     await waitFor(() =>
       expect(mockGetActiveUserMap).toHaveBeenLastCalledWith({
         active_minutes: 15,
@@ -125,8 +176,81 @@ describe("ActiveUsersMapAdmin", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: "History" }));
     expect(
-      screen.queryByRole("checkbox", { name: "Group by city" }),
+      screen.queryByRole("radiogroup", { name: "Group by location" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("loads location users separately from the map overview", async () => {
+    mockGetActiveUserMap.mockResolvedValue({
+      enabled: true,
+      checked_at: "2026-08-27T00:00:00.000Z",
+      bay_id: "bay-1",
+      current_bay_id: "bay-1",
+      active_minutes: 15,
+      total_active: 1,
+      mapped_active: 1,
+      unknown_location: 0,
+      countries: [
+        {
+          group_id: "CA",
+          granularity: "country",
+          country_code: "CA",
+          latitude: 56,
+          longitude: -106,
+          count: 1,
+        },
+      ],
+      bays: [{ bay_id: "bay-1", ok: true, enabled: true, total_active: 1 }],
+    });
+    mockGetActiveUserMapDetails.mockResolvedValue({
+      checked_at: "2026-08-27T00:00:00.000Z",
+      total: 1,
+      users: [
+        {
+          account_id: "account-1",
+          bay_id: "bay-1",
+          name: "Ada Lovelace",
+          email_address: "ada@example.com",
+          last_active: "2026-08-27T00:00:00.000Z",
+          region_code: "AB",
+          region: "Alberta",
+          city: "Calgary",
+        },
+      ],
+      domain_counts: [{ domain: "example.com", count: 1 }],
+    });
+
+    render(<ActiveUsersMapAdmin />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select map location" }),
+    );
+
+    await waitFor(() =>
+      expect(mockGetActiveUserMapDetails).toHaveBeenCalledWith({
+        active_minutes: 15,
+        group_by: "country",
+        scope: "group",
+        group_id: "CA",
+      }),
+    );
+    expect(await screen.findByText("Domains for 1 active users")).toBeVisible();
+    expect(screen.getByText("Ada Lovelace")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Previous" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Next" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Active users: 1" }));
+    await waitFor(() =>
+      expect(mockGetActiveUserMapDetails).toHaveBeenLastCalledWith({
+        active_minutes: 15,
+        group_by: "country",
+        scope: "all",
+        group_id: undefined,
+      }),
+    );
   });
 });
 
@@ -154,7 +278,6 @@ describe("activeUsersMapHistoryFallbackCountries", () => {
         latitude: 51.0447,
         longitude: -114.0719,
         count: 2,
-        users: [],
       },
       {
         group_id: "city:ca:on:toronto",
@@ -166,7 +289,6 @@ describe("activeUsersMapHistoryFallbackCountries", () => {
         latitude: 43.6532,
         longitude: -79.3832,
         count: 3,
-        users: [],
       },
     ]);
 

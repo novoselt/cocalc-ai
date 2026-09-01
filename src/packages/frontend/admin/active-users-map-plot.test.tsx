@@ -39,7 +39,6 @@ const us: ActiveUserMapCountry = {
   // Deliberately unrelated to the country label point.
   latitude: 0,
   longitude: 0,
-  users: [],
 };
 
 describe("ActiveUsersMapPlot", () => {
@@ -111,7 +110,6 @@ describe("ActiveUsersMapPlot", () => {
       count: 3,
       latitude: 51.05,
       longitude: -114.08,
-      users: [],
     };
     render(<ActiveUsersMapPlot countries={[calgary]} onSelect={onSelect} />);
 
