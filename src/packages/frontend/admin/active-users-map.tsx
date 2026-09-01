@@ -24,6 +24,7 @@ import { Virtuoso } from "react-virtuoso";
 import type {
   ActiveUserMapDetails,
   ActiveUserMapDetailUser,
+  ActiveUserMapBayStatus,
   ActiveUserMapGrouping,
   ActiveUserMapOverview,
   ActiveUserMapWindowMinutes,
@@ -140,6 +141,24 @@ export function activeUsersMapDrawerTitle(
   count: number,
 ): string {
   return `${location}: ${count} active ${count === 1 ? "user" : "users"}`;
+}
+
+export function activeUsersMapIncompleteReasons(
+  bays?: ActiveUserMapBayStatus[],
+): string[] {
+  const failed = bays?.filter(({ ok }) => !ok) ?? [];
+  const disabled =
+    bays?.filter(({ ok, enabled }) => ok && enabled === false) ?? [];
+  return [
+    failed.length
+      ? `Unavailable: ${failed.map(({ bay_id }) => bay_id).join(", ")}.`
+      : "",
+    disabled.length
+      ? `Collection disabled: ${disabled
+          .map(({ bay_id }) => bay_id)
+          .join(", ")}.`
+      : "",
+  ].filter(Boolean);
 }
 
 export function activeUsersMapHistoryFallbackCountries(
@@ -344,6 +363,9 @@ export function ActiveUsersMapAdmin() {
     if (view === "live" && selectedGroup != null) {
       void loadDetails();
     }
+    return () => {
+      detailsRequest.current += 1;
+    };
   }, [loadDetails, selectedGroup, view]);
 
   useEffect(() => {
@@ -481,6 +503,15 @@ export function ActiveUsersMapAdmin() {
     setUserError(undefined);
   }
 
+  function selectLiveGroup(group?: string) {
+    detailsRequest.current += 1;
+    setDetails(undefined);
+    setDetailsLoading(false);
+    setDetailsError(undefined);
+    setSelectedGroup(group);
+    closeUserDrawer();
+  }
+
   async function openUser(user: ActiveUserMapDetailUser, trigger: HTMLElement) {
     const request = ++userRequest.current;
     userTriggerRef.current = trigger;
@@ -521,19 +552,10 @@ export function ActiveUsersMapAdmin() {
         ? (overview?.unknown_location ?? 0)
         : (selectedLocation?.count ?? 0)),
   );
-  const failedBays = overview?.bays.filter(({ ok }) => !ok) ?? [];
-  const disabledBays =
-    overview?.bays.filter(({ ok, enabled }) => ok && enabled === false) ?? [];
-  const incompleteMapReasons = [
-    failedBays.length
-      ? `Unavailable: ${failedBays.map(({ bay_id }) => bay_id).join(", ")}.`
-      : "",
-    disabledBays.length
-      ? `Collection disabled: ${disabledBays
-          .map(({ bay_id }) => bay_id)
-          .join(", ")}.`
-      : "",
-  ].filter(Boolean);
+  const incompleteMapReasons = activeUsersMapIncompleteReasons(overview?.bays);
+  const incompleteDetailsReasons = activeUsersMapIncompleteReasons(
+    details?.bays,
+  );
   const historicalDate = historySnapshot
     ? dayjs.utc(historySnapshot.snapshot_hour)
     : undefined;
@@ -573,8 +595,7 @@ export function ActiveUsersMapAdmin() {
     const activeMinutes = history?.active_minutes ?? plotActiveMinutes;
     requestedHistorySnapshot.current = snapshotHour;
     setHistoryActiveMinutes(activeMinutes);
-    setSelectedGroup(undefined);
-    closeUserDrawer();
+    selectLiveGroup(undefined);
     setView("history");
     if (view === "history" && activeMinutes === historyActiveMinutes) {
       requestedHistorySnapshot.current = undefined;
@@ -603,8 +624,7 @@ export function ActiveUsersMapAdmin() {
           onChange={({ target: { value } }) => {
             const nextView = value as MapView;
             setPlayback(undefined);
-            setSelectedGroup(undefined);
-            closeUserDrawer();
+            selectLiveGroup(undefined);
             if (nextView === "history") {
               setSnapshotLoading(true);
             }
@@ -621,8 +641,7 @@ export function ActiveUsersMapAdmin() {
             onChange={({ target: { value } }) => {
               setPlayback(undefined);
               if (view === "live") {
-                setSelectedGroup(undefined);
-                closeUserDrawer();
+                selectLiveGroup(undefined);
                 setLiveActiveMinutes(value as ActiveUserMapWindowMinutes);
               } else {
                 requestedHistorySnapshot.current =
@@ -739,8 +758,7 @@ export function ActiveUsersMapAdmin() {
                 options={GROUPING_OPTIONS}
                 value={liveGrouping}
                 onChange={({ target: { value } }) => {
-                  setSelectedGroup(undefined);
-                  closeUserDrawer();
+                  selectLiveGroup(undefined);
                   setLiveGrouping(value as ActiveUserMapGrouping);
                 }}
               />
@@ -781,10 +799,10 @@ export function ActiveUsersMapAdmin() {
               }
               unavailable={displaySummary.unknown_location}
               onShowAll={
-                view === "live" ? () => setSelectedGroup("all") : undefined
+                view === "live" ? () => selectLiveGroup("all") : undefined
               }
               onShowUnavailable={
-                view === "live" ? () => setSelectedGroup("unknown") : undefined
+                view === "live" ? () => selectLiveGroup("unknown") : undefined
               }
               hint={
                 view === "live"
@@ -803,7 +821,7 @@ export function ActiveUsersMapAdmin() {
             selectedCountryCode={
               view === "history" ? historyCountry : selectedGroup
             }
-            onSelect={view === "history" ? setHistoryCountry : setSelectedGroup}
+            onSelect={view === "history" ? setHistoryCountry : selectLiveGroup}
           />
           {historyError && (
             <ShowError error={historyError} setError={setHistoryError} />
@@ -840,14 +858,19 @@ export function ActiveUsersMapAdmin() {
           },
         }}
         title={drawerTitle}
-        onClose={() => {
-          setSelectedGroup(undefined);
-          closeUserDrawer();
-        }}
+        onClose={() => selectLiveGroup(undefined)}
       >
         {detailsError && (
           <ShowError error={detailsError} setError={setDetailsError} />
         )}
+        {incompleteDetailsReasons.length > 0 ? (
+          <Alert
+            showIcon
+            type="warning"
+            title="Active-user details are incomplete"
+            description={incompleteDetailsReasons.join(" ")}
+          />
+        ) : null}
         {details ? (
           <>
             <ActiveUsersMapDomainChart

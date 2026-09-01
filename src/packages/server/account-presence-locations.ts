@@ -726,6 +726,7 @@ export async function getActiveUserMapDetailsAcrossBays(
       }),
     ),
     domain_counts: activeUserMapEmailDomainCounts(allUsers),
+    bays: report.bays,
   };
 }
 

@@ -371,6 +371,7 @@ export interface ActiveUserMapDetails {
   total: number;
   users: ActiveUserMapDetailUser[];
   domain_counts: ActiveUserMapEmailDomainCount[];
+  bays: ActiveUserMapBayStatus[];
 }
 
 export type UxLatencyEventType = "project_start" | "file_open" | string;

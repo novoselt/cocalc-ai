@@ -471,6 +471,10 @@ describe("account presence locations", () => {
         },
       ],
       domain_counts: [{ domain: "example.com", count: 2 }],
+      bays: [
+        { bay_id: "bay-1", ok: true, total_active: 1 },
+        { bay_id: "bay-2", ok: true, total_active: 2 },
+      ],
     });
   });
 
@@ -490,6 +494,18 @@ describe("account presence locations", () => {
 
     expect(result.total_active).toBe(0);
     expect(result.bays).toEqual([
+      { bay_id: "bay-1", ok: true, enabled: true, total_active: 0 },
+      { bay_id: "bay-2", ok: false, error: "Error: bay offline" },
+    ]);
+
+    const { getActiveUserMapDetailsAcrossBays } =
+      await import("./account-presence-locations");
+    const details = await getActiveUserMapDetailsAcrossBays({
+      account_id: "admin-1",
+      active_minutes: 15,
+      scope: "all",
+    });
+    expect(details.bays).toEqual([
       { bay_id: "bay-1", ok: true, enabled: true, total_active: 0 },
       { bay_id: "bay-2", ok: false, error: "Error: bay offline" },
     ]);

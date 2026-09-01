@@ -1,10 +1,18 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
+import type { ActiveUserMapDetails } from "@cocalc/conat/hub/api/system";
 
 import {
   ActiveUsersMapAdmin,
   activeUsersMapDrawerTitle,
   activeUsersMapHistoryFallbackCountries,
+  activeUsersMapIncompleteReasons,
 } from "./active-users-map";
 import { ActiveUsersMapSummary } from "./active-users-map-summary";
 
@@ -101,6 +109,7 @@ beforeEach(() => {
     total: 0,
     users: [],
     domain_counts: [],
+    bays: [{ bay_id: "bay-1", ok: true, enabled: true, total_active: 0 }],
   });
   mockGetHistorySeries.mockResolvedValue({
     active_minutes: 60,
@@ -240,6 +249,7 @@ describe("ActiveUsersMapAdmin", () => {
         },
       ],
       domain_counts: [{ domain: "example.com", count: 1 }],
+      bays: [{ bay_id: "bay-1", ok: true, enabled: true, total_active: 1 }],
     });
 
     render(<ActiveUsersMapAdmin />);
@@ -287,6 +297,82 @@ describe("ActiveUsersMapAdmin", () => {
       await screen.findByText("user-result:account-1:projects:true"),
     ).toBeVisible();
   });
+
+  it("warns when a detail fetch is missing a bay", async () => {
+    mockGetActiveUserMapDetails.mockResolvedValue({
+      checked_at: "2026-08-27T00:00:00.000Z",
+      total: 0,
+      users: [],
+      domain_counts: [],
+      bays: [
+        { bay_id: "bay-1", ok: true, enabled: true, total_active: 0 },
+        { bay_id: "bay-2", ok: false, error: "bay offline" },
+      ],
+    });
+
+    render(<ActiveUsersMapAdmin />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select map location" }),
+    );
+
+    expect(
+      await screen.findByText("Active-user details are incomplete"),
+    ).toBeVisible();
+    expect(screen.getByText("Unavailable: bay-2.")).toBeVisible();
+  });
+
+  it("does not reuse details that resolve after the drawer closes", async () => {
+    let resolveFirst!: (value: ActiveUserMapDetails) => void;
+    let resolveSecond!: (value: ActiveUserMapDetails) => void;
+    mockGetActiveUserMapDetails
+      .mockReturnValueOnce(
+        new Promise<ActiveUserMapDetails>((resolve) => {
+          resolveFirst = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<ActiveUserMapDetails>((resolve) => {
+          resolveSecond = resolve;
+        }),
+      );
+
+    render(<ActiveUsersMapAdmin />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select map location" }),
+    );
+    await waitFor(() =>
+      expect(mockGetActiveUserMapDetails).toHaveBeenCalledTimes(1),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await act(async () => {
+      resolveFirst({
+        checked_at: "2026-08-27T00:00:00.000Z",
+        total: 1,
+        users: [],
+        domain_counts: [{ domain: "stale.test", count: 1 }],
+        bays: [{ bay_id: "bay-1", ok: true, total_active: 1 }],
+      });
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select map location" }),
+    );
+    await waitFor(() =>
+      expect(mockGetActiveUserMapDetails).toHaveBeenCalledTimes(2),
+    );
+    expect(screen.queryByText("Domains for 1 active users")).toBeNull();
+
+    await act(async () => {
+      resolveSecond({
+        checked_at: "2026-08-27T00:00:00.000Z",
+        total: 0,
+        users: [],
+        domain_counts: [],
+        bays: [{ bay_id: "bay-1", ok: true, total_active: 0 }],
+      });
+    });
+    expect(await screen.findByText("Domains for 0 active users")).toBeVisible();
+  });
 });
 
 describe("activeUsersMapDrawerTitle", () => {
@@ -297,6 +383,18 @@ describe("activeUsersMapDrawerTitle", () => {
     expect(activeUsersMapDrawerTitle("Location unavailable", 1)).toBe(
       "Location unavailable: 1 active user",
     );
+  });
+});
+
+describe("activeUsersMapIncompleteReasons", () => {
+  it("describes unavailable and disabled bays", () => {
+    expect(
+      activeUsersMapIncompleteReasons([
+        { bay_id: "bay-1", ok: true, enabled: true },
+        { bay_id: "bay-2", ok: false },
+        { bay_id: "bay-3", ok: true, enabled: false },
+      ]),
+    ).toEqual(["Unavailable: bay-2.", "Collection disabled: bay-3."]);
   });
 });
 
