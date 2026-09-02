@@ -55,7 +55,7 @@ async function cancelLocalSubscriptions({
           payment=NULL,
           resume_payment_intent=NULL
       WHERE account_id=$1
-        AND status != 'canceled'
+        AND status='active'
     `,
     [account_id, reason],
   );
