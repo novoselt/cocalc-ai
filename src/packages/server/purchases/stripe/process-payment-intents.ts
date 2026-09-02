@@ -23,6 +23,7 @@ import {
   processSubscriptionRenewalFailure,
   processResumeSubscription,
   processResumeSubscriptionFailure,
+  type SubscriptionRenewalResult,
 } from "./create-subscription-payment";
 import { applyMembershipChange } from "../membership-change";
 import send, { support, url, name } from "@cocalc/server/messages/send";
@@ -593,6 +594,18 @@ export function paymentSuccessSubject({
   return `Payment received: ${moneyToCurrency(amount)}`;
 }
 
+export function subscriptionRenewalPaymentReason({
+  subscription_id,
+  result,
+}: {
+  subscription_id: string;
+  result: SubscriptionRenewalResult;
+}): string {
+  return result.status === "renewed"
+    ? `renew a subscription (id=${subscription_id})`
+    : "add credit to your account because the subscription renewal was not applied";
+}
+
 export function paymentSuccessBody({
   amount,
   reason,
@@ -1052,8 +1065,15 @@ ${await support()}`;
   let reason = "add credit to your account";
   try {
     if (paymentIntent.metadata.purpose == SUBSCRIPTION_RENEWAL) {
-      reason = `renew a subscription (id=${paymentIntent.metadata.subscription_id})`;
-      await processSubscriptionRenewal({ account_id, paymentIntent, amount });
+      const result = await processSubscriptionRenewal({
+        account_id,
+        paymentIntent,
+        amount,
+      });
+      reason = subscriptionRenewalPaymentReason({
+        subscription_id: paymentIntent.metadata.subscription_id,
+        result,
+      });
     } else if (paymentIntent.metadata.purpose == RESUME_SUBSCRIPTION) {
       reason = `resume a subscription (id=${paymentIntent.metadata.subscription_id})`;
       await processResumeSubscription({ account_id, paymentIntent, amount });

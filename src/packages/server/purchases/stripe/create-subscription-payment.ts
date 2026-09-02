@@ -3,7 +3,10 @@ import getPool, {
   getTransactionClient,
   type PoolClient,
 } from "@cocalc/database/pool";
-import { SUBSCRIPTION_RENEWAL } from "@cocalc/util/db-schema/purchases";
+import {
+  RESUME_SUBSCRIPTION,
+  SUBSCRIPTION_RENEWAL,
+} from "@cocalc/util/db-schema/purchases";
 import {
   moneyRound2Down,
   moneyRoundToCents,
@@ -459,7 +462,7 @@ export default async function createSubscriptionPayment({
     const client = await getTransactionClient();
     try {
       await setSubscriptionPaymentFromAttempt({ attempt, client });
-      await processSubscriptionRenewal({
+      const result = await processSubscriptionRenewal({
         account_id,
         paymentIntent: {
           metadata: {
@@ -470,6 +473,9 @@ export default async function createSubscriptionPayment({
         amount: amountValue.toNumber(),
         client,
       });
+      if (result.status !== "renewed") {
+        throw Error(`subscription renewal was skipped: ${result.reason}`);
+      }
       // it worked -- so commit it
       await client.query("COMMIT");
       await refreshAccountBalanceAndPublishBestEffort({ account_id });
@@ -615,6 +621,17 @@ async function prepareSubscriptionRenewalAttempt({
   }
 }
 
+export type SubscriptionRenewalResult =
+  | { status: "renewed" }
+  | {
+      status: "skipped";
+      reason:
+        | "subscription-not-active"
+        | "renewal-attempt-missing"
+        | "renewal-attempt-terminal"
+        | "payment-superseded";
+    };
+
 export async function processSubscriptionRenewal({
   account_id,
   paymentIntent,
@@ -628,11 +645,12 @@ export async function processSubscriptionRenewal({
       subscription_id: number | string;
       credit_id?: number | string;
       renewal_attempt_id?: string;
+      purpose?: string;
     };
   };
   amount: number;
   client?: PoolClient;
-}) {
+}): Promise<SubscriptionRenewalResult> {
   const { subscription_id, renewal_attempt_id } = paymentIntent?.metadata ?? {};
   logger.debug("processSubscriptionRenewal", {
     account_id,
@@ -648,13 +666,14 @@ export async function processSubscriptionRenewal({
   const useTransaction = client == null;
   try {
     const { rows: subscriptions } = await transaction.query(
-      "SELECT payment, cost, metadata, interval, latest_purchase_id FROM subscriptions WHERE account_id=$1 AND id=$2 FOR UPDATE",
+      "SELECT payment, cost, metadata, interval, latest_purchase_id, status FROM subscriptions WHERE account_id=$1 AND id=$2 FOR UPDATE",
       [account_id, subscriptionId],
     );
     if (subscriptions.length == 0) {
       throw Error(`You do not have a subscription with id ${subscription_id}.`);
     }
-    const { cost, metadata, interval, latest_purchase_id } = subscriptions[0];
+    const { cost, metadata, interval, latest_purchase_id, status } =
+      subscriptions[0];
     const costValue = toDecimal(cost);
     const renewalTerms = renewalMembershipTerms({ metadata, interval });
     let { payment } = subscriptions[0];
@@ -674,6 +693,18 @@ export async function processSubscriptionRenewal({
     if (metadata?.type != "membership") {
       throw Error("subscription must be for a membership");
     }
+    if (
+      status !== "active" &&
+      paymentIntent.metadata.purpose !== RESUME_SUBSCRIPTION
+    ) {
+      logger.debug("ignoring renewal callback for canceled subscription", {
+        subscription_id: subscriptionId,
+      });
+      if (useTransaction) {
+        await transaction.query("COMMIT");
+      }
+      return { status: "skipped", reason: "subscription-not-active" };
+    }
     if (renewal_attempt_id && !attempt) {
       logger.debug("ignoring callback for missing renewal attempt", {
         renewal_attempt_id,
@@ -682,7 +713,7 @@ export async function processSubscriptionRenewal({
       if (useTransaction) {
         await transaction.query("COMMIT");
       }
-      return;
+      return { status: "skipped", reason: "renewal-attempt-missing" };
     }
     if (attempt) {
       if (
@@ -695,7 +726,7 @@ export async function processSubscriptionRenewal({
         if (useTransaction) {
           await transaction.query("COMMIT");
         }
-        return;
+        return { status: "renewed" };
       }
       if (attempt.state === "failed" || attempt.state === "canceled") {
         logger.debug("ignoring callback for terminal renewal attempt", {
@@ -705,7 +736,7 @@ export async function processSubscriptionRenewal({
         if (useTransaction) {
           await transaction.query("COMMIT");
         }
-        return;
+        return { status: "skipped", reason: "renewal-attempt-terminal" };
       }
       if (
         paymentIntent.id &&
@@ -720,7 +751,7 @@ export async function processSubscriptionRenewal({
         if (useTransaction) {
           await transaction.query("COMMIT");
         }
-        return;
+        return { status: "skipped", reason: "payment-superseded" };
       }
       if (!payment) {
         await setSubscriptionPaymentFromAttempt({
@@ -750,13 +781,13 @@ export async function processSubscriptionRenewal({
       if (useTransaction) {
         await transaction.query("COMMIT");
       }
-      return;
+      return { status: "skipped", reason: "payment-superseded" };
     }
     if (payment?.status == "paid") {
       if (useTransaction) {
         await transaction.query("COMMIT");
       }
-      return;
+      return { status: "renewed" };
     }
     const expectedAmount = attempt ? toDecimal(attempt.amount) : costValue;
     const balanceApplied = validatedBalanceApplied({
@@ -939,6 +970,7 @@ export async function processSubscriptionRenewal({
       await transaction.query("COMMIT");
       await refreshAccountBalanceAndPublishBestEffort({ account_id });
     }
+    return { status: "renewed" };
   } catch (err) {
     if (useTransaction) {
       await transaction.query("ROLLBACK");

@@ -828,7 +828,7 @@ describe("createSubscriptionPayment", () => {
       [subscription_id],
     );
 
-    await processSubscriptionRenewal({
+    const result = await processSubscriptionRenewal({
       account_id,
       paymentIntent: {
         id: "pi_stale",
@@ -838,6 +838,10 @@ describe("createSubscriptionPayment", () => {
         },
       },
       amount: 72,
+    });
+    expect(result).toEqual({
+      status: "skipped",
+      reason: "payment-superseded",
     });
 
     const { rows: subscriptions } = await getPool().query(
@@ -872,7 +876,7 @@ describe("createSubscriptionPayment", () => {
       },
     );
 
-    await processSubscriptionRenewal({
+    const result = await processSubscriptionRenewal({
       account_id,
       paymentIntent: {
         id: "pi_orphaned",
@@ -882,6 +886,10 @@ describe("createSubscriptionPayment", () => {
         },
       },
       amount: 72,
+    });
+    expect(result).toEqual({
+      status: "skipped",
+      reason: "renewal-attempt-missing",
     });
 
     const { rows } = await getPool().query(
@@ -1004,6 +1012,39 @@ describe("createSubscriptionPayment", () => {
     );
     expect(subscriptions[0].latest_purchase_id).toBe(purchases[0].id);
     expect(subscriptions[0].payment).toMatchObject({ status: "paid" });
+  });
+
+  it("credits a late renewal callback after its subscription is canceled", async () => {
+    const account_id = uuid();
+    await createTestAccount(account_id);
+    const { subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        cost: 72,
+        status: "canceled",
+      },
+    );
+
+    const result = await processSubscriptionRenewal({
+      account_id,
+      paymentIntent: {
+        id: "pi_canceled_legacy_renewal",
+        metadata: { subscription_id: `${subscription_id}` },
+      },
+      amount: 72,
+    });
+    expect(result).toEqual({
+      status: "skipped",
+      reason: "subscription-not-active",
+    });
+
+    const { rows } = await getPool().query(
+      `SELECT status, latest_purchase_id
+         FROM subscriptions
+        WHERE id=$1`,
+      [subscription_id],
+    );
+    expect(rows).toEqual([{ status: "canceled", latest_purchase_id: 0 }]);
   });
 
   it("converts a legacy migration grant to its configured renewal class when paid", async () => {
