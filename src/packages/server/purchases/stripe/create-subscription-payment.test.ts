@@ -783,7 +783,6 @@ describe("createSubscriptionPayment", () => {
       },
       amount: 72,
     });
-
     const { rows } = await getPool().query(
       `SELECT s.metadata->'pending_plan_change' AS pending_plan_change,
               f.lifecycle, f.membership_class,
@@ -964,7 +963,7 @@ describe("createSubscriptionPayment", () => {
       account_id,
       {
         cost: 72,
-        status: "past_due",
+        status: "active",
       },
     );
     const newExpiresMs = Date.now() + 30 * 24 * 60 * 60 * 1000;
@@ -1014,7 +1013,7 @@ describe("createSubscriptionPayment", () => {
     expect(subscriptions[0].payment).toMatchObject({ status: "paid" });
   });
 
-  it("credits a late renewal callback after its subscription is canceled", async () => {
+  it("does not apply a legacy renewal callback to a canceled subscription", async () => {
     const account_id = uuid();
     await createTestAccount(account_id);
     const { subscription_id } = await createTestMembershipSubscription(
@@ -1056,7 +1055,7 @@ describe("createSubscriptionPayment", () => {
         class: "member",
         cost: 72,
         interval: "year",
-        status: "past_due",
+        status: "active",
       },
     );
     const newExpiresMs = Date.now() + 365 * 24 * 60 * 60 * 1000;

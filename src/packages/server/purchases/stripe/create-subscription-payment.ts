@@ -3,10 +3,7 @@ import getPool, {
   getTransactionClient,
   type PoolClient,
 } from "@cocalc/database/pool";
-import {
-  RESUME_SUBSCRIPTION,
-  SUBSCRIPTION_RENEWAL,
-} from "@cocalc/util/db-schema/purchases";
+import { SUBSCRIPTION_RENEWAL } from "@cocalc/util/db-schema/purchases";
 import {
   moneyRound2Down,
   moneyRoundToCents,
@@ -645,7 +642,6 @@ export async function processSubscriptionRenewal({
       subscription_id: number | string;
       credit_id?: number | string;
       renewal_attempt_id?: string;
-      purpose?: string;
     };
   };
   amount: number;
@@ -693,10 +689,7 @@ export async function processSubscriptionRenewal({
     if (metadata?.type != "membership") {
       throw Error("subscription must be for a membership");
     }
-    if (
-      status !== "active" &&
-      paymentIntent.metadata.purpose !== RESUME_SUBSCRIPTION
-    ) {
+    if (status !== "active") {
       logger.debug("ignoring renewal callback for canceled subscription", {
         subscription_id: subscriptionId,
       });
@@ -827,7 +820,6 @@ export async function processSubscriptionRenewal({
       // once, so we just do it manually in this case :-(
       // We also ensure new_expires_ms is in the future so the period update
       // happens for sure.
-      // this code is same as resumeSubscriptionSetPaymentIntent below:
       const new_expires_ms = addInterval(new Date(), interval).valueOf();
       payment = { new_expires_ms };
     }
@@ -1005,8 +997,8 @@ function subtractInterval(expires: Date, interval: "month" | "year"): Date {
   return newExpires.subtract(1, interval).toDate();
 }
 
-// We set payment status to canceled *and* cancel the subscription --
-// user can resume it at current rates at a later date.
+// We set payment status to canceled and cancel automatic renewal. The user can
+// configure a new membership at current rates later.
 export async function processSubscriptionRenewalFailure({
   account_id,
   paymentIntent,
@@ -1126,83 +1118,4 @@ export async function processSubscriptionRenewalFailure({
       alertAdmin: false,
     });
   }
-}
-
-export async function processResumeSubscriptionFailure({
-  account_id,
-  paymentIntent,
-}: {
-  account_id: string;
-  paymentIntent;
-}) {
-  await clearResumeSubscriptionPayment({ account_id, paymentIntent });
-}
-
-async function clearResumeSubscriptionPayment({ account_id, paymentIntent }) {
-  const { subscription_id } = paymentIntent?.metadata ?? {};
-  if (!subscription_id) {
-    throw Error(
-      `invalid paymentIntent ${paymentIntent?.id} -- metadata must contain subscription_id`,
-    );
-  }
-  const id =
-    typeof subscription_id != "number"
-      ? parseInt(subscription_id)
-      : subscription_id;
-  const pool = getPool();
-  const result = await pool.query(
-    `UPDATE subscriptions SET resume_payment_intent=NULL WHERE id=$1 AND account_id=$2`,
-    [id, account_id],
-  );
-  if (result.rowCount != 1) {
-    throw Error(`You do not have a subscription with id ${subscription_id}.`);
-  }
-}
-
-export async function resumeSubscriptionSetPaymentIntent({
-  account_id,
-  subscription_id,
-  paymentIntentId,
-}: {
-  account_id: string;
-  subscription_id: number;
-  paymentIntentId: string;
-}) {
-  const pool = getPool();
-  const { rows } = await pool.query(
-    "SELECT resume_payment_intent, interval FROM subscriptions WHERE id=$1 AND account_id=$2",
-    [subscription_id, account_id],
-  );
-  if (rows.length == 0) {
-    throw Error(`You do not have a subscription with id ${subscription_id}.`);
-  }
-  if (rows[0].resume_payment_intent) {
-    const stripe = await getConn();
-    const intent = await stripe.paymentIntents.retrieve(
-      rows[0].resume_payment_intent,
-    );
-    if (intent.status != "canceled" && intent.status != "succeeded") {
-      throw Error(
-        `There is an outstanding payment to resume this subscription.  Pay that invoice or cancel it.`,
-      );
-    }
-  }
-  const new_expires_ms = addInterval(new Date(), rows[0].interval).valueOf();
-  await pool.query(
-    "UPDATE subscriptions SET resume_payment_intent=$2, payment=$3 WHERE id=$1",
-    [subscription_id, paymentIntentId, { new_expires_ms }],
-  );
-}
-
-export async function processResumeSubscription({
-  account_id,
-  paymentIntent,
-  amount,
-}) {
-  await processSubscriptionRenewal({
-    account_id,
-    paymentIntent,
-    amount,
-  });
-  await clearResumeSubscriptionPayment({ account_id, paymentIntent });
 }

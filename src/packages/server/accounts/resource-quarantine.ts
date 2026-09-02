@@ -52,8 +52,7 @@ async function cancelLocalSubscriptions({
       SET status='canceled',
           canceled_at=NOW(),
           canceled_reason=$2,
-          payment=NULL,
-          resume_payment_intent=NULL
+          payment=NULL
       WHERE account_id=$1
         AND status='active'
     `,
