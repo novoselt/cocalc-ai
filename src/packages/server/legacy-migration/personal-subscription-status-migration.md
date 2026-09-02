@@ -45,15 +45,17 @@ During a rolling deployment, an older generic/admin write could still attempt
 an arbitrary legacy status; PostgreSQL will reject that write after the
 constraint is installed.
 
-Schema sync is serialized by the existing per-database advisory lock; in a
+The migration acquires its own per-database transaction advisory lock before
+rechecking the constraint. This also protects direct `syncSchema()` callers
+that do not enter through the pool bootstrap's broader schema lock. In a
 multibay deployment, each database migrates independently. The row
-normalization, `CHECK ... NOT VALID`, and constraint validation run in one
-transaction with a five-second lock timeout. A lock timeout, process failure,
-or validation error rolls back the update and constraint together; another
-startup retries schema sync for that database. `NOT VALID` minimizes the
-initial lock, then PostgreSQL validates all rows before commit. The production
-audit is required because schema sync is not an appropriate place for an
-unexpectedly large unreviewed data rewrite.
+normalization, `CHECK ... NOT VALID`, and constraint validation run in the
+locked transaction with a five-second lock timeout. A lock timeout, process
+failure, or validation error rolls back the update and constraint together;
+another startup retries schema sync for that database. `NOT VALID` minimizes
+the initial lock, then PostgreSQL validates all rows before commit. The
+production audit is required because schema sync is not an appropriate place
+for an unexpectedly large unreviewed data rewrite.
 
 ## Recovery
 

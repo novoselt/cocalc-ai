@@ -9,6 +9,8 @@ type DatabaseClient = Pick<Client, "query">;
 
 export const SUBSCRIPTION_STATUS_CONSTRAINT =
   "subscriptions_status_active_or_canceled_check";
+export const SUBSCRIPTION_STATUS_SCHEMA_LOCK =
+  "subscriptions_status_active_or_canceled_schema";
 
 // Deployment and recovery details live in
 // server/legacy-migration/personal-subscription-status-migration.md. Keep this
@@ -80,6 +82,14 @@ export async function ensureSubscriptionStatusSchema(
   await db.query("BEGIN");
   try {
     await db.query("SET LOCAL lock_timeout='5s'");
+    await db.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      SUBSCRIPTION_STATUS_SCHEMA_LOCK,
+    ]);
+    state = await constraintState(db);
+    if (state.exists && state.validated) {
+      await db.query("COMMIT");
+      return;
+    }
     await normalizeLegacySubscriptionStatuses(db);
     state = await constraintState(db);
     if (!state.exists) {

@@ -3,12 +3,16 @@
  *  License: MS-RSL - see LICENSE.md for details
  */
 
-import getPool, { initEphemeralDatabase } from "@cocalc/database/pool";
+import getPool, {
+  getClient,
+  initEphemeralDatabase,
+} from "@cocalc/database/pool";
 import { testCleanup } from "@cocalc/database/test-utils";
 import { uuid } from "@cocalc/util/misc";
 import {
   ensureSubscriptionStatusSchema,
   SUBSCRIPTION_STATUS_CONSTRAINT,
+  SUBSCRIPTION_STATUS_SCHEMA_LOCK,
   subscriptionStatusSchemaNeedsSync,
 } from "./subscription-status";
 
@@ -140,5 +144,89 @@ describe("personal subscription statuses", () => {
         [uuid()],
       ),
     ).rejects.toThrow();
+  });
+
+  it("serializes concurrent constraint creation", async () => {
+    const blocker = getClient();
+    const firstClient = getClient();
+    const secondClient = getClient();
+    await Promise.all([
+      blocker.connect(),
+      firstClient.connect(),
+      secondClient.connect(),
+    ]);
+    let first: Promise<void> | undefined;
+    let second: Promise<void> | undefined;
+    let lockHeld = false;
+    try {
+      await blocker.query("SELECT pg_advisory_lock(hashtext($1))", [
+        SUBSCRIPTION_STATUS_SCHEMA_LOCK,
+      ]);
+      lockHeld = true;
+      await blocker.query(
+        `ALTER TABLE subscriptions
+           DROP CONSTRAINT ${SUBSCRIPTION_STATUS_CONSTRAINT}`,
+      );
+
+      const firstPid = (
+        await firstClient.query<{ pid: number }>(
+          "SELECT pg_backend_pid() AS pid",
+        )
+      ).rows[0].pid;
+      const secondPid = (
+        await secondClient.query<{ pid: number }>(
+          "SELECT pg_backend_pid() AS pid",
+        )
+      ).rows[0].pid;
+      first = ensureSubscriptionStatusSchema(firstClient);
+      second = ensureSubscriptionStatusSchema(secondClient);
+
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const { rows } = await blocker.query<{ waiting: number }>(
+          `SELECT COUNT(*)::int AS waiting
+             FROM pg_locks
+            WHERE locktype='advisory'
+              AND NOT granted
+              AND pid=ANY($1::int[])`,
+          [[firstPid, secondPid]],
+        );
+        if (rows[0]?.waiting === 2) break;
+        if (attempt === 99) {
+          throw new Error("concurrent schema synchronizers did not queue");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      await blocker.query("SELECT pg_advisory_unlock(hashtext($1))", [
+        SUBSCRIPTION_STATUS_SCHEMA_LOCK,
+      ]);
+      lockHeld = false;
+      await Promise.all([first, second]);
+
+      const { rows } = await blocker.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count
+           FROM pg_constraint
+          WHERE conname=$1
+            AND conrelid='subscriptions'::regclass
+            AND convalidated`,
+        [SUBSCRIPTION_STATUS_CONSTRAINT],
+      );
+      expect(rows).toEqual([{ count: 1 }]);
+    } finally {
+      if (lockHeld) {
+        await blocker.query("SELECT pg_advisory_unlock(hashtext($1))", [
+          SUBSCRIPTION_STATUS_SCHEMA_LOCK,
+        ]);
+      }
+      await Promise.allSettled([first, second].filter(Boolean));
+      if (await subscriptionStatusSchemaNeedsSync(blocker)) {
+        await ensureSubscriptionStatusSchema(blocker);
+      }
+      await Promise.allSettled([
+        blocker.end(),
+        firstClient.end(),
+        secondClient.end(),
+      ]);
+    }
   });
 });
