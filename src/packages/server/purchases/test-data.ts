@@ -23,7 +23,7 @@ export async function createTestMembershipSubscription(
     start?: Date;
     end?: Date;
     cost?: number;
-    status?: "active" | "canceled" | "unpaid" | "past_due";
+    status?: "active" | "canceled";
   },
 ) {
   const now = dayjs();
@@ -35,35 +35,19 @@ export async function createTestMembershipSubscription(
   const cost = opts?.cost ?? 10;
   const status = opts?.status ?? "active";
   const membershipClass = opts?.class ?? "member";
-  const metadata = { type: "membership" as const, class: membershipClass };
-  let subscription_id: number;
-  if (status === "unpaid" || status === "past_due") {
-    // Only tests can create historical states after production stops accepting
-    // them. This fixture is removed with the legacy-state behavior tests.
-    const { rows } = await getPool().query(
-      `INSERT INTO subscriptions
-         (account_id, created, cost, interval, current_period_start,
-          current_period_end, latest_purchase_id, status, metadata)
-       VALUES ($1, NOW(), $2, $3, $4, $5, 0, $6, $7)
-       RETURNING id`,
-      [account_id, cost, interval, start, end, status, metadata],
-    );
-    subscription_id = rows[0].id;
-  } else {
-    subscription_id = await createSubscription(
-      {
-        account_id,
-        cost,
-        interval,
-        current_period_start: start,
-        current_period_end: end,
-        status,
-        metadata,
-        latest_purchase_id: 0,
-      },
-      null,
-    );
-  }
+  const subscription_id = await createSubscription(
+    {
+      account_id,
+      cost,
+      interval,
+      current_period_start: start,
+      current_period_end: end,
+      status,
+      metadata: { type: "membership", class: membershipClass },
+      latest_purchase_id: 0,
+    },
+    null,
+  );
   return { subscription_id, cost, start, end, membershipClass, interval };
 }
 
