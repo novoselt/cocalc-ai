@@ -6,6 +6,8 @@
 import getPool, {
   getClient,
   initEphemeralDatabase,
+  isPgliteEnabled,
+  type Client,
 } from "@cocalc/database/pool";
 import { testCleanup } from "@cocalc/database/test-utils";
 import { uuid } from "@cocalc/util/misc";
@@ -15,6 +17,8 @@ import {
   SUBSCRIPTION_STATUS_SCHEMA_LOCK,
   subscriptionStatusSchemaNeedsSync,
 } from "./subscription-status";
+
+const realPostgresIt = isPgliteEnabled() ? it.skip : it;
 
 beforeAll(async () => {
   await initEphemeralDatabase({});
@@ -146,7 +150,46 @@ describe("personal subscription statuses", () => {
     ).rejects.toThrow();
   });
 
-  it("serializes concurrent constraint creation", async () => {
+  it("rechecks the constraint after acquiring the migration lock", async () => {
+    let stateReads = 0;
+    const query = jest.fn(async (sql: string) => {
+      if (sql.includes("SELECT EXISTS")) {
+        stateReads += 1;
+        return {
+          rows: [
+            stateReads === 1
+              ? { exists: false, validated: false }
+              : { exists: true, validated: true },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    await ensureSubscriptionStatusSchema({
+      query,
+    } as unknown as Pick<Client, "query">);
+
+    const statements = query.mock.calls.map(([sql]) => sql);
+    const stateChecks = statements
+      .map((sql, index) => (sql.includes("SELECT EXISTS") ? index : -1))
+      .filter((index) => index >= 0);
+    const lockIndex = statements.findIndex((sql) =>
+      sql.includes("pg_advisory_xact_lock"),
+    );
+    expect(stateChecks).toHaveLength(2);
+    expect(lockIndex).toBeGreaterThan(stateChecks[0]);
+    expect(lockIndex).toBeLessThan(stateChecks[1]);
+    expect(statements.some((sql) => sql.includes("UPDATE subscriptions"))).toBe(
+      false,
+    );
+    expect(statements.some((sql) => sql.includes("ADD CONSTRAINT"))).toBe(
+      false,
+    );
+    expect(statements.at(-1)).toBe("COMMIT");
+  });
+
+  realPostgresIt("serializes concurrent constraint creation", async () => {
     const blocker = getClient();
     const firstClient = getClient();
     const secondClient = getClient();
